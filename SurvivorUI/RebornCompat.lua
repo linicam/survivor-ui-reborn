@@ -465,6 +465,52 @@ end
 -- slots; that is enforced by callers rendering passives separately.
 -- For a re-homed racial, "has a cooldown" is judged by cdmax (the
 -- cooldown the ability has), not cd (the cooldown remaining).
+-- The account-talent active (Divine Steed): the snapshot does not
+-- carry it; it lives in the spellbook and the game's own HUD.
+-- Find it there by name, cached for a few seconds.
+local steedCache, steedAt = nil, 0
+local function AccountTalentActive()
+	local now = GetTime and GetTime() or 0
+	if now - steedAt < 5 then
+		return steedCache
+	end
+	steedAt = now
+	steedCache = nil
+	if not (GetNumSpellTabs and GetSpellTabInfo and GetSpellName) then
+		return nil
+	end
+	for tab = 1, GetNumSpellTabs() do
+		local _, _, offset, numSpells = GetSpellTabInfo(tab)
+		for i = 1, numSpells or 0 do
+			local index = offset + i
+			local name = GetSpellName(index, "spell")
+			if name == "Divine Steed" or name == "神圣战马" then
+				local spellId
+				if GetSpellLink then
+					local link = GetSpellLink(index, "spell")
+					spellId = link and tonumber(string.match(link, "spell:(%d+)"))
+				end
+				local icon = GetSpellTexture and GetSpellTexture(index, "spell")
+				local cd, cdmax = 0, 0
+				if GetSpellCooldown then
+					local start, duration = GetSpellCooldown(index, "spell")
+					if start and duration and duration > 0 then
+						cdmax = duration
+						cd = start > 0 and math.max(0, start + duration - now) or 0
+					end
+				end
+				steedCache = {
+					key = "divine_steed", spell = spellId, rank = nil,
+					passive = false, kind = "class", cd = cd, cdmax = cdmax,
+					name = name, icon = icon, bookIndex = index,
+				}
+				return steedCache
+			end
+		end
+	end
+	return nil
+end
+
 function SurvivorUI_RebornAbilities()
 	-- The snapshot table is replaced on every line: re-read it when its
 	-- stamp moved, and re-request (throttled) when it is still empty.
@@ -512,6 +558,22 @@ function SurvivorUI_RebornAbilities()
 	elseif table.getn(all) > 0 then
 		source = "spells"
 	end
+	-- The account-talent active rides along when the snapshot
+	-- lacks it, so the bar and the build list can show it.
+	if fromAbilities then
+		local steed = AccountTalentActive()
+		if steed then
+			local present = false
+			for i = 1, table.getn(actives) do
+				if actives[i].key == steed.key or (steed.spell and actives[i].spell == steed.spell) then
+					present = true
+				end
+			end
+			if not present then
+				table.insert(actives, steed)
+			end
+		end
+	end
 	return {
 		actives = actives, passives = passives, racials = racials, all = all,
 		source = source, complete = fromAbilities,
@@ -551,7 +613,7 @@ function SurvivorUI_RebornPlaceRacialButton()
 	local extra, racial
 	for i = 1, table.getn(data.actives) do
 		local a = data.actives[i]
-		if a.spell and a.spell > 0 and not onBar[a.key] then
+		if (a.spell and a.spell > 0 or a.bookIndex) and not onBar[a.key] then
 			if a.kind == "racial" then
 				racial = racial or a
 			else
@@ -560,7 +622,11 @@ function SurvivorUI_RebornPlaceRacialButton()
 		end
 	end
 	if extra and not GetActionInfo(7) then
-		PickupSpell(extra.spell)
+		if extra.spell and extra.spell > 0 then
+			PickupSpell(extra.spell)
+		elseif PickupSpellBookItem then
+			PickupSpellBookItem(extra.bookIndex, "spell")
+		end
 		PlaceAction(7)
 		ClearCursor()
 	end
