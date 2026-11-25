@@ -411,6 +411,7 @@ SurvivorUI_WORDS.zh = {
 	["{1} / {2} alive"] = "{1} / {2} 存活",
 	["next {1}"] = "下次 {1}",
 	["FIGHT"] = "战斗",
+	["Curse"] = "诅咒",
 	-- The run tracker's Tracker Ring (Dial.lua).
 	["of {1}"] = "共{1}",
 

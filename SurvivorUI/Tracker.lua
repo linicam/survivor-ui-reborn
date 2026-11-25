@@ -1380,6 +1380,23 @@ local function Draw(game, phase)
 	else
 		head.endlessSlain:Hide()
 	end
+	-- An active curse (Reborn), under the boss lines.
+	if SurvivorUI_RebornCurses then
+		local curse = SurvivorUI_RebornCurses().items[1]
+		if curse then
+			if not head.curseLine then
+				head.curseLine = BossLine(table.getn(head.bosses) + 1)
+				head.bosses[table.getn(head.bosses)] = nil
+			end
+			head.curseLine.name:SetText(SurvivorUI_T("Curse") .. "：" .. curse.text)
+			head.curseLine.name:SetTextColor(1, 0.45, 0.45)
+			head.curseLine.time:SetText(string.format("%ds", math.ceil(curse.left)))
+			head.curseLine.time:SetTextColor(1, 0.45, 0.45)
+			y = Put(head.curseLine, y, 13)
+		elseif head.curseLine then
+			head.curseLine:Hide()
+		end
+	end
 	-- The guardians' bar, when it stands here (Guardians.lua).
 	local above = y
 	if SurvivorUI_GuardianBar then

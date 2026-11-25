@@ -962,19 +962,71 @@ SurvivorUI_RebornRegisterReset(function()
 end)
 
 ------------------------------------------------------------------------------
--- Curses: not exposed by the documented API
---
--- Returns { supported = false, items = {}, reason = ... }. The probe in
--- SurvivorUI_RebornProbe() lists candidate globals so an in-game tester
--- can see what exists, but none of them is treated as curse data: AZS_CHESTS
--- is cache positions, AZS_BUFFS/AZS_DEBUFFS are buffs/debuffs, and
--- AZS_BANNER kinds are not enumerated in the docs.
+-- Curses (verified in game 2026-11-26): a curse effect arrives as a
+-- banner with kind="curse" whose text is Russian server text
+-- ("Проклятие тяготеет над тобой: <effect> (<N> с)!"), and the effect
+-- itself sits in AZS_BUFFS (spell + left) while it runs. The chest
+-- announcement shares kind="curse" but carries no effect. Track the
+-- latest effect banner, translate its effect, and count down from
+-- the buff when one is present.
+local CURSE_EFFECTS = {
+	{ "орда накатывает волной", "敌潮涌动" },
+}
+
+local function CurseEffectText(text)
+	for i = 1, table.getn(CURSE_EFFECTS) do
+		if string.find(text, CURSE_EFFECTS[i][1], 1, true) then
+			return CURSE_EFFECTS[i][2]
+		end
+	end
+	local pct = string.match(text, "исцеление снижено на (%d+)%%")
+	if pct then
+		return "治疗效果降低" .. pct .. "%"
+	end
+	return nil
+end
 
 function SurvivorUI_RebornCurses()
+	local items = {}
+	if SurvivorUI_RebornActive() and type(AZS_BANNERS) == "table" then
+		local now = AZS_GetRunTime and AZS_GetRunTime() or nil
+		local latest
+		for i = 1, table.getn(AZS_BANNERS) do
+			local b = AZS_BANNERS[i]
+			local text = Field(b, "text", 5) or ""
+			if Field(b, "kind", 2) == "curse" and string.find(text, "Проклятие", 1, true) then
+				latest = b
+			end
+		end
+		if latest and now then
+			local text = Field(latest, "text", 5) or ""
+			local duration = tonumber(string.match(text, "%((%d+)")) or 0
+			local at = tonumber(Field(latest, "time", 4)) or now
+			local left = duration - (now - at)
+			local spell
+			for i = 1, table.getn(AZS_BUFFS or {}) do
+				local buffLeft = tonumber(Field(AZS_BUFFS[i], "left", 2))
+				if buffLeft and buffLeft > 0 and buffLeft <= left + 2 then
+					left = buffLeft
+					spell = tonumber(Field(AZS_BUFFS[i], "spell", 1))
+				end
+			end
+			if left > 0 then
+				local effect = CurseEffectText(text)
+				if not effect and spell and GetSpellInfo then
+					local name = GetSpellInfo(spell)
+					if name and name ~= "" and not string.find(name, "[\208\209]") then
+						effect = name
+					end
+				end
+				table.insert(items, { text = effect or "诅咒", left = left, spell = spell })
+			end
+		end
+	end
 	return {
-		supported = false,
-		items = {},
-		reason = "No curse table, function, or event is documented in the AZ Reborn Addon API (checked 2026-11-25). Cursed-chest effects cannot be tracked from supported APIs; see /sui reborn probe.",
+		supported = true,
+		items = items,
+		reason = "Curse effects arrive as kind=\"curse\" banners with the effect in AZS_BUFFS (verified in game 2026-11-26); the latest effect is shown with its countdown.",
 	}
 end
 
