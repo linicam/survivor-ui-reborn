@@ -339,6 +339,7 @@ check("curses: supported", curses.supported == true)
 eq("curses: no items without a banner", table.getn(curses.items), 0)
 AZS_BANNERS = { { kind = "curse", boss = false, name = "", time = 100,
 	text = "Проклятие тяготеет над тобой: орда накатывает волной (20 с)!" } }
+AZS_RequestAbilities = function() end
 AZS_BUFFS = { { spell = 47241, left = 10 } }
 AZS_GetRunTime = function() return 110 end
 curses = SurvivorUI_RebornCurses()
