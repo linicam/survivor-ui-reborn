@@ -518,6 +518,45 @@ function SurvivorUI_RebornAbilities()
 	}
 end
 
+-- The racial active on the bar's last button (12, the "=" key), as
+-- the original game places it. Reborn's AZS_SPELLS layout leaves
+-- that button empty even when a racial active is selected, so put
+-- the snapshot's racial active there — only while the button is
+-- empty and out of combat, never over the player's own placement.
+local lastPlaceAt = 0
+function SurvivorUI_RebornPlaceRacialButton()
+	if not SurvivorUI_RebornActive() then
+		return
+	end
+	if InCombatLockdown and InCombatLockdown() then
+		return
+	end
+	if not (GetActionInfo and PickupSpell and PlaceAction and ClearCursor) then
+		return
+	end
+	local now = GetTime and GetTime() or 0
+	if now - lastPlaceAt < 2 then
+		return
+	end
+	lastPlaceAt = now
+	if GetActionInfo(12) then
+		return
+	end
+	local data = SurvivorUI_RebornAbilities()
+	if not data.complete then
+		return
+	end
+	for i = 1, table.getn(data.actives) do
+		local a = data.actives[i]
+		if a.kind == "racial" and a.spell and a.spell > 0 then
+			PickupSpell(a.spell)
+			PlaceAction(12)
+			ClearCursor()
+			return
+		end
+	end
+end
+
 function SurvivorUI_RebornAbilityByKey(key)
 	if not key then
 		return nil
