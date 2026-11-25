@@ -1478,7 +1478,11 @@ function SurvivorUI_RebornSlash(argument)
 		Say("Survivor UI: Reborn debug logging off.")
 		return
 	elseif arg == "probe" or arg == "dump" then
-		local lines = SurvivorUI_RebornProbe()
+		local ok, lines = pcall(SurvivorUI_RebornProbe)
+		if not ok then
+			Say("Survivor UI (Reborn): probe failed: " .. tostring(lines))
+			return
+		end
 		for i = 1, table.getn(lines) do
 			Say(lines[i])
 		end
