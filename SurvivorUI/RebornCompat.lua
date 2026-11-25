@@ -476,6 +476,17 @@ local function AccountTalentActive()
 	end
 	steedAt = now
 	steedCache = nil
+	-- The account-talent spell may not sit in the spellbook; the
+	-- client still knows it by name/id when the talent is taken.
+	if IsPlayerSpell and IsPlayerSpell(190784) then
+		local name, _, icon = GetSpellInfo(190784)
+		steedCache = {
+			key = "divine_steed", spell = 190784, rank = nil,
+			passive = false, kind = "class", cd = 0, cdmax = 0,
+			name = name or "神圣战马", icon = icon,
+		}
+		return steedCache
+	end
 	if not (GetNumSpellTabs and GetSpellTabInfo and GetSpellName) then
 		return nil
 	end
@@ -1306,6 +1317,11 @@ function SurvivorUI_RebornProbe()
 		.. " AZS_DEBUFFS=" .. (type(AZS_DEBUFFS) == "table" and tostring(table.getn(AZS_DEBUFFS)) or "absent")
 		.. " AZS_CURSES=" .. (type(AZS_CURSES) == "table" and "present" or "absent"))
 	Add("debug=" .. tostring(SurvivorUI_RebornDebugEnabled()))
+	if GetSpellInfo then
+		local name = GetSpellInfo(190784)
+		Add(string.format("  steed candidate: id190784 name=%s known=%s nameZh=%s",
+			tostring(name), tostring(IsPlayerSpell and IsPlayerSpell(190784)), tostring(GetSpellInfo("神圣战马"))))
+	end
 	if GetNumSpellTabs and GetSpellTabInfo and GetSpellName then
 		for tab = 1, GetNumSpellTabs() do
 			local _, _, offset, numSpells = GetSpellTabInfo(tab)
