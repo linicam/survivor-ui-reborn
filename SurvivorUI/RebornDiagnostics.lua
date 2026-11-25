@@ -11,6 +11,8 @@ local SCHEMA = 1
 local MAX_EVENTS = 3000
 local MAX_BYTES = 2097152
 local MAX_SESSIONS = 10
+local MAX_COPY_DEPTH = 8
+local MAX_COPY_BREADTH = 128
 local CRITICAL = {
 	session_start = true, session_stop = true, run_transition = true,
 	rank_change = true, tooltip = true, curse_banner = true,
@@ -46,6 +48,19 @@ local function SanitizeKey(key)
 	return false
 end
 
+local function CurrentRunId()
+	return SurvivorUI_RebornRunId and SurvivorUI_RebornRunId() or nil
+end
+
+local function BaselineKey(key, run)
+	return tostring(run) .. "\0" .. tostring(key)
+end
+
+local function ValidTooltipRead(read, run)
+	return type(read) == "table" and read.ok == true and read.run == run
+		and type(read.lines) == "table" and table.getn(read.lines) > 0
+end
+
 -- Bounded deep copy: recorded values must not alias mutable game
 -- tables. Depth and breadth are capped; truncation is explicit.
 local function CopyValue(value, depth)
@@ -56,14 +71,14 @@ local function CopyValue(value, depth)
 		end
 		return value
 	end
-	if depth >= 4 then
+	if depth >= MAX_COPY_DEPTH then
 		return "<truncated>"
 	end
 	local out = {}
 	local count = 0
 	for k, v in pairs(value) do
 		count = count + 1
-		if count > 64 then
+		if count > MAX_COPY_BREADTH then
 			out.__truncated = true
 			break
 		end
@@ -85,7 +100,7 @@ local function EstimateSize(value, depth)
 	local t = type(value)
 	if t == "string" then return string.len(value) + 8 end
 	if t ~= "table" then return 16 end
-	if depth >= 4 then return 32 end
+	if depth >= MAX_COPY_DEPTH then return 32 end
 	local total = 16
 	for k, v in pairs(value) do
 		total = total + EstimateSize(k, depth + 1) + EstimateSize(v, depth + 1)
@@ -178,9 +193,12 @@ function SurvivorUI_RebornRecordStart()
 			normalized = data.all, source = data.source,
 		})
 		if SurvivorUI_RebornTooltipRead then
+			local run = CurrentRunId()
 			for i = 1, table.getn(data.all) do
 				local read = SurvivorUI_RebornTooltipRead(data.all[i].key)
-				tooltipBaselines[data.all[i].key] = read
+				if ValidTooltipRead(read, run) then
+					tooltipBaselines[BaselineKey(data.all[i].key, run)] = read
+				end
 				SurvivorUI_RebornRecord("tooltip", { phase = "baseline", read = read })
 			end
 		end
@@ -236,6 +254,9 @@ function SurvivorUI_RebornRecordClear()
 	SurvivorUIRebornDiagnostics = { schema = SCHEMA, sessions = {}, order = {} }
 	recording = false
 	session = nil
+	pendingTooltips = {}
+	pendingBuffs = {}
+	tooltipBaselines = {}
 end
 
 function SurvivorUI_RebornRecordMark(text)
@@ -248,18 +269,20 @@ function SurvivorUI_RebornRecordTooltipSoon(key, phase)
 	if not recording or not session then
 		return
 	end
-	if phase ~= "baseline" and tooltipBaselines[key] then
-		SurvivorUI_RebornRecord("tooltip", { phase = "pre", read = tooltipBaselines[key] })
+	local run = CurrentRunId()
+	local baseline = tooltipBaselines[BaselineKey(key, run)]
+	if phase ~= "baseline" and baseline then
+		SurvivorUI_RebornRecord("tooltip", { phase = "pre", read = baseline })
 	end
 	for i = 1, table.getn(pendingTooltips) do
-		if pendingTooltips[i].key == key then
+		if pendingTooltips[i].key == key and pendingTooltips[i].run == run then
 			return
 		end
 	end
 	table.insert(pendingTooltips, {
 		key = key, at = Now() + 1, tries = 0, phase = phase or "post",
 		sessionId = session.id,
-		run = SurvivorUI_RebornRunId and SurvivorUI_RebornRunId() or nil,
+		run = run,
 	})
 end
 
@@ -281,8 +304,12 @@ if timer then
 				if SurvivorUI_RebornTooltipRead then
 					local ok, read = pcall(SurvivorUI_RebornTooltipRead, p.key)
 					if ok then
-						tooltipBaselines[p.key] = read
-						SurvivorUI_RebornRecord("tooltip", { phase = p.phase or "post", read = read })
+						if ValidTooltipRead(read, p.run) then
+							tooltipBaselines[BaselineKey(p.key, p.run)] = read
+							SurvivorUI_RebornRecord("tooltip", { phase = p.phase or "post", read = read })
+						else
+							SurvivorUI_RebornRecord("tooltip", { phase = p.phase or "post", key = p.key, ok = false, error = "failed or stale tooltip read", read = read })
+						end
 					else
 						SurvivorUI_RebornRecord("tooltip", { phase = p.phase or "post", key = p.key, ok = false, error = tostring(read) })
 					end
@@ -327,10 +354,14 @@ end
 function SurvivorUI_RebornRecordAuto(enabled)
 	SurvivorUIDB = SurvivorUIDB or {}
 	SurvivorUIDB.rebornRecordAuto = enabled == true
+	local stopped = false
 	if enabled and not recording then
 		SurvivorUI_RebornRecordStart()
+	elseif not enabled and recording then
+		SurvivorUI_RebornRecordStop()
+		stopped = true
 	end
-	return SurvivorUIDB.rebornRecordAuto
+	return SurvivorUIDB.rebornRecordAuto, stopped
 end
 
 -- A session left "active" by a reload or crash is interrupted, not

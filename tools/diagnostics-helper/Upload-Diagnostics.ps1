@@ -183,6 +183,10 @@ function Sha256Hex($text) {
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
     return [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace("-", "").ToLower()
 }
+function WriteExactText($path, $contentText) {
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($path, $contentText, $utf8NoBom)
+}
 function GetRemoteText($path) {
     $res = GhApi "GET" "repos/$Repo/contents/$path"
     if ($null -eq $res -or -not $res.content) { return $null }
@@ -243,22 +247,46 @@ $db = ParseDiagnostics $text
 if (-not $db.sessions -or -not $db.order -or $db.order.Count -eq 0) { Fail "No diagnostic sessions found. In game, run /sui reborn record start, play, then /sui reborn record stop." }
 
 $sessionId = $null
+$recoveredActive = $false
 for ($i = $db.order.Count - 1; $i -ge 0; $i--) {
     $s = $db.sessions[$db.order[$i]]
+    if ($s.status -eq "active") { $sessionId = $db.order[$i]; $recoveredActive = $true; break }
     if ($s.status -eq "completed" -or $s.status -eq "truncated" -or $s.status -eq "interrupted") { $sessionId = $db.order[$i]; break }
 }
-if (-not $sessionId) { Fail "No completed session found. Stop recording in game first (/sui reborn record stop)." }
+if (-not $sessionId) { Fail "No completed or recoverable session found. Stop recording in game first (/sui reborn record stop)." }
 if ($sessionId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { Fail "Session ID '$sessionId' contains unsafe characters; refusing to use it in paths." }
 $session = $db.sessions[$sessionId]
 $events = @($session.events)
 $runs = @($events | ForEach-Object { $_.run } | Where-Object { $_ } | Select-Object -Unique).Count
 
+if ($SelfTest) {
+    function AssertSelfTest($condition, $message) {
+        if (-not $condition) { Fail "SELF-TEST FAIL: $message" }
+    }
+    AssertSelfTest ($db.order.Count -eq 1) "order must be a single-element array"
+    AssertSelfTest ($db.order[0] -eq "selftest-001") "order[0] must be selftest-001"
+    AssertSelfTest ($events.Count -eq 4) "event count must be 4"
+    AssertSelfTest ($events[0].seq -eq 1 -and $events[0].type -eq "abilities_update") "event 1 order/type mismatch"
+    AssertSelfTest ($events[1].seq -eq 2 -and $events[1].type -eq "curse_banner") "event 2 order/type mismatch"
+    AssertSelfTest ($events[2].seq -eq 3 -and $events[2].type -eq "jewelry_update") "event 3 order/type mismatch"
+    AssertSelfTest ($events[3].seq -eq 4 -and $events[3].type -eq "tooltip") "event 4 order/type mismatch"
+    AssertSelfTest ($events[0].data["name"] -eq "神圣战马") "Chinese ability name was not preserved"
+    AssertSelfTest ($events[1].data["text"] -like "*Проклятие*") "Russian curse text was not preserved"
+    AssertSelfTest ($events[2].data["items"].Count -eq 1) "jewelry items must remain a single-element array"
+    AssertSelfTest ($events[2].data["items"][0]["name"] -eq "埃库利亚指环") "Chinese jewelry name was not preserved"
+    AssertSelfTest ($events[3].data["lines"].Count -eq 1) "tooltip lines must remain a single-element array"
+    AssertSelfTest ($events[3].data["lines"][0] -eq "Upgrades: +10% damage") "tooltip line was not preserved"
+}
+
 $exportDir = Join-Path $ScriptDir ("export\" + $sessionId)
 New-Item -ItemType Directory -Force -Path $exportDir | Out-Null
 
 $files = @{}
+$exportStatus = $session.status
+if ($recoveredActive) { $exportStatus = "recovered" }
 $meta = [ordered]@{
-    sessionId = $sessionId; schema = $session.schema; status = $session.status
+    sessionId = $sessionId; schema = $session.schema; status = $exportStatus
+    originalStatus = $session.status; recovered = [bool]$recoveredActive; incomplete = [bool]$recoveredActive
     addonVersion = $session.addonVersion; addonCommit = $session.addonCommit
     gameLanguage = $session.gameLanguage; class = $session.class
     startedAt = $session.startedAt; endedAt = $session.endedAt
@@ -272,7 +300,7 @@ for ($i = 0; $i -lt $events.Count; $i += $chunkSize) {
     $slice = $events[$i..([Math]::Min($i + $chunkSize - 1, $events.Count - 1))]
     $files[("events-{0:D3}.json" -f $chunkIndex)] = ConvertTo-Json -InputObject ([object[]]@($slice)) -Depth 20
 }
-$summary = "# Diagnostic session $sessionId`n`n- Status: $($session.status)`n- Addon commit: $($session.addonCommit)`n- Events: $($events.Count)`n- Runs: $runs`n- Truncated: $($session.truncated)`n"
+$summary = "# Diagnostic session $sessionId`n`n- Status: $exportStatus`n- Original status: $($session.status)`n- Recovered active session: $([bool]$recoveredActive)`n- Addon commit: $($session.addonCommit)`n- Events: $($events.Count)`n- Runs: $runs`n- Truncated: $($session.truncated)`n"
 $files["summary.md"] = $summary
 
 $manifest = [ordered]@{ sessionId = $sessionId; files = @{} }
@@ -280,10 +308,10 @@ foreach ($name in $files.Keys) {
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($files[$name])
     $sha = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace("-", "").ToLower()
     $manifest.files[$name] = $sha
-    Set-Content -Path (Join-Path $exportDir $name) -Value $files[$name] -Encoding UTF8
+    WriteExactText (Join-Path $exportDir $name) $files[$name]
 }
 $files["manifest.json"] = $manifest | ConvertTo-Json -Depth 10
-Set-Content -Path (Join-Path $exportDir "manifest.json") -Value $files["manifest.json"] -Encoding UTF8
+WriteExactText (Join-Path $exportDir "manifest.json") $files["manifest.json"]
 
 $base = "$BaseDir/$sessionId"
 # Identity collision: a completed remote session with different
@@ -328,7 +356,9 @@ if (-not $SelfTest) {
 }
 
 Write-Host ""
+if ($SelfTest) { Write-Host "SELF-TEST PASS" }
 Write-Host "Diagnostic upload completed."
+if ($recoveredActive) { Write-Host "Recovered active session: normal finalization was not observed; exported as incomplete." }
 Write-Host ""
 Write-Host "Session: $sessionId"
 Write-Host "Addon commit: $($session.addonCommit)"

@@ -2187,8 +2187,12 @@ function SurvivorUI_RebornSlash(argument)
 		Say("Survivor UI (Reborn): automatic diagnostic recording on (starts every session).")
 		return
 	elseif arg == "record auto off" then
-		if SurvivorUI_RebornRecordAuto then SurvivorUI_RebornRecordAuto(false) end
-		Say("Survivor UI (Reborn): automatic diagnostic recording off.")
+		local stopped = false
+		if SurvivorUI_RebornRecordAuto then
+			local _, wasStopped = SurvivorUI_RebornRecordAuto(false)
+			stopped = wasStopped == true
+		end
+		Say(stopped and "Survivor UI (Reborn): automatic diagnostic recording off; current recording stopped." or "Survivor UI (Reborn): automatic diagnostic recording off.")
 		return
 	elseif arg == "record clear" then
 		if SurvivorUI_RebornRecordClear then SurvivorUI_RebornRecordClear() end

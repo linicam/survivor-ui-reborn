@@ -18,11 +18,16 @@ SurvivorUIDB = {}
 DEFAULT_CHAT_FRAME = { AddMessage = function() end }
 local simTime = 0
 local simRunTime = 0
+local currentRunId = nil
+local runStartTime = 0
 function GetTime() return simTime end
 function CreateFrame() return { RegisterEvent = function() end, SetScript = function() end } end
 AZS_RequestAbilities = function() end
 AZS = { On = function() end }
 AZS_GetRunTime = function() return simRunTime end
+AZS_API_RunId = function() return currentRunId end
+AZS_ZONE = { run = nil }
+AZS_RUN = { t = 0 }
 
 dofile("SurvivorUI/RebornCompat.lua")
 
@@ -41,9 +46,26 @@ for i = 1, table.getn(events) do
 	local e = events[i]
 	simTime = e.t or simTime
 	if e.type == "run_transition" then
-		AZS_RUN = { id = e.data and e.data.to }
+		currentRunId = e.data and e.data.to or e.run
+		runStartTime = simTime
 		simRunTime = 0
+		AZS_ZONE = { run = currentRunId }
+		AZS_RUN = { id = currentRunId, t = 0 }
 		SurvivorUI_RebornCheckRun()
+		eq("seq " .. tostring(e.seq) .. " run id", SurvivorUI_RebornRunId(), currentRunId)
+	else
+		if e.run and e.run ~= currentRunId then
+			currentRunId = e.run
+			runStartTime = simTime
+			AZS_ZONE = { run = currentRunId }
+		end
+		simRunTime = math.max(0, simTime - runStartTime)
+		if type(AZS_RUN) ~= "table" then AZS_RUN = {} end
+		AZS_RUN.id = currentRunId
+		AZS_RUN.t = simRunTime
+	end
+	if e.type == "run_transition" then
+		-- handled above
 	elseif e.type == "abilities_update" and e.data then
 		AZS_ABILITIES = e.data.rawAbilities
 		AZS_SPELLS = e.data.rawSpells
@@ -64,7 +86,9 @@ for i = 1, table.getn(events) do
 	elseif e.type == "curse_banner" and e.data and e.data.raw then
 		AZS_BANNERS = { e.data.raw }
 		local curses = SurvivorUI_RebornCurses()
-		if e.data.effect then
+		if e.data.expired then
+			eq("seq " .. tostring(e.seq) .. " curse expired", table.getn(curses.items), 0)
+		elseif e.data.effect then
 			eq("seq " .. tostring(e.seq) .. " curse effect", curses.items[1] and curses.items[1].text, e.data.effect)
 		else
 			skipped = skipped + 1

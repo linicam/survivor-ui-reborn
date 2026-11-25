@@ -564,8 +564,20 @@ for i = 1, table.getn(sess.events) do
 	end
 end
 check("diag: owner identifiers sanitized", foundSanitized)
+SurvivorUI_RebornRecord("nested_payload", {
+	read = { lines = { { left = "Fireball", color = { 1, 0.5, 0.25 } } } },
+	jewelry = { raw = { sources = { s1 = { icon = { path = "icon", meta = { effect = { value = 3 } } } } } } },
+})
+local nested = sess.events[table.getn(sess.events)].data
+eq("diag: nested tooltip color preserved", nested.read.lines[1].color[2], 0.5)
+eq("diag: nested jewelry effect preserved", nested.jewelry.raw.sources.s1.icon.meta.effect.value, 3)
 eq("diag: stop completes session", SurvivorUI_RebornRecordStop(), sid)
 eq("diag: completed status", sess.status, "completed")
+SurvivorUI_RebornRecordAuto(true)
+eq("diag: auto on starts recording", SurvivorUI_RebornRecordStatus().active, true)
+local _, autoStopped = SurvivorUI_RebornRecordAuto(false)
+eq("diag: auto off stops recording", autoStopped, true)
+eq("diag: auto off inactive", SurvivorUI_RebornRecordStatus().active, false)
 -- Cooldown-only updates do not flood the recorder.
 SurvivorUI_RebornRecordStart()
 local db2 = SurvivorUIRebornDiagnostics
