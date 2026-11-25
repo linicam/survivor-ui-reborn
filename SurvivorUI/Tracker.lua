@@ -543,6 +543,7 @@ end
 
 local lastSeconds
 local bossSeenUp = {}             -- [boss] = true once seen alive
+local resetRegistered = false
 local bossKilled = {}             -- [boss] = the run second it was seen to fall
 
 -- The boss alive under this name, for its health.
@@ -1113,11 +1114,17 @@ local function Draw(game, phase)
 		bossSeenUp, bossKilled = {}, {}
 	end
 	-- Reborn: a new run id means a new run even when the clock does not
-	-- rewind cleanly (RebornCompat also clears its own caches, and the
-	-- modules registered with it). First call in a run is harmless.
-	if SurvivorUI_RebornCheckRun and SurvivorUI_RebornCheckRun() then
-		bossSeenUp, bossKilled = {}, {}
-		endlessFrom = nil
+	-- rewind cleanly. The reset watcher fires once per transition
+	-- whoever detects it first; CheckRun only drives the transition.
+	if SurvivorUI_RebornRegisterReset and not resetRegistered then
+		resetRegistered = true
+		SurvivorUI_RebornRegisterReset(function()
+			bossSeenUp, bossKilled = {}, {}
+			endlessFrom = nil
+		end)
+	end
+	if SurvivorUI_RebornCheckRun then
+		SurvivorUI_RebornCheckRun()
 	end
 	lastSeconds = seconds
 

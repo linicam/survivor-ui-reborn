@@ -101,7 +101,7 @@ end
 local sentCommands = {}
 if hooksecurefunc and SendAddonMessage then
 	hooksecurefunc("SendAddonMessage", function(prefix, message)
-		if prefix == "AZSCMD" then
+		if prefix == "AZSCMD" and SurvivorUIDB and SurvivorUIDB.rebornDebug == true then
 			table.insert(sentCommands, tostring(message))
 			if table.getn(sentCommands) > 12 then
 				table.remove(sentCommands, 1)
@@ -122,8 +122,10 @@ end
 -- upvalues lexically at the point a function is defined).
 local abilitiesCache = nil      -- normalised merged ability list
 local abilitiesStamp = nil     -- AZS_ABILITIES_UPDATED last seen
+local spellsStamp = nil        -- AZS_SPELLS_UPDATED last seen
 local abilitiesSeen = {}       -- [key] = true, keys already merged
 local lastAbilityRequest = 0
+local lastRequestSpellsStamp = nil
 local abilitiesRequested = false
 local rankHistory = {}  -- [key] = { rank, firstSeen, increases }
 local rankEvents = {}   -- array of { key, from, to, at }
@@ -140,7 +142,9 @@ local lastLoadoutAt = 0
 -- nbm/rift fields as a fallback. When none of these is present the
 -- helpers below return nil / empty and callers keep original behaviour.
 function SurvivorUI_RebornActive()
-	if AZS_RequestAbilities or AZS_GetMeterLoadout then
+	-- AZS_RequestAbilities is Reborn-only; AZS_GetMeterLoadout also
+	-- exists in the original game and proves nothing on its own.
+	if AZS_RequestAbilities then
 		return true
 	end
 	local run = AZS_RUN
@@ -170,8 +174,10 @@ end
 local lastRunId = nil
 local activeCurses = {}
 local seenCurseIds = {}
+local curseWatermark = nil
 local capturedBanners = {}
 local bannerHandlerRegistered = false
+local EnsureBannerHandler
 local resetWatchers = {}
 
 -- Modules with per-run caches register here; they are called (pcall) when
@@ -185,6 +191,7 @@ end
 local function ResetOwnCaches()
 	abilitiesCache = nil
 	abilitiesStamp = nil
+	spellsStamp = nil
 	abilitiesSeen = {}
 	rankHistory = {}
 	rankEvents = {}
@@ -194,11 +201,24 @@ local function ResetOwnCaches()
 	lastLoadoutAt = 0
 	activeCurses = {}
 	seenCurseIds = {}
+	-- Watermark: banner history retained across runs must not
+	-- re-import the previous run's curses. Live handler events are
+	-- new by definition and bypass the watermark.
+	curseWatermark = nil
+	if type(AZS_BANNERS) == "table" then
+		for i = 1, table.getn(AZS_BANNERS) do
+			local id = tonumber(Field(AZS_BANNERS[i], "id", 1))
+			if id and (not curseWatermark or id > curseWatermark) then
+				curseWatermark = id
+			end
+		end
+	end
 end
 
 -- Call on every draw / poll that already runs: cheap (one string compare).
 -- Returns true when a new run started in this call.
 function SurvivorUI_RebornCheckRun()
+	EnsureBannerHandler()
 	local id = SurvivorUI_RebornRunId()
 	if id and id ~= lastRunId then
 		local first = lastRunId == nil
@@ -413,6 +433,10 @@ end
 -- frame. The AZSABILITIES handler (registered below when AZS.On exists)
 -- refreshes the cache; a stamp poll covers addons where AZS.On is absent.
 
+-- The two sources have different positional schemas and must not
+-- share indices: AZS_ABILITIES {key,spell,rank,passive,kind,cd,cdmax,
+-- name,icon,text}; AZS_SPELLS {key,spell,rank,cd,cdmax}. Reading a
+-- spells row with abilities indices reads its cd as `passive`.
 local function NormaliseAbility(entry, fromSpells)
 	if type(entry) ~= "table" then
 		return nil
@@ -421,10 +445,20 @@ local function NormaliseAbility(entry, fromSpells)
 	if not key or key == "" then
 		return nil
 	end
-	local passive = Field(entry, "passive", 4)
-	if passive == nil and fromSpells then
-		passive = false
+	if fromSpells then
+		return {
+			key = key,
+			spell = Num(Field(entry, "spell", 2)),
+			rank = Num(Field(entry, "rank", 3)),
+			passive = false,
+			kind = nil,
+			cd = Num(Field(entry, "cd", 4)),
+			cdmax = Num(Field(entry, "cdmax", 5)),
+			name = nil, icon = nil, text = nil,
+			fromSpells = true,
+		}
 	end
+	local passive = Field(entry, "passive", 4)
 	return {
 		key = key,
 		spell = Num(Field(entry, "spell", 2)),
@@ -436,21 +470,35 @@ local function NormaliseAbility(entry, fromSpells)
 		name = Field(entry, "name", 8),
 		icon = Field(entry, "icon", 9),
 		text = Field(entry, "text", 10),
-		fromSpells = fromSpells == true,
+		fromSpells = false,
 	}
 end
 
--- Rebuild the merged cache from the live globals. Dedup by key (first
--- wins); AZS_ABILITIES entries win over AZS_SPELLS entries for the same
--- key because they carry name/icon/text/passive/kind.
+-- Rebuild the merged cache from the live globals. Field-level merge:
+-- identity/name/icon/text/passive/kind from the snapshot (metadata),
+-- spell/rank/cd/cdmax from AZS_SPELLS when it carries the ability
+-- (the live bar line updates every second; the snapshot is a
+-- requested reply and can be older). Order: snapshot order first,
+-- then spells-only abilities in bar order.
 local function RefreshAbilitiesCache()
 	local merged = {}
-	local seen = {}
+	local byKey = {}
 	local function Add(entry, fromSpells)
 		local a = NormaliseAbility(entry, fromSpells)
-		if a and not seen[a.key] then
-			seen[a.key] = true
+		if not a then
+			return
+		end
+		local keep = byKey[a.key]
+		if not keep then
+			byKey[a.key] = a
 			table.insert(merged, a)
+			return
+		end
+		if fromSpells then
+			keep.spell = a.spell
+			keep.rank = a.rank
+			keep.cd = a.cd
+			keep.cdmax = a.cdmax
 		end
 	end
 	local abilities = AZS_ABILITIES
@@ -466,8 +514,9 @@ local function RefreshAbilitiesCache()
 		end
 	end
 	abilitiesCache = merged
-	abilitiesSeen = seen
+	abilitiesSeen = byKey
 	abilitiesStamp = AZS_ABILITIES_UPDATED
+	spellsStamp = AZS_SPELLS_UPDATED
 	TrackRanks(merged)
 	return merged
 end
@@ -486,67 +535,10 @@ end
 -- slots; that is enforced by callers rendering passives separately.
 -- For a re-homed racial, "has a cooldown" is judged by cdmax (the
 -- cooldown the ability has), not cd (the cooldown remaining).
--- The account-talent active (Divine Steed): the snapshot does not
--- carry it; it lives in the spellbook and the game's own HUD.
--- Find it there by name, cached for a few seconds.
-local steedCache, steedAt = nil, 0
-local function AccountTalentActive()
-	local now = GetTime and GetTime() or 0
-	if now - steedAt < 5 then
-		return steedCache
-	end
-	steedAt = now
-	steedCache = nil
-	-- The account-talent spell may not sit in the spellbook; the
-	-- client still knows it by name/id when the talent is taken.
-	if IsPlayerSpell and IsPlayerSpell(190784) then
-		local name, _, icon = GetSpellInfo(190784)
-		steedCache = {
-			key = "divine_steed", spell = 190784, rank = nil,
-			passive = false, kind = "class", cd = 0, cdmax = 0,
-			name = name or "神圣战马", icon = icon,
-		}
-		return steedCache
-	end
-	if not (GetNumSpellTabs and GetSpellTabInfo and GetSpellName) then
-		return nil
-	end
-	for tab = 1, GetNumSpellTabs() do
-		local _, _, offset, numSpells = GetSpellTabInfo(tab)
-		for i = 1, numSpells or 0 do
-			local index = offset + i
-			local name = GetSpellName(index, "spell")
-			if name == "Divine Steed" or name == "神圣战马" then
-				local spellId
-				if GetSpellLink then
-					local link = GetSpellLink(index, "spell")
-					spellId = link and tonumber(string.match(link, "spell:(%d+)"))
-				end
-				local icon = GetSpellTexture and GetSpellTexture(index, "spell")
-				local cd, cdmax = 0, 0
-				if GetSpellCooldown then
-					local start, duration = GetSpellCooldown(index, "spell")
-					if start and duration and duration > 0 then
-						cdmax = duration
-						cd = start > 0 and math.max(0, start + duration - now) or 0
-					end
-				end
-				steedCache = {
-					key = "divine_steed", spell = spellId, rank = nil,
-					passive = false, kind = "class", cd = cd, cdmax = cdmax,
-					name = name, icon = icon, bookIndex = index,
-				}
-				return steedCache
-			end
-		end
-	end
-	return nil
-end
-
 function SurvivorUI_RebornAbilities()
 	-- The snapshot table is replaced on every line: re-read it when its
 	-- stamp moved, and re-request (throttled) when it is still empty.
-	if AZS_ABILITIES_UPDATED ~= abilitiesStamp then
+	if AZS_ABILITIES_UPDATED ~= abilitiesStamp or AZS_SPELLS_UPDATED ~= spellsStamp then
 		RefreshAbilitiesCache()
 	elseif not abilitiesCache then
 		RefreshAbilitiesCache()
@@ -589,22 +581,6 @@ function SurvivorUI_RebornAbilities()
 		source = "abilities"
 	elseif table.getn(all) > 0 then
 		source = "spells"
-	end
-	-- The account-talent active rides along when the snapshot
-	-- lacks it, so the bar and the build list can show it.
-	if fromAbilities then
-		local steed = AccountTalentActive()
-		if steed then
-			local present = false
-			for i = 1, table.getn(actives) do
-				if actives[i].key == steed.key or (steed.spell and actives[i].spell == steed.spell) then
-					present = true
-				end
-			end
-			if not present then
-				table.insert(actives, steed)
-			end
-		end
 	end
 	return {
 		actives = actives, passives = passives, racials = racials, all = all,
@@ -666,15 +642,11 @@ function SurvivorUI_RebornPlaceRacialButton()
 	for i = 1, table.getn(AZS_SPELLS or {}) do
 		onBar[Field(AZS_SPELLS[i], "key", 1)] = true
 	end
-	local extra, racial
+	local racial
 	for i = 1, table.getn(data.actives) do
 		local a = data.actives[i]
-		if not onBar[a.key] then
-			if a.kind == "racial" then
-				racial = racial or a
-			else
-				extra = extra or a
-			end
+		if not onBar[a.key] and a.kind == "racial" then
+			racial = racial or a
 		end
 	end
 	local function Place(ability, button)
@@ -693,7 +665,9 @@ function SurvivorUI_RebornPlaceRacialButton()
 			SurvivorUI_SetExtraButton(button, (spellId and spellId > 0) and spellId or ability.name, icon)
 		end
 	end
-	Place(extra, 7)
+	if SurvivorUI_SetExtraButton then
+		SurvivorUI_SetExtraButton(7, nil)
+	end
 	Place(racial, 12)
 end
 
@@ -717,10 +691,19 @@ function SurvivorUI_RebornRequestAbilities(force)
 		return false
 	end
 	local now = Now()
+	-- Event-driven, not a poll: request when forced, while the
+	-- snapshot is still empty, or when the bar line moved since the
+	-- last request (an ability was learned or upgraded). The 5s
+	-- throttle only bounds bursts.
+	local snapshotEmpty = type(AZS_ABILITIES) ~= "table" or table.getn(AZS_ABILITIES) == 0
+	if not force and not snapshotEmpty and AZS_SPELLS_UPDATED == lastRequestSpellsStamp then
+		return false
+	end
 	if not force and now - lastAbilityRequest < 5 then
 		return false
 	end
 	lastAbilityRequest = now
+	lastRequestSpellsStamp = AZS_SPELLS_UPDATED
 	abilitiesRequested = true
 	local ok, err = pcall(AZS_RequestAbilities)
 	if not ok then
@@ -853,7 +836,7 @@ local function LoadoutOwner()
 	if AZS_GetMeterContext then
 		local ok, context = pcall(AZS_GetMeterContext)
 		if ok and type(context) == "table" then
-			return context.runId, context.ownerId or context.heroId or context.owner
+			return context.runId, context.localOwnerId or context.ownerId or context.heroId or context.owner
 		end
 	end
 	return nil, nil
@@ -931,14 +914,16 @@ local function IconTextureOf(icon)
 	if type(icon) ~= "table" then
 		return nil
 	end
-	local candidates = { icon.texture, icon.path, icon.icon, icon.file, icon[1] }
-	for i = 1, table.getn(candidates) do
-		local value = candidates[i]
+	-- Deterministic field lookup: a candidate array with nil holes
+	-- would make table.getn() stop before later valid fields.
+	local function Candidate(value)
 		if type(value) == "string" and (string.find(value, "\\", 1, true) or string.find(value, "^Interface")) then
 			return value
 		end
+		return nil
 	end
-	return nil
+	return Candidate(icon.texture) or Candidate(icon.path) or Candidate(icon.icon)
+		or Candidate(icon.file) or Candidate(icon[1])
 end
 
 local function NormaliseJewelryEntry(entry, source)
@@ -962,15 +947,18 @@ local function NormaliseJewelryEntry(entry, source)
 		name = name, icon = icon, slot = slotLabel,
 		slotRaw = slot, key = key, rank = rank, rarity = rarity,
 		sourceKey = key, count = 1,
+		instanceKey = entry and entry.itemInstanceKey or nil,
 		dedupKey = DedupKeyOf(sourceKey, key, name, slotLabel),
 	}
 end
 
--- Merge repeated entries for the same piece into one row: a repeat
--- acquisition increments `count` and upgrades the rank/level in place
--- (highest numeric rank wins), it never adds a row. Entries with no
--- usable key are kept as-is: dropping an unidentifiable piece would
--- hide a real piece, and guessing an identity would be worse.
+-- Merge repeated records for the same piece into one row. Duplicate
+-- API records are not acquisitions: `count` rises only for distinct
+-- itemInstanceKey values (verified in-game payloads carry one per
+-- owned piece); records without an instance key merge silently and
+-- keep the highest numeric rank. Entries with no usable key are
+-- kept as-is: dropping an unidentifiable piece would hide a real
+-- piece, and guessing an identity would be worse.
 -- Returns the merged list and the number of entries merged away.
 local function DedupJewelryItems(items)
 	local seen, out, merged = {}, {}, 0
@@ -979,7 +967,10 @@ local function DedupJewelryItems(items)
 		local key = item.dedupKey
 		if key and seen[key] then
 			local keep = seen[key]
-			keep.count = (keep.count or 1) + 1
+			if item.instanceKey and not keep.instances[tostring(item.instanceKey)] then
+				keep.instances[tostring(item.instanceKey)] = true
+				keep.count = (keep.count or 1) + 1
+			end
 			local oldRank, newRank = tonumber(keep.rank), tonumber(item.rank)
 			if newRank and (not oldRank or newRank > oldRank) then
 				keep.rank = item.rank
@@ -989,6 +980,10 @@ local function DedupJewelryItems(items)
 			if not keep.name and item.name then keep.name = item.name end
 			merged = merged + 1
 		else
+			item.instances = {}
+			if item.instanceKey then
+				item.instances[tostring(item.instanceKey)] = true
+			end
 			if key then seen[key] = item end
 			table.insert(out, item)
 		end
@@ -1096,43 +1091,44 @@ end)
 -- latest effect banner, translate its effect, and count down from
 -- the buff when one is present.
 local CURSE_EFFECTS = {
-	{ "орда накатывает волной", "敌潮涌动" },
+	{ "орда накатывает волной", "Horde surges " },
 }
 
 local function CurseEffectText(text)
 	for i = 1, table.getn(CURSE_EFFECTS) do
 		if string.find(text, CURSE_EFFECTS[i][1], 1, true) then
-			return CURSE_EFFECTS[i][2]
+			return T(CURSE_EFFECTS[i][2])
 		end
 	end
 	-- The documented curse categories (runs-and-zones guide): faster
 	-- enemies, a faster and thicker horde, more damage taken, healing
 	-- cut. Match Russian stems and carry the banner's own percent.
+	-- Display text goes through the locale system.
 	local pct = string.match(text, "(%d+)%%")
 	local suffix = pct and (pct .. "%") or ""
 	if string.find(text, "исцеление", 1, true) or string.find(text, "лечение", 1, true) then
-		return "治疗效果降低" .. suffix
+		return T("Healing reduced ") .. suffix
 	end
 	if string.find(text, "получаемый урон", 1, true) or string.find(text, "урон по вам", 1, true) then
-		return "受到伤害提高" .. suffix
+		return T("Damage taken increased ") .. suffix
 	end
 	if string.find(text, "скорость врагов", 1, true) or string.find(text, "враги быстрее", 1, true) then
-		return "敌人移动速度提高" .. suffix
+		return T("Enemy speed increased ") .. suffix
 	end
 	if string.find(text, "орда", 1, true) then
-		return "敌潮增强" .. suffix
+		return T("Horde surges ") .. suffix
 	end
 	pct = string.match(text, "урон снижен на (%d+)%%")
 	if pct then
-		return "伤害降低" .. pct .. "%"
+		return T("Damage reduced ") .. pct .. "%"
 	end
 	pct = string.match(text, "скорость снижена на (%d+)%%")
 	if pct then
-		return "移动速度降低" .. pct .. "%"
+		return T("Movement speed reduced ") .. pct .. "%"
 	end
 	pct = string.match(text, "перезарядка увеличена на (%d+)%%")
 	if pct then
-		return "冷却时间延长" .. pct .. "%"
+		return T("Cooldowns increased ") .. pct .. "%"
 	end
 	return nil
 end
@@ -1160,21 +1156,30 @@ local function DumpBannerValue(value, depth)
 	return "{" .. table.concat(parts, ",") .. "}"
 end
 
-local function LatchCurseBanner(banner)
+local function LatchCurseBanner(banner, fromHistory)
 	if type(banner) ~= "table" then
 		return
 	end
-	table.insert(capturedBanners, DumpBannerValue(banner, 0))
-	if table.getn(capturedBanners) > 20 then
-		table.remove(capturedBanners, 1)
-	end
-	local text = Field(banner, "text", 5) or ""
-	if Field(banner, "kind", 2) ~= "curse" or not string.find(text, "Проклятие", 1, true) then
+	local id = Field(banner, "id", 1)
+	local numericId = tonumber(id)
+	if fromHistory and curseWatermark and numericId and numericId <= curseWatermark then
 		return
 	end
-	local id = Field(banner, "id", 1)
+	local text = Field(banner, "text", 5) or ""
+	local isCurse = Field(banner, "kind", 2) == "curse" and string.find(text, "Проклятие", 1, true)
+	-- Dedup before any serialization: history scans revisit the same
+	-- banners every call.
 	local key = id ~= nil and tostring(id) or text
-	if seenCurseIds[key] then
+	if isCurse and seenCurseIds[key] then
+		return
+	end
+	if isCurse or SurvivorUI_RebornDebugEnabled() then
+		table.insert(capturedBanners, DumpBannerValue(banner, 0))
+		if table.getn(capturedBanners) > 20 then
+			table.remove(capturedBanners, 1)
+		end
+	end
+	if not isCurse then
 		return
 	end
 	seenCurseIds[key] = true
@@ -1186,13 +1191,15 @@ local function LatchCurseBanner(banner)
 	})
 end
 
-local function EnsureBannerHandler()
+EnsureBannerHandler = function()
 	if bannerHandlerRegistered then
 		return
 	end
 	if AZS_RegisterBannerHandler then
-		bannerHandlerRegistered = true
-		AZS_RegisterBannerHandler(LatchCurseBanner)
+		local ok = pcall(AZS_RegisterBannerHandler, LatchCurseBanner)
+		if ok then
+			bannerHandlerRegistered = true
+		end
 	end
 end
 
@@ -1203,7 +1210,7 @@ function SurvivorUI_RebornCurses()
 		local now = AZS_GetRunTime and AZS_GetRunTime() or nil
 		if type(AZS_BANNERS) == "table" then
 			for i = 1, table.getn(AZS_BANNERS) do
-				LatchCurseBanner(AZS_BANNERS[i])
+				LatchCurseBanner(AZS_BANNERS[i], true)
 			end
 		end
 		if now then
@@ -1213,7 +1220,7 @@ function SurvivorUI_RebornCurses()
 				local left = curse.duration - (now - curse.at)
 				if left > 0 then
 					table.insert(alive, curse)
-					table.insert(items, { text = CurseEffectText(curse.text) or "诅咒", left = left, raw = curse.text })
+					table.insert(items, { text = CurseEffectText(curse.text) or T("Curse"), left = left, raw = curse.text })
 				end
 			end
 			activeCurses = alive
@@ -1228,6 +1235,67 @@ end
 
 ------------------------------------------------------------------------------
 -- Diagnostics / probe
+
+-- Native tooltip capture (upgrade investigation): the original game
+-- wrote selected upgrades into the button tooltip itself. Dump the
+-- raw native lines for slotted abilities (and spellbook lines where
+-- the client supports them) so a capture before/after an upgrade
+-- choice shows whether Reborn's tooltips carry upgrade sections.
+local tooltipScan = nil
+function SurvivorUI_RebornTooltipDump()
+	local lines = {}
+	if not CreateFrame then
+		return lines
+	end
+	if not tooltipScan then
+		tooltipScan = CreateFrame("GameTooltip", "SurvivorUIRebornTooltipScan", nil, "GameTooltipTemplate")
+	end
+	local scan = tooltipScan
+	local function DumpLines(tag)
+		local name = scan:GetName()
+		for i = 1, 30 do
+			local left = _G[name .. "TextLeft" .. i]
+			local right = _G[name .. "TextRight" .. i]
+			local lt = left and left:GetText()
+			local rt = right and right:GetText()
+			if (lt and lt ~= "") or (rt and rt ~= "") then
+				table.insert(lines, string.format("  %s L%d: %s | %s", tag, i, tostring(lt), tostring(rt)))
+			end
+		end
+	end
+	local data = SurvivorUI_RebornAbilities()
+	local barIndex = {}
+	for i = 1, table.getn(AZS_SPELLS or {}) do
+		barIndex[Field(AZS_SPELLS[i], "key", 1)] = i
+	end
+	for i = 1, table.getn(data.all) do
+		local a = data.all[i]
+		table.insert(lines, string.format("tooltip ability: key=%s spell=%s rank=%s passive=%s",
+			tostring(a.key), tostring(a.spell), tostring(a.rank), tostring(a.passive)))
+		local slot = barIndex[a.key]
+		if slot and scan.SetAction then
+			local ok = pcall(function()
+				scan:SetOwner(UIParent, "ANCHOR_NONE")
+				scan:ClearLines()
+				scan:SetAction(slot)
+			end)
+			if ok then
+				DumpLines("action" .. slot)
+			end
+		end
+		if a.spell and a.spell > 0 and scan.SetSpellByID then
+			local ok = pcall(function()
+				scan:SetOwner(UIParent, "ANCHOR_NONE")
+				scan:ClearLines()
+				scan:SetSpellByID(a.spell)
+			end)
+			if ok then
+				DumpLines("spell" .. a.spell)
+			end
+		end
+	end
+	return lines
+end
 
 -- One line per fact, safe to copy out of chat. No credentials, tokens, or
 -- personal data are ever included.
@@ -1325,6 +1393,10 @@ function SurvivorUI_RebornProbe()
 	Add("banner handler: register=" .. tostring(AZS_RegisterBannerHandler ~= nil) .. " registered=" .. tostring(bannerHandlerRegistered))
 	for i = 1, table.getn(capturedBanners) do
 		Add("  captured banner: " .. capturedBanners[i])
+	end
+	local tooltipLines = SurvivorUI_RebornTooltipDump()
+	for i = 1, table.getn(tooltipLines) do
+		Add(tooltipLines[i])
 	end
 	if AZS_GetWorldAnchors then
 		local kinds = { "cache", "guardianLair", "guardian", "elite", "boss", "finalBoss", "enemy", "ping" }

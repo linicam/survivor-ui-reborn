@@ -982,10 +982,24 @@ do
 			end
 		end)
 		frame:Hide()
-		if SetBindingClick then
-			SetBindingClick(spec.key, "SurvivorUIExtra" .. spec.button)
+		-- Never silently overwrite an existing binding: claim the
+		-- key only when it is unbound or already clicks this button.
+		if SetBindingClick and GetBindingAction then
+			local action = GetBindingAction(spec.key)
+			if not action or action == "" or action == "CLICK SurvivorUIExtra" .. spec.button .. ":LeftButton" then
+				SetBindingClick(spec.key, "SurvivorUIExtra" .. spec.button)
+			end
 		end
 		row.extraButtons[spec.button] = frame
+	end
+	if SurvivorUI_RebornRegisterReset then
+		SurvivorUI_RebornRegisterReset(function()
+			for _, frame in pairs(row.extraButtons) do
+				frame.spell = nil
+				frame.icon:SetTexture(nil)
+				frame:Hide()
+			end
+		end)
 	end
 end
 
@@ -995,6 +1009,8 @@ function SurvivorUI_SetExtraButton(button, spell, icon)
 		return
 	end
 	if not spell then
+		frame.spell = nil
+		frame.icon:SetTexture(nil)
 		frame:Hide()
 		return
 	end
@@ -1003,9 +1019,7 @@ function SurvivorUI_SetExtraButton(button, spell, icon)
 	end
 	frame:SetAttribute("spell", spell)
 	frame.spell = spell
-	if icon then
-		frame.icon:SetTexture(icon)
-	end
+	frame.icon:SetTexture(icon)
 	frame:Show()
 	if GetSpellCooldown and CooldownFrame_SetTimer then
 		local start, duration = GetSpellCooldown(spell)

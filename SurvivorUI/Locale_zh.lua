@@ -412,6 +412,13 @@ SurvivorUI_WORDS.zh = {
 	["next {1}"] = "下次 {1}",
 	["FIGHT"] = "战斗",
 	["Curse"] = "诅咒",
+	["Horde surges "] = "敌潮涌动",
+	["Healing reduced "] = "治疗效果降低",
+	["Damage taken increased "] = "受到伤害提高",
+	["Enemy speed increased "] = "敌人移动速度提高",
+	["Damage reduced "] = "伤害降低",
+	["Movement speed reduced "] = "移动速度降低",
+	["Cooldowns increased "] = "冷却时间延长",
 	["Rift crystals"] = "裂隙水晶",
 	-- The run tracker's Tracker Ring (Dial.lua).
 	["of {1}"] = "共{1}",

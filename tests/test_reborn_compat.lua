@@ -231,7 +231,10 @@ SurvivorUI_RebornRequestAbilities(false)
 eq("abilities throttle: throttled repeats send nothing", requestCount, 1)
 fakeTime = 2006
 SurvivorUI_RebornRequestAbilities(false)
-eq("abilities throttle: request after 5s allowed", requestCount, 2)
+eq("abilities throttle: no repeat request without a build change", requestCount, 1)
+AZS_SPELLS_UPDATED = 9999
+SurvivorUI_RebornRequestAbilities(false)
+eq("abilities throttle: build change re-requests", requestCount, 2)
 
 -- Rank history = the honest upgrade signal (VERIFIED: only rank exposed).
 resetGame()
@@ -344,7 +347,7 @@ AZS_BUFFS = { { spell = 47241, left = 10 } }
 AZS_GetRunTime = function() return 110 end
 curses = SurvivorUI_RebornCurses()
 eq("curses: one active item", table.getn(curses.items), 1)
-eq("curses: effect translated", curses.items[1].text, "敌潮涌动")
+eq("curses: effect translated", curses.items[1].text, "Horde surges ")
 eq("curses: countdown from buff", curses.items[1].left, 10)
 
 -- ===========================================================================
@@ -422,13 +425,14 @@ local evs = SurvivorUI_RebornRankEventsFor("demonic_empowerment")
 eq("round2 tooltip: one rank event", table.getn(evs), 1)
 eq("round2 tooltip: event timestamp", evs[1] and evs[1].at, 72)
 
--- Jewelry: same sourceKey twice merges (count 2); two different pieces
--- both ranked 55 stay distinct; slots come from sourceKey.
+-- Jewelry: same sourceKey with two distinct itemInstanceKeys merges
+-- (count 2); two different pieces both ranked 55 stay distinct;
+-- slots come from sourceKey.
 AZS_GetMeterLoadout = function(req)
 	return {
 		runJewelry = {
-			{ sourceKey = "jewel:ring:1" },
-			{ sourceKey = "jewel:ring:1" },
+			{ sourceKey = "jewel:ring:1", itemInstanceKey = "inst-a" },
+			{ sourceKey = "jewel:ring:1", itemInstanceKey = "inst-b" },
 			{ sourceKey = "jewel:trinket:2" },
 			{ sourceKey = "jewel:neck:3" },
 		},
@@ -463,6 +467,40 @@ check("probe: returns lines", type(lines) == "table" and table.getn(lines) > 5)
 local joined = table.concat(lines, "\n")
 check("probe: mentions rift", string.find(joined, "rift") ~= nil)
 check("probe: mentions curses supported", string.find(joined, "curses: supported=true") ~= nil)
+
+-- Audit regressions: source schemas, field merge, detection, dedup.
+resetGame()
+AZS_ZONE = { run = "azs:r33333333" }
+AZS_SPELLS = { { "fireball", 133, 3, 1, 8 } }
+AZS_SPELLS_UPDATED = 10
+AZS_ABILITIES = { { key = "fireball", spell = 133, rank = 2, passive = false, kind = "class", cd = 0, cdmax = 8, name = "Fireball", icon = "i", text = "t" } }
+AZS_ABILITIES_UPDATED = 10
+data = SurvivorUI_RebornAbilities()
+eq("audit merge: spells rank wins", data.all[1].rank, 3)
+eq("audit merge: spells cd wins", data.all[1].cd, 1)
+eq("audit merge: metadata kept", data.all[1].name, "Fireball")
+AZS_ABILITIES = {}
+AZS_ABILITIES_UPDATED = 11
+data = SurvivorUI_RebornAbilities()
+eq("audit schema: spells cd=1 is not passive", data.all[1].passive, false)
+eq("audit schema: spells cdmax from index 5", data.all[1].cdmax, 8)
+local savedRequest = AZS_RequestAbilities
+AZS_RequestAbilities = nil
+AZS_RUN = {}
+check("audit detection: meter loadout alone is not Reborn", SurvivorUI_RebornActive() == false)
+AZS_RequestAbilities = savedRequest
+resetGame()
+AZS_ZONE = { run = "azs:r44444444" }
+AZS_GetMeterContext = function() return { runId = "azs:r44444444", localOwnerId = "hero:me" } end
+AZS_GetMeterLoadout = function()
+	return { runJewelry = {
+		{ category = "ring", slotId = 1, sourceKey = "jewel:ring" },
+		{ category = "ring", slotId = 1, sourceKey = "jewel:ring" },
+	}, sources = { ["jewel:ring"] = { name = "Band", rank = 10, kind = "item" } } }
+end
+local jew2 = SurvivorUI_RebornJewelry(true)
+eq("audit jewelry: duplicate records merge", table.getn(jew2.items), 1)
+eq("audit jewelry: no instance key, no acquisition count", jew2.items[1].count, 1)
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

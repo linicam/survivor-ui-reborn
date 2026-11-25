@@ -1861,6 +1861,7 @@ scan:SetOwner(WorldFrame, "ANCHOR_NONE")
 -- tooltip's lines with a number in them. An upgrade renames the piece, so the
 -- link alone says when to read it again.
 local pieces = {}               -- [item link] = { rank, spell, tags }
+local resetRegistered = false
 
 -- A name or bonus line in English, whatever language the game is in (Locale.lua).
 local function English(name)
@@ -2309,9 +2310,16 @@ local function DrawGear()
 	local paint = GEAR_PAINT[db.jewelryColor or "row"] or GEAR_PAINT.row
 	local shown = 0
 	-- A new run clears the inventory-piece cache, so a rank read in the
-	-- last run can never be shown for this one.
-	if SurvivorUI_RebornCheckRun and SurvivorUI_RebornCheckRun() then
-		pieces = {}
+	-- last run can never be shown for this one. The reset watcher
+	-- fires once per run transition whoever detects it first.
+	if SurvivorUI_RebornRegisterReset and not resetRegistered then
+		resetRegistered = true
+		SurvivorUI_RebornRegisterReset(function()
+			pieces = {}
+		end)
+	end
+	if SurvivorUI_RebornCheckRun then
+		SurvivorUI_RebornCheckRun()
 	end
 	-- Reborn first: the meter loadout / AZSGEAR list, when the game gave
 	-- one. Inventory slots are the fallback (original game, or a Reborn

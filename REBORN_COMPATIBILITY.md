@@ -118,14 +118,14 @@ about it is hardcoded.
 ### Phase 2
 - **Ability upgrade tracking — rank history only.** The API exposes
   only `rank`; there is no per-upgrade selection table, event, or
-  function in the documented API. The addon therefore tracks rank
-  increases per ability per run (`/sui reborn upgrades`): "Fireball:
-  rank 1 → 2 at 63s". Tooltips say plainly that individual upgrade
-  choices are not exposed. No stacking assumption (additive vs
-  multiplicative) is made anywhere, and no upgrade effect text is
-  invented. If a future API exposes selections, `TrackRanks` /
-  `SurvivorUI_RebornRankEvents` in `RebornCompat.lua` is the place to
-  join it.
+  function in the documented API. Rank increases are tracked per
+  ability per run, and a rank increase is never presented as proof
+  of a particular upgrade choice. Whether Reborn's native tooltips
+  carry upgrade sections (as the original game's did) is under
+  investigation: `/sui reborn probe` now dumps raw native action and
+  spell tooltip lines per ability for a before/after comparison. No
+  stacking assumption (additive vs multiplicative) is made anywhere,
+  and no upgrade effect text is invented.
 - **Jewelry effects and tooltips — as far as the API allows.** Name,
   icon, slot, rank, and rarity are shown where the loadout gives them;
   per-item effect text and numeric bonuses are *not* shown, because
@@ -133,19 +133,18 @@ about it is hardcoded.
   hardcoding original-game values would be wrong if Reborn rebalanced
   them. Aggregate `g*` bonuses are available in diagnostics and are
   never attributed to a single piece.
-- **Curses — not implemented, by design.** No curse table, function,
-  event, banner kind, or data file is documented in the official Addon
-  API (the word "curse" does not appear on the page at all), and no
-  public native-UI/addon example exposing curses was found.
-  `SurvivorUI_RebornCurses()` therefore reports `supported = false`
-  with that reason, `/sui reborn curses` prints it, and `/sui reborn
-  probe` lists candidate globals (`AZS_CHESTS`, `AZS_BANNER`,
-  `AZS_BUFFS`, `AZS_DEBUFFS`) so an in-game tester can see what exists
-  without any of them being treated as curse data. Do not treat
-  `AZS_DEBUFFS` (debuffs on bosses/guardians) or `AZS_CHESTS` (cache
-  positions) as curses. If Reborn documents or exposes curse data in
-  future, this is the documented blocker to revisit — with in-game
-  payloads collected via `/sui reborn probe` first.
+- **Curses — banner-tracked, verified in game.** Curse effects arrive
+  as `kind="curse"` banners (Russian server text) and are tracked
+  through `AZS_RegisterBannerHandler` with dedup by banner id, a
+  per-run watermark against retained history, and per-curse expiry.
+  Remaining time is banner-derived (banner duration minus elapsed
+  run time) — an estimate, not an authoritative buff duration; no
+  buff is associated by duration similarity. Effect text maps the
+  documented categories (faster enemies, faster/thicker horde, more
+  damage taken, healing cut) plus one observed exact phrase; unknown
+  effects show as a plain curse, with the raw banner captured by
+  `/sui reborn probe`. Banners are not retold after a reload, so
+  curses taken before a reload cannot be reconstructed.
 
 ## Static data corrections (2026-11-25, from azreborn.com/data/v1)
 
