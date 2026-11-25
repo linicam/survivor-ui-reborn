@@ -954,26 +954,28 @@ end
 -- the spellbook does not hold (selected racials, account talents).
 -- Secure buttons over those two slots cast them directly; their
 -- spell is set out of combat by SurvivorUI_SetExtraButton.
-local extraButtons = {}
-for _, spec in pairs({ { button = 7, position = 7, key = "7" }, { button = 12, position = 8, key = "=" } }) do
-	local frame = CreateFrame("Button", "SurvivorUIExtra" .. spec.button, row, "SecureActionButtonTemplate")
-	frame:SetWidth(BUTTON_SIZE)
-	frame:SetHeight(BUTTON_SIZE)
-	frame:SetPoint("LEFT", row, "LEFT", (spec.position - 1) * (BUTTON_SIZE + BUTTON_GAP), 0)
-	frame:SetAttribute("type", "spell")
-	frame.icon = frame:CreateTexture(nil, "ARTWORK")
-	frame.icon:SetAllPoints(frame)
-	frame.cooldown = CreateFrame("Cooldown", nil, frame, "CooldownFrameTemplate")
-	frame.cooldown:SetAllPoints(frame)
-	frame:Hide()
-	if SetBindingClick then
-		SetBindingClick(spec.key, "SurvivorUIExtra" .. spec.button)
+do
+	row.extraButtons = {}
+	for _, spec in pairs({ { button = 7, position = 7, key = "7" }, { button = 12, position = 8, key = "=" } }) do
+		local frame = CreateFrame("Button", "SurvivorUIExtra" .. spec.button, row, "SecureActionButtonTemplate")
+		frame:SetWidth(BUTTON_SIZE)
+		frame:SetHeight(BUTTON_SIZE)
+		frame:SetPoint("LEFT", row, "LEFT", (spec.position - 1) * (BUTTON_SIZE + BUTTON_GAP), 0)
+		frame:SetAttribute("type", "spell")
+		frame.icon = frame:CreateTexture(nil, "ARTWORK")
+		frame.icon:SetAllPoints(frame)
+		frame.cooldown = CreateFrame("Cooldown", nil, frame, "CooldownFrameTemplate")
+		frame.cooldown:SetAllPoints(frame)
+		frame:Hide()
+		if SetBindingClick then
+			SetBindingClick(spec.key, "SurvivorUIExtra" .. spec.button)
+		end
+		row.extraButtons[spec.button] = frame
 	end
-	extraButtons[spec.button] = frame
 end
 
 function SurvivorUI_SetExtraButton(button, spell, icon)
-	local frame = extraButtons[button]
+	local frame = row.extraButtons[button]
 	if not frame then
 		return
 	end
