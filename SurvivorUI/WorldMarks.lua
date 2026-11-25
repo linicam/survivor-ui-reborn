@@ -488,7 +488,11 @@ local function ReadAll()
 				spot = { anchor = entry.anchorId, attachment = "position", lift = 3, look = "lair", name = entry.name,
 					empty = true, refill = refill[tonumber(entry.lairIndex)] }
 			elseif entry.state ~= "asleep" and entry.state ~= "awake" then
-				spot = nil
+				-- A state this build does not name (Reborn may call
+				-- a spawned guardian something else): still mark
+				-- the lair, as an alive one.
+				spot = { anchor = entry.anchorId, attachment = "position", lift = 3, look = "lair", arrow = true,
+					name = entry.name, awake = false }
 			elseif guardian and guardian.spot then
 				guardian.spot.lair = entry.name
 			elseif guardian then

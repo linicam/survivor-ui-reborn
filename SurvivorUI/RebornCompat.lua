@@ -1146,6 +1146,9 @@ function SurvivorUI_RebornProbe()
 				if e.kind == "cache" then
 					Add(string.format("  anchor cache: name=%s state=%s x=%s y=%s",
 						tostring(e.name), tostring(e.state), tostring(e.x), tostring(e.y)))
+				elseif e.kind == "guardianLair" then
+					Add(string.format("  anchor lair: name=%s state=%s x=%s y=%s occupant=%s",
+						tostring(e.name), tostring(e.state), tostring(e.x), tostring(e.y), tostring(e.occupantUnitId)))
 				end
 			end
 		else
