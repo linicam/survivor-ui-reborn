@@ -21,6 +21,7 @@ local recording = false
 local session = nil
 local sessionStart = 0
 local pendingTooltips = {}
+local pendingBuffs = {}
 local tooltipBaselines = {}
 local pseudonyms = {}
 local pseudonymCount = 0
@@ -110,6 +111,10 @@ function SurvivorUI_RebornRecord(eventType, data)
 	end
 	session.bytes = session.bytes + size
 	session.seq = session.seq + 1
+	if eventType == "curse_banner" and type(data) == "table" and data.effect then
+		table.insert(pendingBuffs, { at = Now() + 1, sessionId = session.id, run = SurvivorUI_RebornRunId and SurvivorUI_RebornRunId() or nil })
+		table.insert(pendingBuffs, { at = Now() + 3, sessionId = session.id, run = SurvivorUI_RebornRunId and SurvivorUI_RebornRunId() or nil })
+	end
 	table.insert(session.events, {
 		seq = session.seq,
 		t = math.floor((Now() - sessionStart) * 1000) / 1000,
@@ -135,6 +140,7 @@ function SurvivorUI_RebornRecordStart()
 	end
 	local db = DB()
 	pendingTooltips = {}
+	pendingBuffs = {}
 	tooltipBaselines = {}
 	pseudonyms = {}
 	pseudonymCount = 0
@@ -192,6 +198,7 @@ function SurvivorUI_RebornRecordStop()
 	end
 	SurvivorUI_RebornRecord("session_stop", {})
 	pendingTooltips = {}
+	pendingBuffs = {}
 	session.status = session.truncated and "truncated" or "completed"
 	session.endedAt = time and time() or nil
 	recording = false
@@ -286,6 +293,16 @@ if timer then
 				else
 					p.at = now + 2
 				end
+			end
+		end
+		for i = table.getn(pendingBuffs), 1, -1 do
+			local p = pendingBuffs[i]
+			local currentRun = SurvivorUI_RebornRunId and SurvivorUI_RebornRunId() or nil
+			if p.sessionId ~= session.id or p.run ~= currentRun then
+				table.remove(pendingBuffs, i)
+			elseif now >= p.at then
+				SurvivorUI_RebornRecord("buff_observation", { buffs = AZS_BUFFS })
+				table.remove(pendingBuffs, i)
 			end
 		end
 		-- UI-independent observation: refresh shared caches and
