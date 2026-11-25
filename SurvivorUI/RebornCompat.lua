@@ -1357,6 +1357,9 @@ function SurvivorUI_RebornProbe()
 				tostring(Field(t, "name", 1)), tostring(Field(t, "kind", 3)), tostring(Field(t, "ready", 4)), tostring(Field(t, "wait", 5)), tostring(Field(t, "icon", 2))))
 		end
 	end
+	for i = 1, table.getn(sentCommands) do
+		Add("  cmd: " .. sentCommands[i])
+	end
 	if GetNumSpellTabs and GetSpellTabInfo and GetSpellName then
 		for tab = 1, GetNumSpellTabs() do
 			local _, _, offset, numSpells = GetSpellTabInfo(tab)
