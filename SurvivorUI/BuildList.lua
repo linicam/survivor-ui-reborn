@@ -1565,7 +1565,7 @@ local function RebornBuild()
 	if not data.complete then
 		return nil
 	end
-	return data.actives, nil, data.passives
+	return data.actives, nil, data.passives, data.all
 end
 
 local function Draw()
@@ -1595,13 +1595,59 @@ local function Draw()
 	-- active/passive lists. Otherwise the original assumption holds:
 	-- AZS_SPELLS is 6 slotted actives plus the racial last.
 	local spells, count, slotted, racialEntry, passiveEntries
-	local rebornActives, rebornRacial, rebornPassives = RebornBuild()
+	local rebornActives, rebornRacial, rebornPassives, rebornAll = RebornBuild()
 	if rebornActives then
-		spells = rebornActives
+		-- One list in bar order: actives follow the bar, passives sit
+		-- where the snapshot learned them among the actives, and a
+		-- racial passive closes the list.
+		local barOrder = BarOrder(rebornActives, table.getn(rebornActives))
+		local queue, passiveByKey = {}, {}
+		for place = 1, table.getn(barOrder) do
+			table.insert(queue, rebornActives[barOrder[place]])
+		end
+		for index = 1, table.getn(rebornPassives) do
+			passiveByKey[Field(rebornPassives[index], "key", 1)] = rebornPassives[index]
+		end
+		local combined, deferred, emitted = {}, {}, {}
+		local nextActive = 1
+		local function Emit(entry)
+			local key = Field(entry, "key", 1)
+			if key and not emitted[key] then
+				emitted[key] = true
+				table.insert(combined, entry)
+			end
+		end
+		for index = 1, table.getn(rebornAll or {}) do
+			local entry = rebornAll[index]
+			local passive = passiveByKey[Field(entry, "key", 1)]
+			if passive then
+				if Field(passive, "kind", 5) == "racial" then
+					table.insert(deferred, passive)
+				else
+					Emit(passive)
+				end
+			elseif queue[nextActive] then
+				Emit(queue[nextActive])
+				nextActive = nextActive + 1
+			end
+		end
+		while queue[nextActive] do
+			Emit(queue[nextActive])
+			nextActive = nextActive + 1
+		end
+		for index = 1, table.getn(rebornPassives) do
+			if Field(rebornPassives[index], "kind", 5) ~= "racial" then
+				Emit(rebornPassives[index])
+			end
+		end
+		for index = 1, table.getn(deferred) do
+			Emit(deferred[index])
+		end
+		spells = combined
 		count = table.getn(spells)
 		slotted = count
 		racialEntry = nil
-		passiveEntries = rebornPassives
+		passiveEntries = {}
 	else
 		spells = AZS_SPELLS or {}
 		count = table.getn(spells)
@@ -1613,8 +1659,15 @@ local function Draw()
 	-- Reborn: skill-bar order, so the list reads as the bar does.
 	-- Original game: highest rank first. Reborn actives can number
 	-- seven (the account-talent active ahead of the racial active).
-	local order = rebornActives and BarOrder(spells, slotted) or RankOrder(spells, slotted)
-	local activeSlots = rebornActives and math.max(SLOTS, math.min(count, 8)) or SLOTS
+	local order = {}
+	if rebornActives then
+		for index = 1, count do
+			order[index] = index
+		end
+	else
+		order = RankOrder(spells, slotted)
+	end
+	local activeSlots = rebornActives and count or SLOTS
 	-- Rows from the highest rank down; each spell keeps its own action button
 	-- for its icon.
 	for place = 1, activeSlots do
@@ -1635,7 +1688,8 @@ local function Draw()
 	for slot = 1, activeSlots do
 		local row = rows[slot]
 		if order[slot] then
-			Border(row, row.color, 0.6)
+			local entry = spells[order[slot]]
+			Border(row, row.color, Field(entry, "passive", 4) and 0.3 or 0.6)
 		else
 			Border(row, nil, 0)
 		end
@@ -1677,7 +1731,12 @@ local function Draw()
 	else
 		list:SetHeight(LIST_HEIGHT)
 	end
-	list.count:SetText((slotted >= activeSlots and "|cffff8080" or "|cffd0d0d0")..math.min(slotted, activeSlots).." / "..activeSlots.."|r")
+	if rebornActives then
+		local cap = math.max(SLOTS, math.min(table.getn(rebornActives), 8))
+		list.count:SetText((table.getn(rebornActives) >= cap and "|cffff8080" or "|cffd0d0d0")..math.min(table.getn(rebornActives), cap).." / "..cap.."|r")
+	else
+		list.count:SetText((slotted >= activeSlots and "|cffff8080" or "|cffd0d0d0")..math.min(slotted, activeSlots).." / "..activeSlots.."|r")
+	end
 	rankWidth = RankRoom()
 end
 
