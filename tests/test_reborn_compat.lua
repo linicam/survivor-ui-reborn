@@ -112,7 +112,7 @@ eq("boss rift: latest minute", nb and nb.atLatestMinute, 5)
 eq("boss rift: name", nb and nb.name, "Rift Boss")
 eq("boss rift: number", nb and nb.number, 3)
 local text, isRift = SurvivorUI_RebornNextBossText(nb)
-eq("boss rift: text", text, "Rift 42%")
+eq("boss rift: text", text, "42%")
 check("boss rift: text is rift", isRift == true)
 
 resetGame()
@@ -121,7 +121,7 @@ AZS_RUN = { ph = "playing", t = 10, nbs = "known", nbm = "rift", nb = -1, nbn = 
 nb = SurvivorUI_RebornNextBoss()
 check("boss rift missing: mode", nb and nb.mode == "rift")
 eq("boss rift missing: rift is nil, not 0", nb and nb.rift, nil)
-eq("boss rift missing: text", SurvivorUI_RebornNextBossText(nb), "Rift")
+eq("boss rift missing: text", SurvivorUI_RebornNextBossText(nb), "")
 
 resetGame()
 AZS_RUN = { ph = "playing", t = 300, nbs = "known", nbm = "time", nb = 75, nbc = 2, nbn = "Timed Boss" }

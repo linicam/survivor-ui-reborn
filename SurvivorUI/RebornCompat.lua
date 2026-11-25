@@ -321,9 +321,9 @@ function SurvivorUI_RebornNextBossText(nextBoss)
 	end
 	if nextBoss.mode == "rift" then
 		if nextBoss.rift ~= nil then
-			return string.format("Rift %d%%", math.floor(nextBoss.rift + 0.5)), true
+			return string.format("%d%%", math.floor(nextBoss.rift + 0.5)), true
 		end
-		return "Rift", true
+		return "", true
 	end
 	if nextBoss.mode == "time" then
 		if nextBoss.countdown ~= nil then
