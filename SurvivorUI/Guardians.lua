@@ -16,7 +16,9 @@
 -- points them north up instead, as the minimap does.
 --
 -- Over the list, the achievement "Slay four guardians before 8:00": how many
--- fell before 8:00 and the time left, green once four did.
+-- fell before 8:00 and the time left, green once four did. (Original game
+-- only: the Reborn API documents no such goal, so in Reborn the line is
+-- not drawn; the lairs' positions, health and respawn countdowns are.)
 --
 -- Walking straight at a guardian turns its arrow gold, with a glow; within 10
 -- yards of a living one, its line (or stretch) flashes.
@@ -348,6 +350,18 @@ end
 -- function apart from Draw: the game's Lua (5.0, from the game's 0.101) lets
 -- a function reach at most 32 of the file's locals.
 local function DrawGoal(time)
+	-- Reborn: no "four before 8:00" line. That goal is the original
+	-- game's achievement; the Reborn API documents no such goal (no
+	-- field carries it — AZS_RUN has only guardians slain/awake and
+	-- the lair count), so the line would claim a target the game
+	-- never set. The lairs themselves stay: position arrows, health
+	-- while awake, and the respawn countdown (AZS_LAIRS.left, the
+	-- seconds until an empty lair fills) are all Reborn data.
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+		goal:SetText("")
+		goalText, goalColor = "", MUTED
+		return
+	end
 	local slain = tonumber(AZS_RUN and AZS_RUN.gk) or 0
 	if time < GOAL_TIME then
 		before = math.max(before, slain)

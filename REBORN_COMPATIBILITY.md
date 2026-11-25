@@ -234,6 +234,16 @@ unchanged in substance); the full audit is in the research notes
   guardian tracking are untouched. Dead rows show only the second
   the boss fell, when seen. Original-game behaviour is preserved
   behind the same Reborn gate.
+- **Guardians**: the "8:00前 0/4" line is the original game's
+  "Slay four guardians before 8:00" achievement (hardcoded
+  `GOAL=4, GOAL_TIME=480`). The Reborn API documents no such goal
+  (no field carries it; `AZS_RUN` has only guardians slain/awake
+  and the lair count), so the line is no longer drawn in Reborn.
+  What stays is all Reborn data: lair positions (arrows/distance),
+  guardian health while awake, and the respawn countdowns
+  (`AZS_LAIRS.left`, seconds until an empty lair fills). The
+  `/20:00` in the clock is `AZS_ZONE.len` ("run seconds to the
+  final boss"), a real Reborn field, and stays.
 - **Localization**: the zhCN translations were not missing — they
   were not delivered. Every load-time label (`This Run`, the 11 stat
   rows, `Biggest Crits`, `Reset`, `Stats`, `Build`, `Info`, `Rank`,
