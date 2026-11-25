@@ -395,6 +395,11 @@ local function Draw()
 	if SurvivorUI_HeroWorld then
 		px, py, facing = SurvivorUI_HeroWorld()
 	end
+	-- Reborn (3.3.5 client): the client itself knows the facing,
+	-- even standing still; the game may not send one.
+	if not facing and GetPlayerFacing then
+		facing = -GetPlayerFacing()
+	end
 	local heroX, heroY, span
 	if not px then
 		if SurvivorUI_HeroPlace then
