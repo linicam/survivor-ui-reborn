@@ -861,6 +861,9 @@ function TrackRanks(merged)
 			local prev = rankHistory[a.key]
 			if not prev then
 				rankHistory[a.key] = { rank = a.rank, firstSeen = seconds, increases = 0 }
+				if SurvivorUI_RebornRecordTooltipSoon then
+					SurvivorUI_RebornRecordTooltipSoon(a.key, "baseline")
+				end
 			elseif a.rank > prev.rank then
 				table.insert(rankEvents, { key = a.key, from = prev.rank, to = a.rank, at = seconds })
 				if CaptureAdd then CaptureAdd(string.format("rank %s %s -> %s at %s", tostring(a.key), tostring(prev.rank), tostring(a.rank), tostring(seconds))) end

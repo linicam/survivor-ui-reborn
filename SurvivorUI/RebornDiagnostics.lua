@@ -237,11 +237,11 @@ end
 
 -- Bounded follow-up tooltip captures after an ability change: the
 -- native tooltip may update after the rank does.
-function SurvivorUI_RebornRecordTooltipSoon(key)
+function SurvivorUI_RebornRecordTooltipSoon(key, phase)
 	if not recording or not session then
 		return
 	end
-	if tooltipBaselines[key] then
+	if phase ~= "baseline" and tooltipBaselines[key] then
 		SurvivorUI_RebornRecord("tooltip", { phase = "pre", read = tooltipBaselines[key] })
 	end
 	for i = 1, table.getn(pendingTooltips) do
@@ -250,7 +250,7 @@ function SurvivorUI_RebornRecordTooltipSoon(key)
 		end
 	end
 	table.insert(pendingTooltips, {
-		key = key, at = Now() + 1, tries = 0,
+		key = key, at = Now() + 1, tries = 0, phase = phase or "post",
 		sessionId = session.id,
 		run = SurvivorUI_RebornRunId and SurvivorUI_RebornRunId() or nil,
 	})
@@ -275,9 +275,9 @@ if timer then
 					local ok, read = pcall(SurvivorUI_RebornTooltipRead, p.key)
 					if ok then
 						tooltipBaselines[p.key] = read
-						SurvivorUI_RebornRecord("tooltip", { phase = "post", read = read })
+						SurvivorUI_RebornRecord("tooltip", { phase = p.phase or "post", read = read })
 					else
-						SurvivorUI_RebornRecord("tooltip", { phase = "post", key = p.key, ok = false, error = tostring(read) })
+						SurvivorUI_RebornRecord("tooltip", { phase = p.phase or "post", key = p.key, ok = false, error = tostring(read) })
 					end
 				end
 				p.tries = p.tries + 1
