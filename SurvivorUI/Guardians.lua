@@ -442,6 +442,14 @@ local function Draw()
 			end
 		elseif state == "awake" then
 			entry.share = healths[entry.id]
+			if not entry.share then
+				-- Reborn lairs carry their own hp/hpm; the unit
+				-- list may not name the guardian.
+				local hp, hpm = tonumber(Field(lair, "hp", 12)), tonumber(Field(lair, "hpm", 13))
+				if hp and hpm and hpm > 0 then
+					entry.share = hp / hpm
+				end
+			end
 		elseif healths[entry.id] and healths[entry.id] < 1 then
 			-- Hurt while the game still calls it asleep (feared or held from
 			-- the first hit, it never turned on the hero): a fight all the same.
@@ -498,7 +506,7 @@ local function Draw()
 			row.state:SetTextColor(RESPAWN[1], RESPAWN[2], RESPAWN[3])
 			row.color = MUTED
 		elseif entry.state == "awake" then
-			local share = healths[entry.id]
+			local share = entry.share
 			row.name:SetTextColor(AWAKE[1], AWAKE[2], AWAKE[3])
 			row.state:SetText(share and string.format("%d%%", share * 100 + 0.5) or SurvivorUI_T("AWAKE"))
 			row.state:SetTextColor(AWAKE[1], AWAKE[2], AWAKE[3])
@@ -771,7 +779,15 @@ local function Cell(entry)
 	if cell.empty then
 		cell.text = entry.left and entry.left > -1 and Clock(math.max(0, entry.left)) or nil
 	elseif cell.awake then
-		cell.text = entry.share and string.format("%d%%", entry.share * 100 + 0.5) or SurvivorUI_T("FIGHT")
+		if entry.share and entry.share < 1 then
+			cell.text = string.format("%d%%", entry.share * 100 + 0.5)
+		elseif SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+			-- Reborn calls every spawned guardian awake; only a
+			-- damaged one is in a fight. Undamaged: no word.
+			cell.text = nil
+		else
+			cell.text = entry.share and string.format("%d%%", entry.share * 100 + 0.5) or SurvivorUI_T("FIGHT")
+		end
 	end
 	return cell
 end
