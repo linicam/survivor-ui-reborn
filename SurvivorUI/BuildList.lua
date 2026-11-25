@@ -405,11 +405,44 @@ local function Row(index)
 		if not this.ability then
 			return
 		end
-		-- Reborn: an ability with no action-bar button (a passive, or a
-		-- racial the bar does not carry) has no button tooltip; show the
-		-- description the API itself gave, with its rank history.
+		local reborn = SurvivorUI_RebornActive and SurvivorUI_RebornActive()
+		-- The ability's lines from the Reborn compat layer, when the
+		-- snapshot knows it: base description, rank, rank rises
+		-- observed this run with timestamps, and the honest note that
+		-- individual upgrade choices are not exposed by the API.
+		local function RebornLines()
+			if not reborn or not SurvivorUI_RebornAbilityTooltipLines then
+				return nil
+			end
+			local ability = this.abilityKey and SurvivorUI_RebornAbilityByKey
+				and SurvivorUI_RebornAbilityByKey(this.abilityKey) or nil
+			if not ability then
+				ability = {
+					key = this.abilityKey, rank = this.abilityRank,
+					passive = this.passive, text = this.abilityText,
+				}
+			end
+			return SurvivorUI_RebornAbilityTooltipLines(ability)
+		end
+		local function AddRebornLines(skipBase)
+			local lines = RebornLines()
+			if not lines then
+				return false
+			end
+			for i = 1, table.getn(lines) do
+				local line = lines[i]
+				if not (skipBase and line.kind == "base") then
+					local grey = line.kind ~= "base"
+					GameTooltip:AddLine(line.text, grey and 0.7 or 1, grey and 0.7 or 1, grey and 0.7 or 1, 1)
+				end
+			end
+			return true
+		end
+		-- Reborn: an ability with no action-bar button (a passive, or
+		-- a re-homed ability the bar does not carry) has no button
+		-- tooltip; show the API description with its rank history.
 		if not this.actionSlot then
-			if not this.abilityText then
+			if not this.abilityText and not reborn then
 				return
 			end
 			GameTooltip:SetOwner(this, "ANCHOR_NONE")
@@ -421,12 +454,16 @@ local function Row(index)
 			end
 			GameTooltip:ClearLines()
 			GameTooltip:SetText(this.ability, 1, 0.82, 0)
-			if this.passive then
-				GameTooltip:AddLine("Passive", 0.7, 0.7, 0.7)
-			end
-			GameTooltip:AddLine(this.abilityText, 1, 1, 1, 1)
-			if this.abilityRank then
-				GameTooltip:AddLine("Rank "..tostring(this.abilityRank), 0.7, 0.7, 0.7)
+			if not AddRebornLines(false) then
+				if this.passive then
+					GameTooltip:AddLine(SurvivorUI_T("Passive"), 0.7, 0.7, 0.7)
+				end
+				if this.abilityText then
+					GameTooltip:AddLine(this.abilityText, 1, 1, 1, 1)
+				end
+				if this.abilityRank then
+					GameTooltip:AddLine(SurvivorUI_TF("Rank {1}", this.abilityRank), 0.7, 0.7, 0.7)
+				end
 			end
 			GameTooltip:Show()
 			return
@@ -439,6 +476,12 @@ local function Row(index)
 			GameTooltip:SetPoint("TOPRIGHT", this, "TOPLEFT", -((this:GetLeft() or 0) - (list:GetLeft() or 0)) - 6, 0)
 		end
 		GameTooltip:SetAction(this.actionSlot)
+		-- Reborn: the client's button tooltip already carries the base
+		-- description, so only rank, rank history and the honest note
+		-- are appended (the base line is skipped, not repeated).
+		if reborn then
+			AddRebornLines(true)
+		end
 		GameTooltip:Show()
 	end)
 	row:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -1250,6 +1293,7 @@ local function Fill(row, entry, actionSlot, isRacial)
 	row.passive = Field(entry, "passive", 4) == true
 	row.abilityText = Field(entry, "text", 10)
 	row.abilityRank = Field(entry, "rank", 3)
+	row.abilityKey = key
 	local texture = actionSlot and GetActionTexture and GetActionTexture(actionSlot) or nil
 	if not texture then
 		texture = Field(entry, "icon", 9)
@@ -1257,8 +1301,12 @@ local function Fill(row, entry, actionSlot, isRacial)
 	row.icon:SetTexture(texture or nil)
 	row.icon:SetAlpha(1)
 	-- Its name as the game writes it in its language (Locale.lua).
+	-- A passive row carries the "(passive)" tag on screen, the same
+	-- wording SurvivorUI_BuildRows uses; a racial row (original game
+	-- only — Reborn has no racial section) the "(racial)" tag.
 	local shown = SurvivorUI_Native(name)
-	FitSpell(row, shown, isRacial and SurvivorUI_T("(racial)"))
+	local tag = isRacial and SurvivorUI_T("(racial)") or (row.passive and SurvivorUI_T("(passive)") or nil)
+	FitSpell(row, shown, tag)
 	row.rank:SetText(RankText(Field(entry, "rank", 3)))
 	local showRange, showCooldown = Shows()
 	-- No action button, no button tooltip to read a range / lasting time
@@ -1285,7 +1333,7 @@ end
 
 local function Empty(row)
 	row.ability, row.color, row.racial = nil, nil, nil
-	row.abilityText, row.abilityRank, row.passive = nil, nil, nil
+	row.abilityText, row.abilityRank, row.passive, row.abilityKey = nil, nil, nil, nil
 	row.icon:SetTexture(FLAT)
 	row.icon:SetVertexColor(0.15, 0.15, 0.18)
 	row.icon:SetAlpha(0.8)
@@ -1445,7 +1493,11 @@ local function SpellSlotFor(key)
 end
 
 -- The build as the Reborn snapshot sees it, or nil to keep the original
--- AZS_SPELLS behaviour: { actives, racial, passives }.
+-- AZS_SPELLS behaviour: { actives, racial, passives }. In Reborn the
+-- racial is always nil: SurvivorUI_RebornAbilities() re-homes genuine
+-- kind="racial" entries into the active/passive lists, so there is no
+-- racial row, tag, or reserved slot to draw. The original game's
+-- last-entry-is-the-racial behaviour is untouched.
 local function RebornBuild()
 	if not SurvivorUI_RebornAbilities then
 		return nil
@@ -1454,7 +1506,7 @@ local function RebornBuild()
 	if not data.complete then
 		return nil
 	end
-	return data.actives, data.racials[1], data.passives
+	return data.actives, nil, data.passives
 end
 
 local function Draw()
@@ -1474,9 +1526,11 @@ local function Draw()
 			PlaceRow(rows[index])
 		end
 	end
-	-- Reborn (snapshot present): actives are the slotted list, the racial
-	-- is the snapshot's racial (not "the last entry"), and passives get
-	-- their own rows under it. Otherwise the original assumption holds:
+	-- Reborn (snapshot present): actives are the slotted list and
+	-- passives get their own rows under them, tagged "(passive)".
+	-- There is no racial row: RebornBuild() returns no racial, the
+	-- snapshot's kind="racial" entries having been re-homed into the
+	-- active/passive lists. Otherwise the original assumption holds:
 	-- AZS_SPELLS is 6 slotted actives plus the racial last.
 	local spells, count, slotted, racialEntry, passiveEntries
 	local rebornActives, rebornRacial, rebornPassives = RebornBuild()
@@ -1484,7 +1538,7 @@ local function Draw()
 		spells = rebornActives
 		count = table.getn(spells)
 		slotted = count
-		racialEntry = rebornRacial
+		racialEntry = nil
 		passiveEntries = rebornPassives
 	else
 		spells = AZS_SPELLS or {}
@@ -1523,38 +1577,44 @@ local function Draw()
 			Border(row, nil, 0)
 		end
 	end
+	-- The row under the actives: the racial in the original game, no
+	-- row at all in Reborn. Passives follow it (original: none) or
+	-- follow the actives directly (Reborn).
 	local racialRow = Row(SLOTS + 1)
 	racialRow.icon:SetVertexColor(1, 1, 1)
-	if racialEntry then
-		if rebornActives then
-			Fill(racialRow, racialEntry, SpellSlotFor(Field(racialEntry, "key", 1)), true)
-		else
-			Fill(racialRow, racialEntry, Slot(count, count), true)
-		end
+	if rebornActives then
+		racialRow.base:Hide()
+		racialRow:Hide()
+	elseif racialEntry then
+		Fill(racialRow, racialEntry, Slot(count, count), true)
 	else
 		racialRow.base:Hide()
 		racialRow:Hide()
 	end
-	-- Passives (Reborn only): one row each under the racial, in rank
-	-- order. The list grows to hold them; with none it keeps its
-	-- original height. The tooltip says each one is passive.
+	-- Passives (Reborn only): one row each, in rank order, directly
+	-- under the actives. The list grows to hold them; with none it
+	-- keeps its height (6 rows in Reborn, 7 with the racial in the
+	-- original game). Each row carries the "(passive)" tag (Fill).
 	local passiveCount = table.getn(passiveEntries)
+	local passiveBase = rebornActives and SLOTS or SLOTS + 1
 	table.sort(passiveEntries, function(a, b)
 		return (tonumber(Field(a, "rank", 3)) or 0) > (tonumber(Field(b, "rank", 3)) or 0)
 	end)
 	for place = 1, passiveCount do
-		local row = Row(SLOTS + 1 + place)
+		local row = Row(passiveBase + place)
 		row.icon:SetVertexColor(1, 1, 1)
 		Fill(row, passiveEntries[place], SpellSlotFor(Field(passiveEntries[place], "key", 1)), false)
 		Border(row, row.color, 0.3)
 	end
-	for index = SLOTS + 2 + passiveCount, table.getn(rows) do
+	for index = passiveBase + passiveCount + 1, table.getn(rows) do
 		if rows[index] then
 			rows[index]:Hide()
 		end
 	end
 	if passiveCount > 0 then
-		list:SetHeight(TITLE_HEIGHT + HEAD_HEIGHT + (SLOTS + 1 + passiveCount) * ROW_HEIGHT + 6)
+		list:SetHeight(TITLE_HEIGHT + HEAD_HEIGHT + (passiveBase + passiveCount) * ROW_HEIGHT + 6)
+	elseif rebornActives then
+		list:SetHeight(TITLE_HEIGHT + HEAD_HEIGHT + SLOTS * ROW_HEIGHT + 6)
 	else
 		list:SetHeight(LIST_HEIGHT)
 	end
@@ -1804,12 +1864,14 @@ local function PlaceWorn()
 	end
 end
 
--- The jewelry worn, the gear a run drops: one row a slot, filled with the
--- piece's quality color, the slot's name and what the piece gives in short,
--- or the piece's own name alone (the options' Build list tab); an empty slot
--- faint. Hover a piece for its own tooltip.
+-- The jewelry worn, the gear a run drops: one row a piece, filled with
+-- the piece's quality color, the slot's name and what the piece gives in
+-- short, or the piece's own name alone (the options' Build list tab); an
+-- empty slot faint. Hover a piece for its own tooltip. Reborn rows are
+-- one per loadout piece, in the piece's own slot (not the five fixed
+-- inventory slots), so lines are created on demand past the fifth.
 local gearLines = {}
-for index = 1, table.getn(GEAR_SLOTS) do
+local function NewGearLine(index)
 	local line = CreateFrame("Frame", nil, worn)
 	line:SetWidth(WIDTH)
 	line:SetHeight(GEAR_ROW - 1)
@@ -1835,6 +1897,15 @@ for index = 1, table.getn(GEAR_SLOTS) do
 		table.insert(line.edges, edge)
 	end
 
+	-- The piece's icon, when the API gave one (Reborn loadout pieces);
+	-- hidden otherwise, and the label sits at the row's left edge.
+	line.icon = line:CreateTexture(nil, "ARTWORK")
+	line.icon:SetWidth(GEAR_ROW - 3)
+	line.icon:SetHeight(GEAR_ROW - 3)
+	line.icon:SetPoint("LEFT", line, "LEFT", 2, 0)
+	line.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	line.icon:Hide()
+
 	line.label = line:CreateFontString(nil, "OVERLAY")
 	line.label:SetFont(SurvivorUI_FONT, 9 + FONT_BUMP, "OUTLINE")
 	line.label:SetPoint("LEFT", line, "LEFT", 4, 0)
@@ -1852,12 +1923,12 @@ for index = 1, table.getn(GEAR_SLOTS) do
 			GameTooltip:SetOwner(this, "ANCHOR_LEFT")
 			GameTooltip:SetText(item.name or "?", 1, 0.82, 0)
 			if item.rank then
-				GameTooltip:AddLine("Rank "..tostring(item.rank), 1, 1, 1)
+				GameTooltip:AddLine(SurvivorUI_TF("Rank {1}", item.rank), 1, 1, 1)
 			end
 			if item.rarity then
-				GameTooltip:AddLine("Rarity: "..tostring(item.rarity), 1, 1, 1)
+				GameTooltip:AddLine(SurvivorUI_TF("Rarity: {1}", item.rarity), 1, 1, 1)
 			end
-			GameTooltip:AddLine("Per-item effects are not exposed by the AZ Reborn API. Aggregate jewelry bonuses are in the Character pane.", 0.7, 0.7, 0.7, 1)
+			GameTooltip:AddLine(SurvivorUI_T("Per-item effects are not exposed by the AZ Reborn API. Aggregate jewelry bonuses are in the Character pane."), 0.7, 0.7, 0.7, 1)
 			GameTooltip:Show()
 			return
 		end
@@ -1869,6 +1940,16 @@ for index = 1, table.getn(GEAR_SLOTS) do
 	end)
 	line:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	gearLines[index] = line
+	return line
+end
+
+-- A gear row, created on demand past the five fixed inventory slots.
+local function GearLine(index)
+	return gearLines[index] or NewGearLine(index)
+end
+
+for index = 1, table.getn(GEAR_SLOTS) do
+	NewGearLine(index)
 end
 
 local function PaintGear(line, r, g, b, fill, edge)
@@ -2116,52 +2197,65 @@ local function DrawGear()
 	end
 	-- Reborn first: the meter loadout / AZSGEAR list, when the game gave
 	-- one. Inventory slots are the fallback (original game, or a Reborn
-	-- build where the loadout carries no jewelry).
+	-- build where the loadout carries no jewelry). Each loadout piece
+	-- gets its own row, in its own slot: the list is one row per piece
+	-- (a sixth piece is no longer dropped), and no "empty" rows are
+	-- shown for slots the loadout does not claim.
 	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry() or nil
 	if rebornJewelry and (rebornJewelry.source == "loadout" or rebornJewelry.source == "gear")
 		and table.getn(rebornJewelry.items) > 0 then
-		for index = 1, table.getn(GEAR_SLOTS) do
-			local line = gearLines[index]
+		local count = table.getn(rebornJewelry.items)
+		for index = 1, count do
+			local line = GearLine(index)
 			line.slot = nil
 			local item = rebornJewelry.items[index]
-			if item then
-				line.rebornItem = item
-				shown = shown + 1
-				PlaceGear(line, shown)
-				local r, g, b = RarityColor(item.rarity)
-				if db.jewelryNames then
-					GearText(line, GearWords(item.slot, nil, item.name or "?"), "", true)
-				else
-					-- Left: slot + rank. Right: the name. Per-item effect
-					-- text is not exposed by the API, so it is not
-					-- invented; the hover tooltip says so.
-					local left = item.slot .. (item.rank and "  " .. tostring(item.rank) or "")
-					GearText(line, left, item.name or "?")
-				end
-				if paint.plain then
-					PaintGear(line, PLAIN[1], PLAIN[2], PLAIN[3], paint.fill, paint.edge)
-				else
-					PaintGear(line, r, g, b, paint.fill, paint.edge)
-				end
-				if not paint.words then
-					r, g, b = 1, 1, 1
-				end
-				line.label:SetTextColor(r, g, b)
-				line.tags:SetTextColor(r, g, b)
-				line:Show()
-			elseif db.jewelryEmpty ~= false then
-				line.rebornItem = nil
-				shown = shown + 1
-				PlaceGear(line, shown)
-				PaintGear(line, PLAIN[1], PLAIN[2], PLAIN[3], GEAR_PAINT.empty.fill, GEAR_PAINT.empty.edge)
-				GearText(line, SurvivorUI_T(GEAR_SLOTS[index][2]), SurvivorUI_T("empty"))
-				line.label:SetTextColor(0.45, 0.45, 0.5)
-				line.tags:SetTextColor(0.4, 0.4, 0.45)
-				line:Show()
+			line.rebornItem = item
+			shown = shown + 1
+			PlaceGear(line, shown)
+			-- Rarity colour only when a real rarity is known; unknown
+			-- stays the existing grey. Rarity is never invented from
+			-- the rank/level number.
+			local r, g, b = RarityColor(item.rarity)
+			-- The piece's icon where the loadout gave one; the label
+			-- makes room for it, else sits at the row's left edge.
+			if item.icon then
+				line.icon:SetTexture(item.icon)
+				line.icon:Show()
+				line.label:ClearAllPoints()
+				line.label:SetPoint("LEFT", line, "LEFT", GEAR_ROW + 2, 0)
 			else
-				line.rebornItem = nil
-				line:Hide()
+				line.icon:Hide()
+				line.label:ClearAllPoints()
+				line.label:SetPoint("LEFT", line, "LEFT", 4, 0)
 			end
+			local times = item.count and item.count > 1 and "  x" .. tostring(item.count) or ""
+			if db.jewelryNames then
+				GearText(line, GearWords(item.slot, nil, item.name or "?") .. times, "", true)
+			else
+				-- Left: slot + rank (+ acquisition count). Right: the
+				-- name. Per-item effect text is not exposed by the API,
+				-- so it is not invented; the hover tooltip says so.
+				local left = item.slot .. (item.rank and "  " .. tostring(item.rank) or "") .. times
+				GearText(line, left, item.name or "?")
+			end
+			if paint.plain then
+				PaintGear(line, PLAIN[1], PLAIN[2], PLAIN[3], paint.fill, paint.edge)
+			else
+				PaintGear(line, r, g, b, paint.fill, paint.edge)
+			end
+			if not paint.words then
+				r, g, b = 1, 1, 1
+			end
+			line.label:SetTextColor(r, g, b)
+			line.tags:SetTextColor(r, g, b)
+			line:Show()
+		end
+		for index = count + 1, table.getn(gearLines) do
+			local line = gearLines[index]
+			line.rebornItem = nil
+			line.slot = nil
+			line.icon:Hide()
+			line:Hide()
 		end
 		local tall = GEAR_TOP + shown * GEAR_ROW + 5
 		if worn.tall ~= tall then
@@ -2170,11 +2264,23 @@ local function DrawGear()
 		end
 		return
 	end
+	-- Extra lines a Reborn draw created past the five fixed slots do
+	-- not belong to the inventory fallback; hide them here.
+	for index = table.getn(GEAR_SLOTS) + 1, table.getn(gearLines) do
+		local line = gearLines[index]
+		line.rebornItem = nil
+		line.slot = nil
+		line.icon:Hide()
+		line:Hide()
+	end
 	for index = 1, table.getn(GEAR_SLOTS) do
 		local slot, label = GEAR_SLOTS[index][1], GEAR_SLOTS[index][2]
 		local line = gearLines[index]
 		line.slot = slot
 		line.rebornItem = nil
+		line.icon:Hide()
+		line.label:ClearAllPoints()
+		line.label:SetPoint("LEFT", line, "LEFT", 4, 0)
 		local link = GetInventoryItemLink and GetInventoryItemLink("player", slot)
 		if link or db.jewelryEmpty ~= false then
 			shown = shown + 1
@@ -2328,11 +2434,13 @@ SurvivorUI_GameHud = SurvivorUI_GameHud or {}
 SurvivorUI_GameHud.build = ApplyGameHud
 
 -- For the last runs (RunHistory.lua): the build as it stands, the spells by
--- rank, the highest first, then the racial: { name, rank, icon, color, racial,
--- range, cd }, the range and the cooldown as the list shows them.
+-- rank, the highest first, then the racial (original game only):
+-- { name, rank, icon, color, racial, range, cd }, the range and the
+-- cooldown as the list shows them.
 function SurvivorUI_BuildSnapshot()
-	-- Reborn: the snapshot's actives + racial + passives, not "all but
-	-- the last entry are actives and the last is the racial".
+	-- Reborn: the snapshot's actives + passives (no racial: re-homed),
+	-- not "all but the last entry are actives and the last is the
+	-- racial".
 	local rebornActives, rebornRacial, rebornPassives = RebornBuild()
 	local spells, count
 	if rebornActives then
@@ -2488,16 +2596,16 @@ function SurvivorUI_BuildShows()
 end
 
 -- And the rows as the list draws them now: the spells from the highest rank
--- down, the empty slots, then the racial. Each { name (as shown), spell and
--- tag (the name and the racial's "(racial)" apart, for their fit), rank, icon,
--- color, racial, empty, symbol (an Art file), tint, number, numberColor (none:
--- the row's own), cd, share (a lasting spell's time left, for its timer) };
--- nil out of a run.
+-- down, the empty slots, then the racial (original game only). Each
+-- { name (as shown), spell and tag (the name and the racial's "(racial)"
+-- apart, for their fit), rank, icon, color, racial, empty, symbol (an Art
+-- file), tint, number, numberColor (none: the row's own), cd, share (a
+-- lasting spell's time left, for its timer) }; nil out of a run.
 function SurvivorUI_BuildRows()
 	if not Running() then
 		return nil
 	end
-	-- Reborn: snapshot actives + racial + passives when present.
+	-- Reborn: snapshot actives + passives when present (no racial).
 	local rebornActives, rebornRacial, rebornPassives = RebornBuild()
 	local spells, count
 	if rebornActives then
@@ -2516,8 +2624,8 @@ function SurvivorUI_BuildRows()
 		local native = SurvivorUI_Native(name)
 		local passive = Field(entry, "passive", 4) == true
 		local row = {
-			name = racial and native.."  |cff8a8a8a"..SurvivorUI_T("(racial)").."|r" or passive and native.."  |cff8a8a8a(passive)|r" or native,
-			spell = native, tag = racial and SurvivorUI_T("(racial)") or passive and "(passive)" or nil,
+			name = racial and native.."  |cff8a8a8a"..SurvivorUI_T("(racial)").."|r" or passive and native.."  |cff8a8a8a"..SurvivorUI_T("(passive)").."|r" or native,
+			spell = native, tag = racial and SurvivorUI_T("(racial)") or passive and SurvivorUI_T("(passive)") or nil,
 			rank = tonumber(Field(entry, "rank", 3)) or "", racial = racial, passive = passive,
 			icon = actionSlot and GetActionTexture and GetActionTexture(actionSlot) or Field(entry, "icon", 9),
 			color = SurvivorUI_MeterColor and SurvivorUI_MeterColor(name) or { 0.8, 0.8, 0.8 },
@@ -2600,11 +2708,12 @@ function SurvivorUI_GearSnapshot()
 			local item = rebornJewelry.items[index]
 			local r, g, b = RarityColor(item.rarity)
 			table.insert(gear, {
-				label = item.slot .. (item.rank and "  " .. tostring(item.rank) or ""),
+				label = item.slot .. (item.rank and "  " .. tostring(item.rank) or "")
+					.. (item.count and item.count > 1 and "  x" .. tostring(item.count) or ""),
 				tags = item.name or "?",
 				color = { r, g, b },
 				item = item.key, name = item.name, tip = nil,
-				icon = item.icon,
+				icon = item.icon, count = item.count or 1,
 			})
 		end
 		return gear

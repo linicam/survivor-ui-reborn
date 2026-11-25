@@ -59,6 +59,28 @@ local function T(text)
 	return text
 end
 
+-- TF(text, a, b, c): SurvivorUI_TF with {1}..{3} filled, or a local
+-- substitution when the locale file has not loaded yet (RebornCompat
+-- loads before Locale.lua). Only three values: enough for every
+-- Reborn string this file owns.
+local function TF(text, a, b, c)
+	if SurvivorUI_TF then
+		return SurvivorUI_TF(text, a, b, c)
+	end
+	local values = { a, b, c }
+	return (string.gsub(T(text), "{(%d)}", function(index)
+		local value = values[tonumber(index)]
+		return value ~= nil and tostring(value) or ""
+	end))
+end
+
+-- Run-clock seconds as m:ss, for rank-rise timestamps.
+local function FormatRunTime(seconds)
+	seconds = tonumber(seconds) or 0
+	if seconds < 0 then seconds = 0 end
+	return string.format("%d:%02d", math.floor(seconds / 60), seconds - math.floor(seconds / 60) * 60)
+end
+
 local function Num(v)
 	return tonumber(v) or 0
 end
@@ -433,6 +455,16 @@ end
 -- source is "abilities" when the snapshot contributed, "spells" when only
 -- the action-bar list was available, "none" when neither has data.
 -- complete is true only when the AZS_ABILITIES snapshot is non-empty.
+-- Reborn has no racial section: genuine kind="racial" entries are
+-- re-homed below by passive/cooldown, never dropped, and `racials` is
+-- always empty here (kept only so diagnostics keep their shape).
+-- Classification order is deliberate: `passive` first (the boolean
+-- signal, cross-checked by cd == 0), then `kind`. Never hit == 0:
+-- Demonic Empowerment and Metamorphosis deal no direct hit yet are
+-- active (cd 30 / 35). A passive never counts against the 6 active
+-- slots; that is enforced by callers rendering passives separately.
+-- For a re-homed racial, "has a cooldown" is judged by cdmax (the
+-- cooldown the ability has), not cd (the cooldown remaining).
 function SurvivorUI_RebornAbilities()
 	-- The snapshot table is replaced on every line: re-read it when its
 	-- stamp moved, and re-request (throttled) when it is still empty.
@@ -452,10 +484,24 @@ function SurvivorUI_RebornAbilities()
 	end
 	for i = 1, table.getn(all) do
 		local a = all[i]
-		if a.kind == "racial" then
-			table.insert(racials, a)
-		elseif a.passive then
+		if a.passive then
+			-- A passive is a passive whatever else the snapshot says
+			-- about it: Demonic Knowledge (passive, cd 0) lands here
+			-- even if a server ever also tagged it racial.
 			table.insert(passives, a)
+		elseif a.kind == "racial" then
+			-- A selected racial, re-homed by cooldown: one with a
+			-- cooldown behaves as an active, a cooldown-0 one as a
+			-- passive. It is never dropped and never shown in a
+			-- dedicated racial section. cdmax is the test, not cd:
+			-- cd is the cooldown *remaining* (0 while ready), cdmax
+			-- is the cooldown the ability has — Berserking reads
+			-- cd 0 / cdmax 60 while ready and is an active.
+			if (a.cdmax and a.cdmax > 0) or (a.cd and a.cd > 0) then
+				table.insert(actives, a)
+			else
+				table.insert(passives, a)
+			end
 		else
 			table.insert(actives, a)
 		end
@@ -575,8 +621,28 @@ function SurvivorUI_RebornRankIncreases(key)
 	return h and h.increases or 0
 end
 
+-- The rank rises observed for one ability this run, in order:
+-- { key, from, to, at } with `at` the run clock in seconds. Only rises
+-- the addon actually saw are returned; after a /reload the history
+-- before the reload is gone and cannot be recovered.
+function SurvivorUI_RebornRankEventsFor(key)
+	local out = {}
+	if not key then
+		return out
+	end
+	for i = 1, table.getn(rankEvents) do
+		if rankEvents[i].key == key then
+			table.insert(out, rankEvents[i])
+		end
+	end
+	return out
+end
+
 -- Lines for an ability tooltip: base text (from the API, when present),
--- rank, and an honest rank-history note. Never invents upgrade effects.
+-- passive flag, rank, each rank rise observed this run with its
+-- timestamp, and an honest note. Never invents upgrade effects, pick
+-- counts, or stacking: a rank rise is shown as exactly that, never as
+-- a named upgrade choice.
 function SurvivorUI_RebornAbilityTooltipLines(ability)
 	local lines = {}
 	if not ability then
@@ -585,12 +651,16 @@ function SurvivorUI_RebornAbilityTooltipLines(ability)
 	if ability.text and ability.text ~= "" then
 		table.insert(lines, { text = ability.text, kind = "base" })
 	end
-	table.insert(lines, { text = "Rank " .. tostring(ability.rank or 0), kind = "rank" })
-	local inc = SurvivorUI_RebornRankIncreases(ability.key)
-	if inc > 0 then
-		table.insert(lines, { text = "Rank rose " .. tostring(inc) .. (inc == 1 and " time" or " times") .. " this run.", kind = "history" })
+	if ability.passive then
+		table.insert(lines, { text = T("Passive"), kind = "passive" })
 	end
-	table.insert(lines, { text = "Individual upgrade choices are not exposed by the AZ Reborn API; only rank is tracked.", kind = "note" })
+	table.insert(lines, { text = TF("Rank {1}", ability.rank or 0), kind = "rank" })
+	local events = SurvivorUI_RebornRankEventsFor(ability.key)
+	for i = 1, table.getn(events) do
+		local e = events[i]
+		table.insert(lines, { text = TF("Rank {1} → {2} at {3}", e.from, e.to, FormatRunTime(e.at)), kind = "history" })
+	end
+	table.insert(lines, { text = T("Individual upgrade choices are not exposed by the AZ Reborn API; only rank is tracked."), kind = "note" })
 	return lines
 end
 
@@ -633,20 +703,55 @@ local function SourceField(source, entry, fields)
 	return nil
 end
 
-local function SlotLabelOf(raw)
-	if not raw or raw == "" then return "Jewelry" end
-	local s = string.lower(tostring(raw))
-	if string.find(s, "neck") or string.find(s, "amulet") then return "Neck" end
-	if string.find(s, "ring") then return "Ring" end
-	if string.find(s, "trinket") then return "Trinket" end
-	return "Jewelry"
+-- The slot word for a jewelry piece, localized. The source id is
+-- tried first: the docs say source ids are "jewel:<slot>", and in
+-- practice the payload often carries no slot/kind/type word at all,
+-- which is how every piece used to fall back to "Jewelry". The
+-- slot/kind/type fields are the fallback; "Jewelry" is the last
+-- resort, never an invented slot. Returns the localized word.
+local function SlotLabelOf(raw, sourceKey)
+	if sourceKey then
+		local _, _, word = string.find(tostring(sourceKey), "^jewel:([%a]+)")
+		if word then
+			local w = string.lower(word)
+			if w == "neck" or w == "amulet" or w == "necklace" then return T("Neck") end
+			if w == "ring" then return T("Ring") end
+			if w == "trinket" then return T("Trinket") end
+		end
+	end
+	if raw and raw ~= "" then
+		local s = string.lower(tostring(raw))
+		if string.find(s, "neck") or string.find(s, "amulet") then return T("Neck") end
+		if string.find(s, "ring") then return T("Ring") end
+		if string.find(s, "trinket") then return T("Trinket") end
+	end
+	return T("Jewelry")
+end
+
+-- The dedup key for one normalised piece, in priority order: the
+-- sourceKey (one worn slot holds one piece, so a repeated sourceKey
+-- is the same piece acquired again), else the entry's own key/id,
+-- else (name, slot) as a last resort. Never the name alone: two
+-- pieces can share a name, and two pieces can share every displayed
+-- label except the name.
+local function DedupKeyOf(sourceKey, key, name, slot)
+	if sourceKey and sourceKey ~= "" then
+		return "src:" .. tostring(sourceKey)
+	end
+	if key and key ~= "" then
+		return "key:" .. tostring(key)
+	end
+	if name and name ~= "" and slot and slot ~= "" then
+		return "name:" .. tostring(name) .. "|" .. tostring(slot)
+	end
+	return nil
 end
 
 local function NormaliseJewelryEntry(entry, source)
 	local name = SourceField(source, entry, { "name", "displayName" })
 	local icon = SourceField(source, entry, { "icon", "texture" })
 	local slot = SourceField(source, entry, { "slot", "kind", "type" })
-	-- sourceKey itself often encodes the slot: "jewel:ring:..." / "jewel:2".
+	local sourceKey = entry and entry.sourceKey or nil
 	local key = SourceField(nil, entry, { "sourceKey", "key", "id" })
 	local rank = SourceField(source, entry, { "rank", "level", "lvl" })
 	local rarity = SourceField(source, entry, { "rarity", "quality" })
@@ -658,11 +763,43 @@ local function NormaliseJewelryEntry(entry, source)
 		local _, _, r = string.find(name, " ([IVXL]+%+?)$")
 		if r then rank = r end
 	end
+	local slotLabel = SlotLabelOf(slot, sourceKey)
 	return {
-		name = name, icon = icon, slot = SlotLabelOf(slot or key),
+		name = name, icon = icon, slot = slotLabel,
 		slotRaw = slot, key = key, rank = rank, rarity = rarity,
-		sourceKey = key,
+		sourceKey = key, count = 1,
+		dedupKey = DedupKeyOf(sourceKey, key, name, slotLabel),
 	}
+end
+
+-- Merge repeated entries for the same piece into one row: a repeat
+-- acquisition increments `count` and upgrades the rank/level in place
+-- (highest numeric rank wins), it never adds a row. Entries with no
+-- usable key are kept as-is: dropping an unidentifiable piece would
+-- hide a real piece, and guessing an identity would be worse.
+-- Returns the merged list and the number of entries merged away.
+local function DedupJewelryItems(items)
+	local seen, out, merged = {}, {}, 0
+	for i = 1, table.getn(items) do
+		local item = items[i]
+		local key = item.dedupKey
+		if key and seen[key] then
+			local keep = seen[key]
+			keep.count = (keep.count or 1) + 1
+			local oldRank, newRank = tonumber(keep.rank), tonumber(item.rank)
+			if newRank and (not oldRank or newRank > oldRank) then
+				keep.rank = item.rank
+			end
+			if not keep.icon and item.icon then keep.icon = item.icon end
+			if not keep.rarity and item.rarity then keep.rarity = item.rarity end
+			if not keep.name and item.name then keep.name = item.name end
+			merged = merged + 1
+		else
+			if key then seen[key] = item end
+			table.insert(out, item)
+		end
+	end
+	return out, merged
 end
 
 -- Returns { items, source, error, aggregate }.
@@ -724,6 +861,9 @@ function SurvivorUI_RebornJewelry(force)
 			source = "gear"
 		end
 	end
+	-- Dedup: one row per piece, repeats counted, never by name alone.
+	local duplicates = 0
+	items, duplicates = DedupJewelryItems(items)
 	-- 3. Aggregate jewelry shares from AZS_STATS (never per-item).
 	local aggregate = nil
 	if type(AZS_STATS) == "table" then
@@ -736,7 +876,7 @@ function SurvivorUI_RebornJewelry(force)
 			end
 		end
 	end
-	jewelryCache = { items = items, source = source, error = err, aggregate = aggregate }
+	jewelryCache = { items = items, source = source, error = err, aggregate = aggregate, duplicates = duplicates }
 	jewelryStamp = AZSGEAR_UPDATED
 	return jewelryCache
 end
@@ -828,8 +968,12 @@ function SurvivorUI_RebornProbe()
 	end
 	for i = 1, table.getn(jew.items) do
 		local item = jew.items[i]
-		Add(string.format("  jewelry: slot=%s name=%s rank=%s rarity=%s key=%s",
-			tostring(item.slot), tostring(item.name), tostring(item.rank), tostring(item.rarity), tostring(item.key)))
+		Add(string.format("  jewelry: slot=%s name=%s rank=%s rarity=%s key=%s count=%s icon=%s",
+			tostring(item.slot), tostring(item.name), tostring(item.rank), tostring(item.rarity), tostring(item.key),
+			tostring(item.count or 1), tostring(item.icon)))
+	end
+	if jew.duplicates and jew.duplicates > 0 then
+		Add("  jewelry duplicates merged this snapshot: " .. tostring(jew.duplicates))
 	end
 	if jew.aggregate then
 		local parts = {}
@@ -853,6 +997,92 @@ end
 
 function SurvivorUI_RebornDumpText()
 	return table.concat(SurvivorUI_RebornProbe(), "\n")
+end
+
+-- Raw jewelry payload dump, for /sui reborn jewelry raw. Prints every
+-- field name and value of each runJewelry entry and its sources entry,
+-- and of each AZSGEAR row — the normalised view cannot answer what a
+-- number like 55/63/1 is, whether a rarity/icon/level field exists
+-- under another name, or whether sourceKey is jewel:<slot>. Diagnostics
+-- only: call it explicitly, never on a timer. Output is capped so a
+-- pathological payload cannot flood chat.
+function SurvivorUI_RebornJewelryRawLines()
+	local lines = {}
+	local function Add(text)
+		table.insert(lines, text)
+	end
+	local function DumpValue(v, depth)
+		if type(v) == "table" then
+			if depth > 0 then
+				return "{...}"
+			end
+			local parts = {}
+			for k2, v2 in pairs(v) do
+				table.insert(parts, tostring(k2) .. "=" .. tostring(v2))
+			end
+			table.sort(parts)
+			return "{ " .. table.concat(parts, ", ") .. " }"
+		end
+		return tostring(v)
+	end
+	local function DumpTable(label, t)
+		if type(t) ~= "table" then
+			Add(label .. " = " .. tostring(t))
+			return
+		end
+		local keys = {}
+		for k in pairs(t) do table.insert(keys, k) end
+		table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+		if table.getn(keys) == 0 then
+			Add(label .. " = {}")
+			return
+		end
+		for i = 1, table.getn(keys) do
+			local k = keys[i]
+			Add("  " .. label .. "." .. tostring(k) .. " = " .. DumpValue(t[k], 1))
+		end
+	end
+	Add("Survivor UI (Reborn): jewelry raw payload")
+	if AZS_GetMeterLoadout then
+		local runId, ownerId = LoadoutOwner()
+		local request = { apiVersion = 1 }
+		if runId then request.runId = runId end
+		if ownerId then request.ownerId = ownerId end
+		local ok, loadout, loadoutErr = pcall(AZS_GetMeterLoadout, request)
+		if ok and type(loadout) == "table" then
+			DumpTable("loadout", loadout)
+			local runJewelry = loadout.runJewelry
+			if type(runJewelry) == "table" then
+				for i = 1, table.getn(runJewelry) do
+					DumpTable("runJewelry[" .. tostring(i) .. "]", runJewelry[i])
+					local entry = runJewelry[i]
+					if type(loadout.sources) == "table" and entry and entry.sourceKey then
+						DumpTable("sources[" .. tostring(entry.sourceKey) .. "]", loadout.sources[entry.sourceKey])
+					end
+				end
+			end
+		elseif ok then
+			Add("loadout = nil, error code=" .. tostring(loadoutErr and loadoutErr.code) .. " message=" .. tostring(loadoutErr and loadoutErr.message))
+		else
+			Add("loadout call failed: " .. tostring(loadout))
+		end
+	else
+		Add("AZS_GetMeterLoadout: (absent)")
+	end
+	if type(AZSGEAR) == "table" then
+		for i = 1, table.getn(AZSGEAR) do
+			DumpTable("AZSGEAR[" .. tostring(i) .. "]", AZSGEAR[i])
+		end
+	else
+		Add("AZSGEAR: (absent)")
+	end
+	if table.getn(lines) > 200 then
+		local capped = {}
+		for i = 1, 200 do table.insert(capped, lines[i]) end
+		table.insert(capped, "... (truncated at 200 lines)")
+		return capped
+	end
+	return lines
 end
 
 -- Entering the world (including after /reload): a new run id resets
@@ -920,16 +1150,23 @@ function SurvivorUI_RebornSlash(argument)
 			Say("  The AZS_ABILITIES snapshot has not arrived yet; it is requested again automatically (throttled). Try again in a few seconds, in a run.")
 		end
 		return
+	elseif arg == "jewelry raw" then
+		local lines = SurvivorUI_RebornJewelryRawLines()
+		for i = 1, table.getn(lines) do
+			Say(lines[i])
+		end
+		return
 	elseif arg == "jewelry" then
 		local jew = SurvivorUI_RebornJewelry(true)
-		Say(string.format("Survivor UI (Reborn): jewelry source=%s items=%d", tostring(jew.source), table.getn(jew.items)))
+		Say(string.format("Survivor UI (Reborn): jewelry source=%s items=%d duplicates merged=%d", tostring(jew.source), table.getn(jew.items), jew.duplicates or 0))
 		if jew.error then
 			Say("  loadout error: code=" .. tostring(jew.error.code) .. " message=" .. tostring(jew.error.message))
 		end
 		for i = 1, table.getn(jew.items) do
 			local item = jew.items[i]
-			Say(string.format("  %s name=%s rank=%s rarity=%s key=%s",
-				tostring(item.slot), tostring(item.name), tostring(item.rank), tostring(item.rarity), tostring(item.key)))
+			Say(string.format("  %s name=%s rank=%s rarity=%s key=%s count=%s icon=%s",
+				tostring(item.slot), tostring(item.name), tostring(item.rank), tostring(item.rarity), tostring(item.key),
+				tostring(item.count or 1), tostring(item.icon)))
 		end
 		if jew.aggregate then
 			local parts = {}
@@ -956,6 +1193,6 @@ function SurvivorUI_RebornSlash(argument)
 		Say("Survivor UI (Reborn): curses supported=" .. tostring(curses.supported) .. ". " .. curses.reason)
 		return
 	end
-	Say("Survivor UI (Reborn): /sui reborn probe | boss | abilities | jewelry | upgrades | curses | debug on|off")
+	Say("Survivor UI (Reborn): /sui reborn probe | boss | abilities | jewelry | jewelry raw | upgrades | curses | debug on|off")
 	Say("Survivor UI (Reborn): active=" .. tostring(SurvivorUI_RebornActive()) .. " runId=" .. tostring(SurvivorUI_RebornRunId()))
 end

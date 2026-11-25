@@ -983,6 +983,16 @@ local function Draw()
 		runTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 4, y)
 		runTitle:Show()
 		runTitle.tip = game and RUN_TIP_GAME or RUN_TIP_OWN
+		-- Load-time labels are English until the words arrive, and the
+		-- Retell pass may never run in Reborn; re-set them every draw.
+		-- (The time and elites rows are re-set below, as they already were.)
+		runTitle.text:SetText(SurvivorUI_T("This Run"))
+		for index = 1, table.getn(RUN_ROWS) do
+			local info = RUN_ROWS[index]
+			if info.key ~= "time" and info.key ~= "elites" then
+				runRows[info.key].label:SetText(SurvivorUI_T(info.label))
+			end
+		end
 		y = y - TITLE_HEIGHT
 
 		local seconds, paused
@@ -1373,6 +1383,9 @@ local function DrawCrits()
 		critBox:Hide()
 		return
 	end
+	-- As Draw() does for This Run: these titles are load-time English.
+	critBox.title:SetText(SurvivorUI_T("Biggest Crits"))
+	critReset.text:SetText(SurvivorUI_T("Reset"))
 	local sorted = {}
 	for ability in pairs(critBest) do
 		table.insert(sorted, ability)

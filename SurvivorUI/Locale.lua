@@ -430,20 +430,28 @@ SurvivorUI_WRITERS.ru = {
 
 local spoken = false
 local languageWatch = CreateFrame("Frame")
-local zoneSeen, languageSeen
+local zoneSeen, languageSeen, zoneHereSeen
 languageWatch:SetScript("OnUpdate", function()
 	-- The language changed without a new zone (the game's API answering, or
 	-- its setting changed) is seen here too, and its face worn.
 	Told()
-	if AZS_ZONE_UPDATED == zoneSeen and language == languageSeen then
+	local now = Words() or false
+	-- In Reborn the zone stamp may never move after the language is known:
+	-- the language is answered before any zone arrives, the stamp stays
+	-- nil, and the gate below would stick forever with the load-time
+	-- labels in English (research/round2-locale.md §3). So the pass also
+	-- runs when the words table becomes available, and whenever the zone
+	-- itself arrives, regardless of the stamp.
+	local zoneHere = AZS_ZONE ~= nil
+	local zoneArrived = zoneHere and not zoneHereSeen
+	if AZS_ZONE_UPDATED == zoneSeen and language == languageSeen and now == spoken and not zoneArrived then
 		return
 	end
-	zoneSeen, languageSeen = AZS_ZONE_UPDATED, language
+	zoneSeen, languageSeen, zoneHereSeen = AZS_ZONE_UPDATED, language, zoneHere
 	if SurvivorUI_FitGlobalFont then
 		SurvivorUI_FitGlobalFont()
 	end
-	local now = Words() or false
-	if now == spoken then
+	if now == spoken and not zoneArrived then
 		return
 	end
 	spoken = now

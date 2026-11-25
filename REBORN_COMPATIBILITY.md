@@ -210,6 +210,109 @@ Options picker until `CLASSES` lists those classes (extending it
 also affects records / fx pickers, so it was left alone); the
 "Info shows" prose still names only the original 8 lasting spells.
 
+## Round 2 (2026-11-25): tracker, localization, tooltips, racial, jewelry
+
+Follow-up fixes after the first Reborn build was played in-game
+(Warlock run, zhCN client). Root causes were diagnosed from the
+screenshot plus the official API docs (re-fetched 2026-11-25,
+unchanged in substance); the full audit is in the research notes
+(`research/round2-*.md` in the working repo, not shipped).
+
+- **Boss tracker**: the fixed 4:00 / 12:00 / 16:00 / 20:00 times are
+  the server's `AZS_SCHEDULE.at` values, not addon constants — and
+  for a Rift boss `at` is only "the minute that brings it at the
+  latest", so printing it as a spawn time is false. Round 1 had
+  fixed only the next-boss line; the list, the timeline pips and the
+  pip countdown still used `at`. Now: no schedule times anywhere in
+  the Reborn tracker (boss list, timeline, Dial); the horizontal
+  bar under the run timer is progress toward the next boss — Rift
+  mode fills by `rift / 100` with the Rift % written on the bar,
+  time mode fills nothing (a countdown has no published
+  denominator; the bar shows `in M:SS` from `AZS_RUN.nb`), a boss
+  up fills it full in orange with "Boss up". The main elapsed timer
+  (e.g. 4:52 / 20:00), boss names/health, defeated indicators and
+  guardian tracking are untouched. Dead rows show only the second
+  the boss fell, when seen. Original-game behaviour is preserved
+  behind the same Reborn gate.
+- **Localization**: the zhCN translations were not missing — they
+  were not delivered. Every load-time label (`This Run`, the 11 stat
+  rows, `Biggest Crits`, `Reset`, `Stats`, `Build`, `Info`, `Rank`,
+  `CD`) exists in `Locale_zh.lua`, but the re-translation pass
+  (`languageWatch` → `Retell`, `Locale.lua`) never fired in Reborn:
+  the language is answered before any zone arrives, so its gate
+  (`AZS_ZONE_UPDATED` unchanged + language unchanged) sticks
+  forever while the zone stamp never moves. Fixed both ways: the
+  gate now also fires when the words table becomes available and
+  when the zone itself arrives, and panel titles/labels are re-set
+  in `Draw()` (RunPanel, CharacterPane, Meter) so translation no
+  longer depends on the pass at all. Summon bar names now go
+  through `SurvivorUI_Native()` for display (Felhunter, Succubus,
+  Doomguard, Infernal, Dreadlord, Imp); the English name stays the
+  aggregation key. Pet spells (Shadow Bite, Lash of Pain,
+  Immolation) have no verified zhCN source in `LocaleData.lua` or
+  the official `i18n/zhCN.json` and are left as the game gives
+  them — do not guess translations for them. New Reborn strings
+  (`Passive`, `Rank {1}`, `Rarity: {1}`, the per-item-effects note,
+  `(passive)`) have zhCN entries; `/sui reborn` diagnostics stay
+  English deliberately.
+- **Ability upgrade tooltips**: the original game wrote the
+  selected upgrades into the ability tooltip itself (`Upgrades:`
+  line) and the addon only re-laid it out — there was never an
+  addon-side upgrade store, and Reborn's API exposes no
+  per-upgrade data at all (no `AZS_UPGRADES` table, no upgrade
+  event; `AZS_PickCard` is an action, not a feed; only `rank` is
+  exposed). Individual upgrade identity therefore cannot be
+  restored; what is restored is the honest part: the rank-history
+  helper (`SurvivorUI_RebornAbilityTooltipLines`, dead code in
+  Round 1) is now wired into both tooltip paths, so hovering shows
+  the base description, `Passive` where applicable, current rank,
+  each rank rise observed this run with its run-clock timestamp
+  (e.g. `Rank 1 → 2 at 1:12`), and the note that individual
+  choices are not exposed. Rank 11 is shown as a rank, never as a
+  pick count. Rank history is in-memory only and is lost on
+  `/reload`. Caveat: the slotted (action-button) path appends lines
+  after `SetAction`; `AbilityTooltip.lua`'s re-layout watcher may
+  strip appended lines in-game — the button-less (passive) path is
+  the reliable one and needs a live check.
+- **Racial section removed (Reborn only)**: the screenshot's
+  Demonic Knowledge was not in the racial row at all — it was the
+  passive row directly under it, rendered without a label. The
+  genuine racial row was Human Spirit, a real selected racial from
+  the snapshot. Classification is now `passive` first, then
+  `kind`; genuine `kind="racial"` entries are re-homed by
+  cooldown (cdmax > 0 → active, else passive) and never dropped,
+  and the racial row / tag / reserved 7th slot are gone in Reborn.
+  Passive rows now carry the `(passive)` tag on screen and sit
+  directly under the 6 actives; passives never count toward active
+  slot limits. The cooldown test uses `cdmax`, not `cd`: `cd` is
+  the cooldown *remaining* (0 while ready), so Berserking reads
+  cd 0 / cdmax 60 while ready and is an active. Original-game
+  racial behaviour (last-entry-is-the-racial, `(racial)` tag, 7th
+  slot) is untouched.
+- **Jewelry**: `Jewelry 55` twice was a display collision, not a
+  data duplicate — two different pieces (Tribal Mark / Insignia of
+  the Horde) whose slot was unknown and whose rank was 55. The
+  left label was `slot + rank`, and the slot fell back to
+  `Jewelry` because the payload carries no slot word. Now the slot
+  is parsed from the source id (`jewel:<slot>`) first, then
+  slot/kind/type fields, then a localized fallback; items are
+  deduped by sourceKey first, else entry key/id, else
+  (name, slot) — never name alone — with repeats merged into one
+  row showing an acquisition count (`xN`) and the rank upgraded in
+  place. `DrawGear` renders one row per piece in its own slot
+  (a 6th piece is no longer dropped) with an icon where the
+  loadout gave one; rarity colour is used only when a real rarity
+  is known, never invented from the rank/level number. Per-item
+  effects are still genuinely unavailable: the API documents only
+  aggregate `AZS_STATS` `g*` shares, and the loadout/`AZSGEAR`
+  row shapes are unpublished. What the numbers 55 / 63 / 1 mean
+  is still unverified — run `/sui reborn jewelry raw` in a run
+  and send the output (see Diagnostics); it dumps every raw field
+  of each loadout entry, its source, and each `AZSGEAR` row.
+  Rarity for rings/trinkets does not exist in the official static
+  data (`jewelry.json` has key/name/icon/slot only), so grey rows
+  for those pieces mean "rarity unknown", not "common".
+
 ## Known limitations and unsupported features
 
 - **In-game verification is still required** for: the exact `AZSGEAR` /
@@ -245,8 +348,9 @@ can copy out of chat.
 | `/sui reborn` | Summary + command list |
 | `/sui reborn probe` | Full probe: run id, boss mode/fields, schedule/units/spells/abilities counts, merged abilities, rank events, jewelry source + items + loadout error, aggregate `g*`, curse status, candidate globals |
 | `/sui reborn boss` | Next-boss mode, state, name, number, rift, countdown |
-| `/sui reborn abilities` | Forces one ability snapshot request, then lists merged actives/passives/racials |
+| `/sui reborn abilities` | Forces one ability snapshot request, then lists merged actives/passives (racials are re-homed, never listed separately) |
 | `/sui reborn jewelry` | Forces one loadout refresh, then lists jewelry + aggregate |
+| `/sui reborn jewelry raw` | **New in Round 2.** Dumps every raw field of each loadout `runJewelry` entry, its `sources` entry, and each `AZSGEAR` row — the one dump that answers what the 55 / 63 / 1 numbers are and whether rarity/icon/level fields exist under other names. Diagnostics only, capped at 200 lines. |
 | `/sui reborn upgrades` | Rank increases recorded this run |
 | `/sui reborn curses` | Curse support status + the documented blocker |
 | `/sui reborn debug on` / `off` | Opt-in debug logging to chat |
@@ -400,6 +504,19 @@ Keep Reborn changes small and local so upstream merges stay cheap:
   DEFENSIVE (undocumented shapes, e.g. `AZSGEAR` rows) in the test
   file header. These prove logic against the documented contract;
   they are **not** in-game verification.
+- **Round 2 (2026-11-25)**: `luac -p` on every `SurvivorUI/*.lua`
+  and `SurvivorPlates/*.lua` — pass. Mocked tests now 107 checks,
+  0 fail, including new round-2 assertions: racial re-homing
+  (Berserking cd 0 / cdmax 60 → active, Human Spirit cdmax 0 →
+  passive, Demonic Knowledge → passive), rank-history tooltip
+  lines with timestamps, jewelry dedup (same sourceKey twice → 1
+  row, count 2; two rank-55 pieces stay distinct; slots from
+  sourceKey), and the raw jewelry dump. The locale Retell fix was
+  also verified in a mocked-Lua harness reproducing the screenshot
+  (language `zh` answered pre-zone, `AZS_ZONE_UPDATED` frozen):
+  the load-time label goes `Level` → `等级` after zone arrival.
+  Packaging re-validated: `SurvivorUI-Reborn.zip` (357 entries)
+  passes `validate_addon.py --zip`.
 - Packaging: `bash scripts/package.sh` produces a valid
   `SurvivorUI-Reborn.zip` (357 entries) that passes
   `validate_addon.py --zip`.

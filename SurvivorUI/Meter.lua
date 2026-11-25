@@ -1932,7 +1932,16 @@ local function PaintBar(bar, line, top, key)
 	local ranked = rank and rank > 0 and SurvivorUIDB and SurvivorUIDB.meterRanks
 	-- The white damage's row, which the game names in English in every
 	-- language: in the game's own word for it (Ближний бой, 近战).
-	local shown = MELEE[name] and SurvivorUI_Native and SurvivorUI_Native(name) or name
+	-- A summon's row the same way (Felhunter, Succubus, Doomguard,
+	-- Infernal, Dreadlord, Imp, and any other summon the game reports):
+	-- shown in the game's word for it. Display only — `name` stays the
+	-- line's key, so aggregation and matching still run on English.
+	local shown = name
+	if SurvivorUI_Native then
+		if MELEE[name] or SurvivorUI_IsPet(name) or (SurvivorUI_MeterPetIcon and SurvivorUI_MeterPetIcon(name)) then
+			shown = SurvivorUI_Native(name)
+		end
+	end
 	bar.name:SetText(shown..(ranked and "  |cffbdbdbd"..SurvivorUI_RankText(rank, true).."|r" or ""))
 	-- Others: grey, as its bar.
 	if folded then
@@ -2020,6 +2029,12 @@ local function Draw()
 	end
 
 	local key = VIEWS[view].key
+	-- Load-time labels are English until the words arrive, and the Retell
+	-- pass may never run in Reborn; re-set them every draw, as RunPanel
+	-- does. The title hugs its word again, in case it grew or shrank.
+	meter.title:SetText(SurvivorUI_T(VIEWS[view].title))
+	FitTitle()
+	reset.text:SetText(SurvivorUI_T("Reset"))
 	local lines, total, dps
 	if key == "damage" then
 		lines, total, dps = damage, damageTotal, damageRate
