@@ -407,9 +407,7 @@ local function Row(index)
 		end
 		local reborn = SurvivorUI_RebornActive and SurvivorUI_RebornActive()
 		-- The ability's lines from the Reborn compat layer, when the
-		-- snapshot knows it: base description, rank, rank rises
-		-- observed this run with timestamps, and the honest note that
-		-- individual upgrade choices are not exposed by the API.
+		-- snapshot knows it: base description, passive flag, rank.
 		local function RebornLines()
 			if not reborn or not SurvivorUI_RebornAbilityTooltipLines then
 				return nil

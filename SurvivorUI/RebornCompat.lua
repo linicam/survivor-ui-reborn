@@ -639,10 +639,10 @@ function SurvivorUI_RebornRankEventsFor(key)
 end
 
 -- Lines for an ability tooltip: base text (from the API, when present),
--- passive flag, rank, each rank rise observed this run with its
--- timestamp, and an honest note. Never invents upgrade effects, pick
--- counts, or stacking: a rank rise is shown as exactly that, never as
--- a named upgrade choice.
+-- passive flag, and rank. Rank-rise history is deliberately not shown:
+-- without the concrete upgrade effects (which the API does not expose)
+-- a list of rise timestamps is clutter, not information. The rises are
+-- still recorded for diagnostics (SurvivorUI_RebornRankEvents).
 function SurvivorUI_RebornAbilityTooltipLines(ability)
 	local lines = {}
 	if not ability then
@@ -655,12 +655,6 @@ function SurvivorUI_RebornAbilityTooltipLines(ability)
 		table.insert(lines, { text = T("Passive"), kind = "passive" })
 	end
 	table.insert(lines, { text = TF("Rank {1}", ability.rank or 0), kind = "rank" })
-	local events = SurvivorUI_RebornRankEventsFor(ability.key)
-	for i = 1, table.getn(events) do
-		local e = events[i]
-		table.insert(lines, { text = TF("Rank {1} → {2} at {3}", e.from, e.to, FormatRunTime(e.at)), kind = "history" })
-	end
-	table.insert(lines, { text = T("Individual upgrade choices are not exposed by the AZ Reborn API; only rank is tracked."), kind = "note" })
 	return lines
 end
 
@@ -747,10 +741,31 @@ local function DedupKeyOf(sourceKey, key, name, slot)
 	return nil
 end
 
+-- A jewelry icon as a texture path. The loadout's source icon is a
+-- table (seen in game 2026-11-26), not a path string; read the path
+-- out of it defensively, and only accept a string that looks like a
+-- texture path.
+local function IconTextureOf(icon)
+	if type(icon) == "string" then
+		return icon
+	end
+	if type(icon) ~= "table" then
+		return nil
+	end
+	local candidates = { icon.texture, icon.path, icon.icon, icon.file, icon[1] }
+	for i = 1, table.getn(candidates) do
+		local value = candidates[i]
+		if type(value) == "string" and (string.find(value, "\\", 1, true) or string.find(value, "^Interface")) then
+			return value
+		end
+	end
+	return nil
+end
+
 local function NormaliseJewelryEntry(entry, source)
 	local name = SourceField(source, entry, { "name", "displayName" })
-	local icon = SourceField(source, entry, { "icon", "texture" })
-	local slot = SourceField(source, entry, { "slot", "kind", "type" })
+	local icon = IconTextureOf(SourceField(source, entry, { "icon", "texture" }))
+	local slot = SourceField(source, entry, { "slot", "kind", "type", "category" })
 	local sourceKey = entry and entry.sourceKey or nil
 	local key = SourceField(nil, entry, { "sourceKey", "key", "id" })
 	local rank = SourceField(source, entry, { "rank", "level", "lvl" })
@@ -1040,6 +1055,19 @@ function SurvivorUI_RebornJewelryRawLines()
 		for i = 1, table.getn(keys) do
 			local k = keys[i]
 			Add("  " .. label .. "." .. tostring(k) .. " = " .. DumpValue(t[k], 1))
+			-- One level into table values (the source icon is a table):
+			-- its scalar fields, so the next probe shows the shape.
+			if type(t[k]) == "table" then
+				local subkeys = {}
+				for sub in pairs(t[k]) do table.insert(subkeys, sub) end
+				table.sort(subkeys, function(a, b) return tostring(a) < tostring(b) end)
+				for j = 1, table.getn(subkeys) do
+					local sub = subkeys[j]
+					if type(t[k][sub]) ~= "table" then
+						Add("    " .. label .. "." .. tostring(k) .. "." .. tostring(sub) .. " = " .. tostring(t[k][sub]))
+					end
+				end
+			end
 		end
 	end
 	Add("Survivor UI (Reborn): jewelry raw payload")

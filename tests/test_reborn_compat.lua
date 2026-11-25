@@ -388,8 +388,9 @@ for i = 1, table.getn(data.actives) do keys[data.actives[i].key] = true end
 check("round2 racial: berserking (cdmax 60, cd 0) is active", keys["berserking"] == true)
 check("round2 racial: demonic empowerment is active", keys["demonic_empowerment"] == true)
 
--- Rank rises observed this run reach the tooltip; rank 11 is shown as a
--- rank, never as a pick count.
+-- Rank rises are recorded for diagnostics but never shown in the
+-- tooltip: without concrete upgrade effects, rise timestamps are
+-- clutter. Rank 11 is shown as a rank, never as a pick count.
 AZS_RUN.t = 72
 AZS_ABILITIES[2].rank = 2 -- empowerment 1 -> 2 at 1:12
 AZS_ABILITIES_UPDATED = 2
@@ -400,8 +401,8 @@ local joined = ""
 for i = 1, table.getn(lines) do joined = joined .. "|" .. lines[i].text end
 check("round2 tooltip: base text", string.find(joined, "Empowers your demon.", 1, true) ~= nil)
 check("round2 tooltip: rank line", string.find(joined, "Rank 2", 1, true) ~= nil)
-check("round2 tooltip: history line with timestamp", string.find(joined, "Rank 1", 1, true) ~= nil and string.find(joined, "1:12", 1, true) ~= nil)
-check("round2 tooltip: honest note", string.find(joined, "Individual upgrade choices are not exposed", 1, true) ~= nil)
+check("round2 tooltip: no history lines", string.find(joined, "1:12", 1, true) == nil)
+check("round2 tooltip: no upgrade note", string.find(joined, "Individual upgrade choices are not exposed", 1, true) == nil)
 check("round2 tooltip: no passive line for active", string.find(joined, "Passive", 1, true) == nil)
 local dk = SurvivorUI_RebornAbilityByKey("demonic_knowledge")
 local lines2 = SurvivorUI_RebornAbilityTooltipLines(dk)
