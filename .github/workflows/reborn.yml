@@ -1,0 +1,78 @@
+# SurvivorUI-Reborn: validate, test, package.
+#
+# Runs on pushes to main / reborn-compat, pull requests targeting main,
+# manual dispatch, and version tags (tags also publish the ZIP as a
+# release asset; development commits never create a release).
+name: Reborn build
+
+on:
+  push:
+    branches: [main, reborn-compat, reborn-round2]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install Lua
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.4 zip unzip
+
+      - name: Lua syntax check (all addon files)
+        run: |
+          set -e
+          for f in SurvivorUI/*.lua SurvivorPlates/*.lua; do
+            luac -p "$f" || { echo "SYNTAX FAIL: $f"; exit 1; }
+          done
+          echo "Lua syntax OK"
+
+      - name: Mocked regression tests
+        run: lua tests/test_reborn_compat.lua
+
+      - name: Validate manifests and runtime files
+        run: python3 scripts/validate_addon.py
+
+      - name: Build SurvivorUI-Reborn.zip
+        run: bash scripts/package.sh
+
+      - name: Upload installable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: SurvivorUI-Reborn
+          path: dist/SurvivorUI-Reborn.zip
+          if-no-files-found: error
+          retention-days: 90
+
+  release:
+    # Only an explicitly created version tag publishes a release asset.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Download built ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: SurvivorUI-Reborn
+          path: dist
+
+      - name: Attach ZIP to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/SurvivorUI-Reborn.zip
+          body: |
+            SurvivorUI-Reborn: the Reborn-compatible SurvivorUI + SurvivorPlates.
+            See REBORN_COMPATIBILITY.md for install instructions, feature
+            status, and the in-game testing checklist.
