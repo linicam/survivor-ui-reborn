@@ -95,6 +95,21 @@ local function Field(entry, name, index)
 	return entry[index]
 end
 
+-- Record the game's own AZSCMD sends so the probe can show how the
+-- stock HUD triggers things the API does not describe (account
+-- talent actives). Opt-in diagnostics only read this list.
+local sentCommands = {}
+if hooksecurefunc and SendAddonMessage then
+	hooksecurefunc("SendAddonMessage", function(prefix, message)
+		if prefix == "AZSCMD" then
+			table.insert(sentCommands, tostring(message))
+			if table.getn(sentCommands) > 12 then
+				table.remove(sentCommands, 1)
+			end
+		end
+	end)
+end
+
 local function Now()
 	if GetTime then
 		return GetTime()
