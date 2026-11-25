@@ -22,3 +22,6 @@ SurvivorUI/Fonts/*
 SurvivorUI/Media/
 # The installer is built by installer\build.bat and attached to releases
 installer/*.exe
+
+# Built packages (scripts/package.sh output; rebuilt by CI)
+dist/
