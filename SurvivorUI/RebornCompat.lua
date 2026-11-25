@@ -1103,46 +1103,58 @@ local function CurseEffectText(text)
 	if pct then
 		return "治疗效果降低" .. pct .. "%"
 	end
+	pct = string.match(text, "урон снижен на (%d+)%%")
+	if pct then
+		return "伤害降低" .. pct .. "%"
+	end
+	pct = string.match(text, "скорость снижена на (%d+)%%")
+	if pct then
+		return "移动速度降低" .. pct .. "%"
+	end
+	pct = string.match(text, "перезарядка увеличена на (%d+)%%")
+	if pct then
+		return "冷却时间延长" .. pct .. "%"
+	end
 	return nil
+end
+
+-- The latched curse: banners scroll off the kept list, so the curse
+-- is remembered by banner id until its own expiry.
+local latchedCurse = nil
+local function CurseDuration(text)
+	local minutes = tonumber(string.match(text, "%((%d+)%s*мин"))
+	if minutes then
+		return minutes * 60
+	end
+	return tonumber(string.match(text, "%((%d+)")) or 0
 end
 
 function SurvivorUI_RebornCurses()
 	local items = {}
 	if SurvivorUI_RebornActive() and type(AZS_BANNERS) == "table" then
 		local now = AZS_GetRunTime and AZS_GetRunTime() or nil
-		local latest
 		for i = 1, table.getn(AZS_BANNERS) do
 			local b = AZS_BANNERS[i]
 			local text = Field(b, "text", 5) or ""
 			if Field(b, "kind", 2) == "curse" and string.find(text, "Проклятие", 1, true) then
-				latest = b
+				local id = Field(b, "id", 1)
+				if not latchedCurse or latchedCurse.id ~= id then
+					latchedCurse = {
+						id = id, text = text,
+						at = tonumber(Field(b, "time", 6)) or now or 0,
+						duration = CurseDuration(text),
+					}
+				end
 			end
 		end
-		if latest and now then
-			local text = Field(latest, "text", 5) or ""
-			local duration = tonumber(string.match(text, "%((%d+)")) or 0
-			local at = tonumber(Field(latest, "time", 4)) or now
-			local left = duration - (now - at)
-			local spell
-			for i = 1, table.getn(AZS_BUFFS or {}) do
-				local buffLeft = tonumber(Field(AZS_BUFFS[i], "left", 2))
-				if buffLeft and buffLeft > 0 and buffLeft <= left + 2 then
-					-- A buff alone does not prove the curse (47241
-					-- appears without one); it only lends its spell
-					-- for the name fallback. The countdown stays the
-					-- banner's.
-					spell = tonumber(Field(AZS_BUFFS[i], "spell", 1))
-				end
-			end
-			if left > 0 then
+		if latchedCurse and now then
+			local text = latchedCurse.text
+			local left = latchedCurse.duration - (now - latchedCurse.at)
+			if left <= 0 then
+				latchedCurse = nil
+			else
 				local effect = CurseEffectText(text)
-				if not effect and spell and GetSpellInfo then
-					local name = GetSpellInfo(spell)
-					if name and name ~= "" and not string.find(name, "[\208\209]") then
-						effect = name
-					end
-				end
-				table.insert(items, { text = effect or "诅咒", left = left, spell = spell })
+				table.insert(items, { text = effect or "诅咒", left = left })
 			end
 		end
 	end

@@ -966,6 +966,21 @@ do
 		frame.icon:SetAllPoints(frame)
 		frame.cooldown = CreateFrame("Cooldown", nil, frame, "CooldownFrameTemplate")
 		frame.cooldown:SetAllPoints(frame)
+		-- The cooldown sweep must refresh in combat too, when the
+		-- secure attribute may not change: poll the spell's cooldown.
+		frame:SetScript("OnUpdate", function(self, elapsed)
+			self.cdElapsed = (self.cdElapsed or 0) + (elapsed or 0)
+			if self.cdElapsed < 0.1 or not self.spell then
+				return
+			end
+			self.cdElapsed = 0
+			if GetSpellCooldown and CooldownFrame_SetTimer then
+				local start, duration = GetSpellCooldown(self.spell)
+				if start and duration then
+					CooldownFrame_SetTimer(self.cooldown, start, duration, 1)
+				end
+			end
+		end)
 		frame:Hide()
 		if SetBindingClick then
 			SetBindingClick(spec.key, "SurvivorUIExtra" .. spec.button)
@@ -987,6 +1002,7 @@ function SurvivorUI_SetExtraButton(button, spell, icon)
 		return
 	end
 	frame:SetAttribute("spell", spell)
+	frame.spell = spell
 	if icon then
 		frame.icon:SetTexture(icon)
 	end
