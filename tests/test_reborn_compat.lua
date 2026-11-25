@@ -331,13 +331,20 @@ eq("jewelry empty shape: source none", jew.source, "none")
 eq("jewelry empty shape: items empty", table.getn(jew.items), 0)
 
 -- ===========================================================================
--- Curses (VERIFIED: not documented)
+-- Curses (VERIFIED in game: kind="curse" banner + AZS_BUFFS row)
 -- ===========================================================================
 resetGame()
 local curses = SurvivorUI_RebornCurses()
-check("curses: not supported", curses.supported == false)
-eq("curses: no items invented", table.getn(curses.items), 0)
-check("curses: reason explains the blocker", curses.reason ~= nil and string.find(curses.reason, "not documented") ~= nil or string.find(curses.reason, "No curse") ~= nil)
+check("curses: supported", curses.supported == true)
+eq("curses: no items without a banner", table.getn(curses.items), 0)
+AZS_BANNERS = { { kind = "curse", boss = false, name = "", time = 100,
+	text = "Проклятие тяготеет над тобой: орда накатывает волной (20 с)!" } }
+AZS_BUFFS = { { spell = 47241, left = 10 } }
+AZS_GetRunTime = function() return 110 end
+curses = SurvivorUI_RebornCurses()
+eq("curses: one active item", table.getn(curses.items), 1)
+eq("curses: effect translated", curses.items[1].text, "敌潮涌动")
+eq("curses: countdown from buff", curses.items[1].left, 10)
 
 -- ===========================================================================
 -- Run reset (VERIFIED run id)
@@ -454,7 +461,7 @@ local lines = SurvivorUI_RebornProbe()
 check("probe: returns lines", type(lines) == "table" and table.getn(lines) > 5)
 local joined = table.concat(lines, "\n")
 check("probe: mentions rift", string.find(joined, "rift") ~= nil)
-check("probe: mentions curses unsupported", string.find(joined, "curses: supported=false") ~= nil)
+check("probe: mentions curses supported", string.find(joined, "curses: supported=true") ~= nil)
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end
