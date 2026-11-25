@@ -1337,6 +1337,18 @@ function SurvivorUI_RebornProbe()
 			Add(string.format("  player buff: name=%s spell=%s", tostring(name), tostring(spellId)))
 		end
 	end
+	if EnumerateFrames then
+		local frame = EnumerateFrames()
+		while frame do
+			if frame.GetAttribute then
+				local spell = frame:GetAttribute("spell")
+				if spell then
+					Add(string.format("  spell frame: name=%s spell=%s", tostring(frame:GetName()), tostring(spell)))
+				end
+			end
+			frame = EnumerateFrames(frame)
+		end
+	end
 	if GetNumSpellTabs and GetSpellTabInfo and GetSpellName then
 		for tab = 1, GetNumSpellTabs() do
 			local _, _, offset, numSpells = GetSpellTabInfo(tab)
