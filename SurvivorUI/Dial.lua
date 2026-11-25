@@ -859,6 +859,9 @@ local function Read(game, phase)
 	M.unit = M.up and LiveBoss(Field(schedule[M.up], "name", 3))
 	M.final = M.up and (Num(Field(schedule[M.up], "final", 4)) == 1 or (M.unit and Field(M.unit, "kind", 1) == "final")) or nil
 	M.nb = tonumber(game.nb) or -1
+	-- Reborn: the next boss may come by Rift % (no schedule `at`) or by
+	-- a countdown the schedule does not carry. Kept beside M.next.
+	M.rebornNext = SurvivorUI_RebornNextBoss and SurvivorUI_RebornNextBoss() or nil
 end
 
 -- The ring's color: green, or the class's (the Dial's Ring); purple in
@@ -899,6 +902,13 @@ local function Rings()
 		S.nbLast = M.nb
 		S.nbMost = math.max(S.nbMost, M.nb)
 		share = S.nbMost > 0 and M.nb / S.nbMost or 0
+	elseif M.rebornNext and M.rebornNext.mode == "rift" and M.rebornNext.rift ~= nil then
+		-- Rift % is progress toward the boss: the ring shows what is left.
+		share = 1 - M.rebornNext.rift / 100
+	elseif M.rebornNext and M.rebornNext.mode == "time" and M.rebornNext.countdown ~= nil then
+		-- No span is known for a countdown boss; show the thin ring full
+		-- rather than inventing a share from the clock.
+		share = 1
 	elseif M.next then
 		local at = Num(Field(M.schedule[M.next], "at", 2))
 		local span = at - M.prevAt
@@ -921,7 +931,10 @@ local function Marks()
 		local mark = Mark(index)
 		if M.length > 0 then
 			local at = Num(Field(entry, "at", 2))
-			local turn = 2 * math.pi * math.min(1, at / M.length)
+			if at <= 0 then
+				HideMark(mark)
+			else
+				local turn = 2 * math.pi * math.min(1, at / M.length)
 			local final = Num(Field(entry, "final", 4)) == 1
 			local state = M.endless and "dead" or Field(entry, "state", 5) or "due"
 			if index == M.next then
@@ -937,6 +950,7 @@ local function Marks()
 				local point = (side > 0.3 and "LEFT") or (side < -0.3 and "RIGHT") or "CENTER"
 				S.label:SetPoint(point, hub, "CENTER", D.LABEL * side, D.LABEL * math.cos(turn))
 				S.label:Show()
+			end
 			end
 		else
 			HideMark(mark)
@@ -1007,7 +1021,18 @@ local function Middle()
 	elseif M.next then
 		local entry = M.schedule[M.next]
 		name = Field(entry, "name", 3) or "?"
-		line, color2 = SurvivorUI_TF("in {1}", Clock(Num(Field(entry, "at", 2)) - M.seconds)), C.orange
+		local at = Num(Field(entry, "at", 2))
+		if at > 0 then
+			line, color2 = SurvivorUI_TF("in {1}", Clock(at - M.seconds)), C.orange
+		elseif M.rebornNext and (M.rebornNext.mode == "rift" or M.rebornNext.mode == "time") then
+			local text = SurvivorUI_RebornNextBossText and SurvivorUI_RebornNextBossText(M.rebornNext) or nil
+			name = M.rebornNext.name or name
+			line, color2 = text, C.orange
+		end
+	elseif M.rebornNext and (M.rebornNext.mode == "rift" or M.rebornNext.mode == "time") then
+		local text = SurvivorUI_RebornNextBossText and SurvivorUI_RebornNextBossText(M.rebornNext) or nil
+		name = M.rebornNext.name or SurvivorUI_T("Next boss")
+		line, color2 = text, C.orange
 	end
 	S.next2:Hide()
 	HideSet(S.next1)

@@ -10,7 +10,10 @@
 -- not, so nothing jumps as the run goes on.
 --
 -- Needs the game's addon API (AZS_RUN, AZS_SCHEDULE); without it nothing
--- shows. Hold Alt and drag it to move it; the place is kept. /sui tracker
+-- shows. Reborn: the next boss may come by Rift % or by time
+-- (AZS_RUN.nbm/nbs/nb/rift, via RebornCompat.lua); FillBossLine and Draw
+-- prefer that live data over a schedule `at` when it is there.
+-- Hold Alt and drag it to move it; the place is kept. /sui tracker
 -- hides it and brings the game's clock back. Or, as chosen (the options, Run
 -- tracker: Look, Dial), the Tracker Ring (Dial.lua) in its frame, in place of the
 -- lines.
@@ -708,10 +711,22 @@ local function FillBossLine(line, entry, index, seconds, isNext, frozen)
 	else
 		local color = isNext and STATE_COLORS.next or WAITING
 		line.name:SetTextColor(color[1], color[2], color[3])
-		if isNext then
+		-- Reborn: a Rift-triggered boss has no meaningful `at`, and a
+		-- time-triggered one is told by AZS_RUN.nb, not by the schedule.
+		-- Show the live data instead of a Clock(0) / stale `at`.
+		local rebornNext = isNext and SurvivorUI_RebornNextBoss and SurvivorUI_RebornNextBoss() or nil
+		if isNext and rebornNext and rebornNext.mode == "rift" then
+			local text = SurvivorUI_RebornNextBossText and SurvivorUI_RebornNextBossText(rebornNext) or "Rift"
+			line.time:SetText("|cffffd24d"..(text or "Rift").."|r")
+		elseif isNext and rebornNext and rebornNext.mode == "time" and rebornNext.countdown ~= nil then
+			line.time:SetText("|cffffd24d"..SurvivorUI_TF("in {1}", Clock(rebornNext.countdown)).."|r")
+		elseif isNext then
 			line.time:SetText("|cffffd24d"..SurvivorUI_TF("in {1}", Clock(at - seconds)).."|r   "..Clock(at))
-		else
+		elseif at > 0 then
 			line.time:SetText(Clock(at))
+		else
+			-- No spawn second known (e.g. a Rift boss): no invented time.
+			line.time:SetText("")
 		end
 		line.time:SetTextColor(color[1], color[2], color[3])
 	end
@@ -1087,6 +1102,13 @@ local function Draw(game, phase)
 	if lastSeconds and seconds + 3 < lastSeconds then
 		bossSeenUp, bossKilled = {}, {}
 	end
+	-- Reborn: a new run id means a new run even when the clock does not
+	-- rewind cleanly (RebornCompat also clears its own caches, and the
+	-- modules registered with it). First call in a run is harmless.
+	if SurvivorUI_RebornCheckRun and SurvivorUI_RebornCheckRun() then
+		bossSeenUp, bossKilled = {}, {}
+		endlessFrom = nil
+	end
 	lastSeconds = seconds
 
 	-- The zone's facts come once a run, and can be missed (a restart mid-run):
@@ -1221,13 +1243,19 @@ local function Draw(game, phase)
 			pip = SurvivorUI_NewPip(head.timeline)
 			head.ticks[index] = pip
 		end
-		local spot = length > 0 and WIDTH * math.min(1, at / length) or WIDTH
-		SurvivorUI_PaintPip(pip, isNext and "next" or state, final)
-		pip:ClearAllPoints()
-		pip:SetPoint("CENTER", head.timeline, "LEFT", spot, 0)
-		pip:Show()
-		-- Over the next boss's pip only, the time until it comes.
-		SurvivorUI_PipCountdown(pip, isNext and at > seconds and Clock(at - seconds) or nil, spot, WIDTH)
+		-- A Rift boss has no spawn second: its pip has no honest place.
+		if at > 0 then
+			local spot = length > 0 and WIDTH * math.min(1, at / length) or WIDTH
+			SurvivorUI_PaintPip(pip, isNext and "next" or state, final)
+			pip:ClearAllPoints()
+			pip:SetPoint("CENTER", head.timeline, "LEFT", spot, 0)
+			pip:Show()
+			-- Over the next boss's pip only, the time until it comes.
+			SurvivorUI_PipCountdown(pip, isNext and at > seconds and Clock(at - seconds) or nil, spot, WIDTH)
+		else
+			pip:Hide()
+			SurvivorUI_PipCountdown(pip, nil, WIDTH, WIDTH)
+		end
 
 		local line = BossLine(index)
 		FillBossLine(line, entry, index, seconds, isNext, endless)
@@ -1255,11 +1283,28 @@ local function Draw(game, phase)
 		head.bosses[table.getn(head.bosses)] = nil
 	end
 	local nextIn = tonumber(game.nb) or -1
+	-- Reborn, normal run, schedule spent / no due row: the game may still
+	-- know the next boss (Rift % or a countdown, or an unnamed Endless
+	-- boss). Show that live line instead of nothing.
+	local rebornNext = SurvivorUI_RebornNextBoss and SurvivorUI_RebornNextBoss() or nil
 	if endless and nextIn >= 0 then
 		nextLine.name:SetText(SurvivorUI_T("Next boss"))
 		nextLine.name:SetTextColor(1, 1, 1)
 		nextLine.time:SetText("|cffffd24d"..SurvivorUI_TF("in {1}", Clock(nextIn)).."|r")
 		y = Put(nextLine, y, 13)
+	elseif not endless and not nextShown and rebornNext and (rebornNext.mode == "rift" or rebornNext.mode == "time") then
+		local text = SurvivorUI_RebornNextBossText and SurvivorUI_RebornNextBossText(rebornNext) or nil
+		if text then
+			nextLine.name:SetText(rebornNext.name or SurvivorUI_T("Next boss"))
+			nextLine.name:SetTextColor(1, 1, 1)
+			nextLine.time:SetText("|cffffd24d"..text.."|r")
+			y = Put(nextLine, y, 13)
+		else
+			nextLine:Hide()
+			if not tight then
+				y = y - 13
+			end
+		end
 	else
 		nextLine:Hide()
 		if not tight then

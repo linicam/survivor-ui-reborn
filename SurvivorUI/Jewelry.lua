@@ -39,39 +39,67 @@ end
 
 -- Every class's spells, as the game offers them: a legendary amulet names one,
 -- and so its class. Matched without case, spaces or marks ("Multi-Shot").
+-- Only spells with a legendary amulet are listed (spells.json: legendary and
+-- a legends.json entry): Call of Flame has no legend, and Lightning Shield,
+-- Healing Wave and Demonic Knowledge are not legendary, so they are left out.
+-- Two names belong to two classes (Death Coil, Metamorphosis); they are listed
+-- for both, and SpellClass() below leaves them to the finder's class.
 local CLASS_SPELLS = {
-	WARRIOR = { "Cleave", "Whirlwind", "Thunder Clap", "Mortal Strike", "Execute", "Demoralizing Shout", "Battle Shout", "Bloodthirst", "Rend", "Shield Slam", "Bloodrage" },
-	PALADIN = { "Consecration", "Exorcism", "Hammer Of Wrath", "Holy Shock", "Holy Wrath", "Judgement", "Hammer Of Justice", "Holy Light", "Divine Shield", "Holy Shield", "Redemption" },
-	HUNTER = { "Auto Shot", "Arcane Shot", "Multi Shot", "Serpent Sting", "Volley", "Kill Command", "Concussive Shot", "Aimed Shot", "Immolation Trap", "Frost Trap", "Hunter's Mark" },
-	ROGUE = { "Sinister Strike", "Eviscerate", "Blade Flurry", "Rupture", "Kidney Shot", "Gouge", "Ghostly Strike", "Adrenaline Rush", "Backstab", "Slice And Dice", "Seal Fate" },
-	PRIEST = { "Smite", "Shadow Word: Pain", "Mind Blast", "Holy Nova", "Power Word: Shield", "Renew", "Holy Fire", "Mind Flay", "Psychic Scream", "Devouring Plague", "Lightwell" },
-	SHAMAN = { "Lightning Bolt", "Chain Lightning", "Earth Shock", "Flame Shock", "Frost Shock", "Lightning Shield", "Magma Totem", "Searing Totem", "Fire Nova", "Healing Wave", "Stormstrike", "Rockbiter Weapon" },
-	MAGE = { "Fireball", "Frostbolt", "Arcane Missiles", "Frost Nova", "Arcane Explosion", "Blizzard", "Flamestrike", "Fire Blast", "Cone Of Cold", "Blast Wave", "Pyroblast", "Ice Barrier", "Polymorph" },
-	WARLOCK = { "Shadow Bolt", "Corruption", "Immolate", "Curse Of Agony", "Rain Of Fire", "Hellfire", "Death Coil", "Searing Pain", "Drain Life", "Fear", "Soul Fire" },
-	DRUID = { "Wrath", "Moonfire", "Starfire", "Hurricane", "Insect Swarm", "Entangling Roots", "Rejuvenation", "Regrowth", "Thorns", "Swipe", "Faerie Fire", "Shred" },
+	WARRIOR = { "Cleave", "Whirlwind", "Thunder Clap", "Mortal Strike", "Execute", "Demoralizing Shout", "Battle Shout", "Bloodthirst", "Rend", "Shield Slam", "Bloodrage", "Bladestorm", "Shockwave", "Heroic Throw", "Shield Wall", "Victory Rush" },
+	PALADIN = { "Consecration", "Exorcism", "Hammer of Wrath", "Holy Shock", "Holy Wrath", "Judgement", "Hammer of Justice", "Holy Light", "Divine Shield", "Holy Shield", "Redemption", "Divine Storm", "Hammer of the Righteous", "Avenger's Shield", "Sacred Shield", "Avenging Wrath", "Crusader Strike" },
+	HUNTER = { "Auto Shot", "Arcane Shot", "Multi-Shot", "Serpent Sting", "Volley", "Kill Command", "Concussive Shot", "Aimed Shot", "Immolation Trap", "Frost Trap", "Hunter's Mark", "Explosive Trap", "Explosive Shot", "Chimera Shot", "Kill Shot", "Black Arrow", "Rapid Fire", "Steady Shot" },
+	ROGUE = { "Sinister Strike", "Eviscerate", "Blade Flurry", "Rupture", "Kidney Shot", "Gouge", "Ghostly Strike", "Adrenaline Rush", "Backstab", "Slice and Dice", "Seal Fate", "Fan of Knives", "Killing Spree", "Mutilate", "Envenom", "Cloak of Shadows" },
+	PRIEST = { "Smite", "Shadow Word: Pain", "Mind Blast", "Holy Nova", "Power Word: Shield", "Renew", "Holy Fire", "Mind Flay", "Psychic Scream", "Devouring Plague", "Lightwell", "Penance", "Mind Sear", "Vampiric Touch", "Circle of Healing", "Power Infusion", "Dispersion" },
+	SHAMAN = { "Lightning Bolt", "Chain Lightning", "Earth Shock", "Flame Shock", "Frost Shock", "Magma Totem", "Searing Totem", "Fire Nova", "Stormstrike", "Rockbiter Weapon", "Lava Burst", "Bloodlust", "Heroism", "Lava Lash", "Riptide", "Feral Spirit" },
+	MAGE = { "Fireball", "Frostbolt", "Arcane Missiles", "Frost Nova", "Arcane Explosion", "Blizzard", "Flamestrike", "Fire Blast", "Cone of Cold", "Blast Wave", "Pyroblast", "Ice Barrier", "Polymorph", "Arcane Power", "Frostfire Bolt", "Living Bomb", "Ice Lance", "Arcane Barrage", "Deep Freeze", "Dragon's Breath", "Icy Veins", "Ice Block", "Mirror Image" },
+	WARLOCK = { "Shadow Bolt", "Corruption", "Immolate", "Curse of Agony", "Rain of Fire", "Hellfire", "Death Coil", "Searing Pain", "Drain Life", "Fear", "Soulfire", "Chaos Bolt", "Haunt", "Unstable Affliction", "Shadowfury", "Metamorphosis", "Shadowflame", "Demonic Empowerment" },
+	DRUID = { "Wrath", "Moonfire", "Starfire", "Hurricane", "Insect Swarm", "Entangling Roots", "Rejuvenation", "Regrowth", "Thorns", "Swipe", "Faerie Fire", "Shred", "Starfall", "Typhoon", "Wild Growth", "Mangle", "Lacerate", "Berserk", "Barkskin" },
+	DEATHKNIGHT = { "Icy Touch", "Plague Strike", "Death Coil", "Blood Boil", "Death and Decay", "Howling Blast", "Obliterate", "Heart Strike", "Scourge Strike", "Pestilence", "Death Strike", "Chains of Ice", "Anti-Magic Shell", "Icebound Fortitude", "Horn of Winter", "Frost Strike", "Unholy Blight", "Summon Gargoyle" },
+	MONK = { "Jab", "Tiger Palm", "Blackout Kick", "Rising Sun Kick", "Fists of Fury", "Spinning Crane Kick", "Rushing Jade Wind", "Expel Harm", "Chi Wave", "Chi Burst", "Touch of Death", "Healing Sphere", "Storm, Earth, and Fire", "Strike of the Windlord", "Leg Sweep", "Summon Black Ox Statue", "Keg Smash", "Breath of Fire", "Fortifying Brew", "Tigereye Brew", "Renewing Mist", "Mana Tea", "Exploding Keg", "Chi Orbit", "Ring of Peace", "Hundred-Hand Slap", "Chi Explosion", "Crackling Jade Lightning", "Whirling Dragon Punch", "Invoke Xuen, the White Tiger", "Charging Ox Wave", "Song of Chi-Ji" },
+	DEMONHUNTER = { "Demon's Bite", "Chaos Strike", "Blade Dance", "Eye Beam", "Fel Rush", "Throw Glaive", "Immolation Aura", "Felblade", "Chaos Nova", "Metamorphosis", "Spectral Sight", "The Hunt", "Vengeful Retreat", "Blur", "Darkness", "Shear", "Soul Cleave", "Spirit Bomb", "Sigil of Flame", "Sigil of Misery", "Fiery Brand", "Demon Spikes", "Fel Devastation", "Consume", "Void Ray", "Collapsing Star", "Void Metamorphosis" },
 }
 
 -- The common pieces there are to find, for every class (the game's codex):
 -- the legendary amulets are one per spell of a class, above. The Star of
 -- Mystaria is a trinket since the game's 0.111 (JewelryData.lua): 16 amulets
--- and 14 trinkets, not 17 and 13 ("14 / 13", and "1 more to find" with every
+-- and 32 trinkets, not 17 and 31 ("32 / 31", and "1 more to find" with every
 -- amulet found).
-local COMMON_TOTALS = { Neck = 16, Ring = 9, Trinket = 14 }
+local COMMON_TOTALS = { Neck = 16, Ring = 12, Trinket = 32 }
 
 local function Plain(text)
 	return string.gsub(string.lower(text or ""), "[^%a]", "")
 end
 
-local spellClass = {}
+-- A legendary amulet's name may say more than its spell: "The Eternal
+-- Talisman: Vampiric Renew" is the Renew amulet, so the prefix is stripped
+-- before the spell is matched or shown.
+local function NormalizeSpell(spell)
+	if not spell then
+		return nil
+	end
+	local _, _, rest = string.find(spell, "^[Vv]ampiric%s+(.+)$")
+	return rest or spell
+end
+
+local spellClass, ambiguous = {}, {}
 for class, spells in pairs(CLASS_SPELLS) do
 	for index = 1, table.getn(spells) do
-		spellClass[Plain(spells[index])] = class
+		local key = Plain(spells[index])
+		if spellClass[key] and spellClass[key] ~= class then
+			-- One name, two classes (Death Coil, Metamorphosis): the name
+			-- alone cannot say whose it is.
+			ambiguous[key] = true
+			spellClass[key] = nil
+		elseif not ambiguous[key] then
+			spellClass[key] = class
+		end
 	end
 end
 
--- The class a spell belongs to, or nil for one not in the list.
+-- The class a spell belongs to, or nil for one not in the list -- and nil for
+-- a name two classes share, so the caller falls back to the finder's class.
 local function SpellClass(spell)
-	return spell and spellClass[Plain(spell)]
+	return spell and spellClass[Plain(NormalizeSpell(spell))]
 end
 
 -- A legendary amulet the codex does not list is a class's own. Most are named
@@ -314,8 +342,11 @@ local function Unify(book)
 	end
 	local renames = {}
 	for base, item in pairs(items) do
-		if item.spell and SurvivorUI_English then
-			item.spell = SurvivorUI_English(item.spell)
+		if item.spell then
+			item.spell = NormalizeSpell(item.spell)
+			if SurvivorUI_English then
+				item.spell = SurvivorUI_English(item.spell)
+			end
 		end
 		local english = SurvivorUI_English and SurvivorUI_English(base) or base
 		if english ~= base then
@@ -449,7 +480,7 @@ local function ForThisClass(item)
 	if not item.spell then
 		return true
 	end
-	local class = SpellClass(item.spell) or item.class
+	local class = SpellClass(NormalizeSpell(item.spell)) or item.class
 	return not class or class == ClassName()
 end
 
@@ -507,7 +538,7 @@ local function Record(slot, link)
 	local _, _, spell = string.find(base, ": (.+)$")
 	local nameless = false
 	if spell and quality == 5 and SLOTS[slot] == "Neck" then
-		item.spell = spell
+		item.spell = NormalizeSpell(spell)
 		-- It shows to its spell's class only (the finder's, for a spell the
 		-- list does not know).
 		item.class = SpellClass(spell) or ClassName()
@@ -1218,7 +1249,7 @@ function panel.Draw()
 		if item.spell then
 			if ForThisClass(item) then
 				table.insert(legendary, { base = base, item = item })
-				foundSpells[Plain(item.spell)] = true
+				foundSpells[Plain(NormalizeSpell(item.spell))] = true
 			end
 		elseif bySlot[item.slot] then
 			table.insert(bySlot[item.slot], { base = base, item = item })
@@ -1253,10 +1284,10 @@ function panel.Draw()
 			if wornNow[legendary[index].base] then
 				wornLegendary = 1
 			end
-			local key = Plain(legendary[index].item.spell)
+			local key = Plain(NormalizeSpell(legendary[index].item.spell))
 			if not inList[key] then
 				inList[key] = true
-				table.insert(spells, legendary[index].item.spell)
+				table.insert(spells, NormalizeSpell(legendary[index].item.spell))
 			end
 		end
 		-- The one worn now first, then by spell.

@@ -10251,7 +10251,7 @@ do
 			-- does in gold, then a blank line and the lists in their colors.
 			return {
 				{ "Fireball", 1, 1, 1, "Rank 4", 0.5, 0.5, 0.5 },
-				{ "35 yd range", 1, 1, 1 },
+				{ "30 yd range", 1, 1, 1 },
 				{ "Automatic", 1, 1, 1, "3.4 sec cooldown", 1, 1, 1 },
 				{ "Hurls a ball of fire: 128 Fire damage.", 1, 0.82, 0 },
 				{ " ", 1, 1, 1 },
@@ -10263,7 +10263,7 @@ do
 		return {
 			{ "Fireball", fire[1], fire[2], fire[3], SurvivorUI_RankText and SurvivorUI_RankText(4) or "Rank 4", M, M, M },
 			{ "|cffff7f19Fire damage|r \194\183 Automatic", M, M, M, "|cff8cccff3.4 sec|r cooldown", M, M, M },
-			{ "|cff99f2bf35 yd|r range", M, M, M, "|cffffc2147%|r crit \194\183 |cffffc214204%|r dmg", M, M, M },
+			{ "|cff99f2bf30 yd|r range", M, M, M, "|cffffc2147%|r crit \194\183 |cffffc214204%|r dmg", M, M, M },
 			{ rule = fire },
 			{ "Hurls a ball of fire: |cffff7f19128 Fire damage|r.", 0.72, 0.72, 0.72 },
 			{ rule = gold },
@@ -11558,41 +11558,66 @@ do
 		-- Each class's spells as the game's 0.140 offers them, in its order (read
 		-- in its exe: the classes' lists, and each spell's range, radius or cone
 		-- as its tooltip shows it at its first rank): key in AZS_SPELLS, name,
-		-- yards, and "radius" or "cone" for one with no range. Left out as
-		-- BuildList.lua leaves them out: heals, shields, lasting buffs. Rockbiter
-		-- Weapon is a Shaman's first spell with a talent.
+		-- yards, and "radius" or "cone" for one with no range. Since 2026-11-25
+		-- every spell in the official data is listed, by its range there
+		-- (azreborn.com/data/v1/spells.json); heals, shields and lasting buffs
+		-- included, with 0 where the official data gives no range. The
+		-- Death Knight, Monk and Demon Hunter rows show only once CLASSES
+		-- lists those classes. Rockbiter Weapon is a Shaman's first spell
+		-- with a talent.
 		SPELLS = {
 			WARRIOR = { { "cleave", "Cleave", 7 }, { "whirlwind", "Whirlwind", 8, "radius" }, { "thunder_clap", "Thunder Clap", 10, "radius" },
 				{ "mortal_strike", "Mortal Strike", 7 }, { "execute", "Execute", 10 }, { "demo_shout", "Demoralizing Shout", 14, "radius" },
-				{ "bloodthirst", "Bloodthirst", 7 }, { "rend", "Rend", 8 }, { "shield_slam", "Shield Slam", 7 }, { "bloodrage", "Bloodrage", 9, "radius" } },
+				{ "bloodthirst", "Bloodthirst", 7 }, { "rend", "Rend", 8 }, { "shield_slam", "Shield Slam", 7 }, { "bloodrage", "Bloodrage", 9, "radius" },
+				-- Added 2026-11-25 from the official data (range as there):
+				{ "battle_shout", "Battle Shout", 30 }, { "bladestorm", "Bladestorm", 8 }, { "heroic_throw", "Heroic Throw", 30 }, { "shield_wall", "Shield Wall", 0 }, { "shockwave", "Shockwave", 10 }, { "victory_rush", "Victory Rush", 10 } },
 			PALADIN = { { "consecration", "Consecration", 8, "radius" }, { "exorcism", "Exorcism", 25 }, { "hammer_of_wrath", "Hammer of Wrath", 28 },
 				{ "holy_shock", "Holy Shock", 22 }, { "holy_wrath", "Holy Wrath", 12, "radius" }, { "judgement", "Judgement", 12 },
-				{ "hammer_of_justice", "Hammer of Justice", 12 }, { "redemption", "Redemption", 8, "radius" } },
+				{ "hammer_of_justice", "Hammer of Justice", 12 }, { "redemption", "Redemption", 8, "radius" },
+				-- Added 2026-11-25 from the official data (range as there):
+				{ "avengers_shield", "Avenger's Shield", 30 }, { "avenging_wrath", "Avenging Wrath", 30 }, { "crusader_strike", "Crusader Strike", 10 }, { "divine_shield", "Divine Shield", 0 }, { "divine_storm", "Divine Storm", 8 }, { "hammer_of_the_righteous", "Hammer of the Righteous", 10 }, { "holy_light", "Holy Light", 0 }, { "holy_shield", "Holy Shield", 30 }, { "sacred_shield", "Sacred Shield", 0 } },
 			HUNTER = { { "auto_shot", "Auto Shot", 32 }, { "arcane_shot", "Arcane Shot", 32 }, { "multi_shot", "Multi-Shot", 30 },
-				{ "serpent_sting", "Serpent Sting", 30 }, { "volley", "Volley", 28 }, { "kill_command", "Kill Command", 35 },
+				{ "serpent_sting", "Serpent Sting", 30 }, { "volley", "Volley", 28 }, { "kill_command", "Kill Command", 30 },
 				{ "concussive_shot", "Concussive Shot", 30 }, { "aimed_shot", "Aimed Shot", 35 }, { "immolation_trap", "Immolation Trap", 7, "radius" },
-				{ "frost_trap", "Frost Trap", 10, "radius" }, { "hunters_mark", "Hunter's Mark", 8, "radius" } },
+				{ "frost_trap", "Frost Trap", 10, "radius" }, { "hunters_mark", "Hunter's Mark", 8, "radius" },
+				-- Added 2026-11-25 from the official data (range as there):
+				{ "black_arrow", "Black Arrow", 30 }, { "chimera_shot", "Chimera Shot", 35 }, { "explosive_shot", "Explosive Shot", 30 }, { "explosive_trap", "Explosive Trap", 9 }, { "kill_shot", "Kill Shot", 35 }, { "rapid_fire", "Rapid Fire", 30 }, { "steady_shot", "Steady Shot", 32 } },
 			ROGUE = { { "sinister_strike", "Sinister Strike", 8 }, { "eviscerate", "Eviscerate", 8 }, { "blade_flurry", "Blade Flurry", 7, "radius" },
 				{ "rupture", "Rupture", 8 }, { "kidney_shot", "Kidney Shot", 8 }, { "gouge", "Gouge", 8 }, { "ghostly_strike", "Ghostly Strike", 8 },
-				{ "backstab", "Backstab", 8 }, { "seal_fate", "Seal Fate", 8 } },
+				{ "backstab", "Backstab", 8 }, { "seal_fate", "Seal Fate", 8 },
+				-- Added 2026-11-25 from the official data (range as there):
+				{ "adrenaline_rush", "Adrenaline Rush", 30 }, { "cloak_of_shadows", "Cloak of Shadows", 0 }, { "envenom", "Envenom", 10 }, { "fan_of_knives", "Fan of Knives", 8 }, { "killing_spree", "Killing Spree", 10 }, { "mutilate", "Mutilate", 10 }, { "slice_and_dice", "Slice and Dice", 30 } },
 			PRIEST = { { "smite", "Smite", 28 }, { "sw_pain", "Shadow Word: Pain", 28 }, { "mind_blast", "Mind Blast", 28 },
 				{ "holy_nova", "Holy Nova", 10, "radius" }, { "holy_fire", "Holy Fire", 28 }, { "mind_flay", "Mind Flay", 16, "cone" },
-				{ "psychic_scream", "Psychic Scream", 10, "radius" }, { "devouring_plague", "Devouring Plague", 28 }, { "lightwell", "Lightwell", 25 } },
+				{ "psychic_scream", "Psychic Scream", 10, "radius" }, { "devouring_plague", "Devouring Plague", 28 }, { "lightwell", "Lightwell", 25 },
+				-- Added 2026-11-25 from the official data (range as there):
+				{ "circle_of_healing", "Circle of Healing", 0 }, { "dispersion", "Dispersion", 0 }, { "mind_sear", "Mind Sear", 30 }, { "penance", "Penance", 26 }, { "power_infusion", "Power Infusion", 30 }, { "pw_shield", "Power Word: Shield", 0 }, { "renew", "Renew", 0 }, { "vampiric_touch", "Vampiric Touch", 30 } },
 			SHAMAN = { { "lightning_bolt", "Lightning Bolt", 30 }, { "chain_lightning", "Chain Lightning", 28 }, { "earth_shock", "Earth Shock", 20 },
 				{ "flame_shock", "Flame Shock", 20 }, { "frost_shock", "Frost Shock", 20 }, { "magma_totem", "Magma Totem", 10, "radius" },
-				{ "searing_totem", "Searing Totem", 22 }, { "fire_nova", "Fire Nova", 12, "radius" }, { "stormstrike", "Stormstrike", 10 },
-				{ "rockbiter", "Rockbiter Weapon", 10 } },
+				{ "searing_totem", "Searing Totem", 25 }, { "fire_nova", "Fire Nova", 12, "radius" }, { "stormstrike", "Stormstrike", 10 },
+				{ "rockbiter", "Rockbiter Weapon", 10 },
+				-- Added 2026-11-25 from the official data (range as there):
+				{ "bloodlust", "Bloodlust", 30 }, { "call_of_flame", "Call of Flame", 0 }, { "feral_spirit", "Feral Spirit", 30 }, { "healing_wave", "Healing Wave", 0 }, { "heroism", "Heroism", 30 }, { "lava_burst", "Lava Burst", 30 }, { "lava_lash", "Lava Lash", 10 }, { "lightning_shield", "Lightning Shield", 30 }, { "riptide", "Riptide", 0 } },
 			MAGE = { { "fireball", "Fireball", 30 }, { "frostbolt", "Frostbolt", 30 }, { "arcane_missiles", "Arcane Missiles", 28 },
 				{ "frost_nova", "Frost Nova", 10, "radius" }, { "arcane_explosion", "Arcane Explosion", 9, "radius" }, { "blizzard", "Blizzard", 30 },
 				{ "flamestrike", "Flamestrike", 30 }, { "fire_blast", "Fire Blast", 22 }, { "cone_of_cold", "Cone of Cold", 12, "cone" },
-				{ "blast_wave", "Blast Wave", 10, "radius" }, { "pyroblast", "Pyroblast", 35 }, { "polymorph", "Polymorph", 7, "radius" } },
+				{ "blast_wave", "Blast Wave", 10, "radius" }, { "pyroblast", "Pyroblast", 35 }, { "polymorph", "Polymorph", 7, "radius" },
+				-- Added 2026-11-25 from the official data (range as there):
+				{ "arcane_barrage", "Arcane Barrage", 30 }, { "arcane_power", "Arcane Power", 30 }, { "deep_freeze", "Deep Freeze", 30 }, { "dragons_breath", "Dragon's Breath", 10 }, { "frostfire_bolt", "Frostfire Bolt", 30 }, { "ice_barrier", "Ice Barrier", 0 }, { "ice_block", "Ice Block", 0 }, { "ice_lance", "Ice Lance", 30 }, { "icy_veins", "Icy Veins", 30 }, { "living_bomb", "Living Bomb", 30 }, { "mirror_image", "Mirror Image", 30 } },
 			WARLOCK = { { "shadow_bolt", "Shadow Bolt", 30 }, { "corruption", "Corruption", 30 }, { "immolate", "Immolate", 30 },
 				{ "curse_of_agony", "Curse of Agony", 30 }, { "rain_of_fire", "Rain of Fire", 30 }, { "hellfire", "Hellfire", 7, "radius" },
 				{ "death_coil", "Death Coil", 25 }, { "searing_pain", "Searing Pain", 26 }, { "drain_life", "Drain Life", 22 }, { "fear", "Fear", 20 },
-				{ "soul_fire", "Soulfire", 35 } },
+				{ "soul_fire", "Soulfire", 35 },
+				-- Added 2026-11-25 from the official data (range as there):
+				{ "chaos_bolt", "Chaos Bolt", 35 }, { "demonic_empowerment", "Demonic Empowerment", 0 }, { "demonic_knowledge", "Demonic Knowledge", 0 }, { "haunt", "Haunt", 30 }, { "metamorphosis", "Metamorphosis", 30 }, { "shadowflame", "Shadowflame", 10 }, { "shadowfury", "Shadowfury", 30 }, { "unstable_affliction", "Unstable Affliction", 30 } },
 			DRUID = { { "wrath", "Wrath", 30 }, { "moonfire", "Moonfire", 30 }, { "starfire", "Starfire", 32 }, { "hurricane", "Hurricane", 28 },
 				{ "insect_swarm", "Insect Swarm", 28 }, { "entangling_roots", "Entangling Roots", 25 }, { "swipe", "Swipe", 7, "radius" },
-				{ "faerie_fire", "Faerie Fire", 8, "radius" }, { "shred", "Shred", 7 } },
+				{ "faerie_fire", "Faerie Fire", 8, "radius" }, { "shred", "Shred", 7 },
+				-- Added 2026-11-25 from the official data (range as there):
+				{ "barkskin", "Barkskin", 0 }, { "berserk", "Berserk", 30 }, { "lacerate", "Lacerate", 10 }, { "mangle", "Mangle", 10 }, { "regrowth", "Regrowth", 0 }, { "rejuvenation", "Rejuvenation", 0 }, { "starfall", "Starfall", 30 }, { "thorns", "Thorns", 30 }, { "typhoon", "Typhoon", 12 }, { "wild_growth", "Wild Growth", 0 } },
+			DEATHKNIGHT = { { "anti_magic_shell", "Anti-Magic Shell", 0 }, { "blood_boil", "Blood Boil", 10 }, { "chains_of_ice", "Chains of Ice", 20 }, { "death_and_decay", "Death and Decay", 30 }, { "death_strike", "Death Strike", 10 }, { "dk_death_coil", "Death Coil", 30 }, { "frost_strike", "Frost Strike", 10 }, { "heart_strike", "Heart Strike", 10 }, { "horn_of_winter", "Horn of Winter", 30 }, { "howling_blast", "Howling Blast", 10 }, { "icebound_fortitude", "Icebound Fortitude", 0 }, { "icy_touch", "Icy Touch", 10 }, { "obliterate", "Obliterate", 10 }, { "pestilence", "Pestilence", 10 }, { "plague_strike", "Plague Strike", 10 }, { "scourge_strike", "Scourge Strike", 10 }, { "summon_gargoyle", "Summon Gargoyle", 30 }, { "unholy_blight", "Unholy Blight", 10 } },
+			MONK = { { "black_ox_statue", "Summon Black Ox Statue", 10 }, { "blackout_kick", "Blackout Kick", 10 }, { "breath_of_fire", "Breath of Fire", 10 }, { "charging_ox_wave", "Charging Ox Wave", 16 }, { "chi_burst", "Chi Burst", 18 }, { "chi_explosion", "Chi Explosion", 10 }, { "chi_orbit", "Chi Orbit", 0 }, { "chi_wave", "Chi Wave", 25 }, { "crackling_jade_lightning", "Crackling Jade Lightning", 25 }, { "expel_harm", "Expel Harm", 0 }, { "exploding_keg", "Exploding Keg", 30 }, { "fists_of_fury", "Fists of Fury", 9 }, { "fortifying_brew", "Fortifying Brew", 0 }, { "healing_sphere", "Healing Sphere", 0 }, { "hundred_hand_slap", "Hundred-Hand Slap", 10 }, { "invoke_xuen", "Invoke Xuen, the White Tiger", 30 }, { "jab", "Jab", 10 }, { "keg_smash", "Keg Smash", 10 }, { "leg_sweep", "Leg Sweep", 6 }, { "mana_tea", "Mana Tea", 0 }, { "renewing_mist", "Renewing Mist", 0 }, { "ring_of_peace", "Ring of Peace", 0 }, { "rising_sun_kick", "Rising Sun Kick", 10 }, { "rushing_jade_wind", "Rushing Jade Wind", 0 }, { "song_of_chiji", "Song of Chi-Ji", 14 }, { "spinning_crane_kick", "Spinning Crane Kick", 0 }, { "storm_earth_and_fire", "Storm, Earth, and Fire", 30 }, { "strike_of_the_windlord", "Strike of the Windlord", 10 }, { "tiger_palm", "Tiger Palm", 10 }, { "tigereye_brew", "Tigereye Brew", 30 }, { "touch_of_death", "Touch of Death", 10 }, { "whirling_dragon_punch", "Whirling Dragon Punch", 11 } },
+			DEMONHUNTER = { { "blade_dance", "Blade Dance", 8 }, { "blur", "Blur", 0 }, { "chaos_nova", "Chaos Nova", 8 }, { "chaos_strike", "Chaos Strike", 10 }, { "collapsing_star", "Collapsing Star", 25 }, { "consume", "Consume", 25 }, { "darkness", "Darkness", 0 }, { "demon_spikes", "Demon Spikes", 0 }, { "demons_bite", "Demon's Bite", 10 }, { "dh_metamorphosis", "Metamorphosis", 30 }, { "eye_beam", "Eye Beam", 20 }, { "fel_devastation", "Fel Devastation", 15 }, { "fel_rush", "Fel Rush", 14 }, { "felblade", "Felblade", 15 }, { "fiery_brand", "Fiery Brand", 20 }, { "immolation_aura", "Immolation Aura", 0 }, { "shear", "Shear", 10 }, { "sigil_of_flame", "Sigil of Flame", 25 }, { "sigil_of_misery", "Sigil of Misery", 25 }, { "soul_cleave", "Soul Cleave", 8 }, { "spectral_sight", "Spectral Sight", 40 }, { "spirit_bomb", "Spirit Bomb", 8 }, { "the_hunt", "The Hunt", 35 }, { "throw_glaive", "Throw Glaive", 25 }, { "vengeful_retreat", "Vengeful Retreat", 6 }, { "void_metamorphosis", "Void Metamorphosis", 25 }, { "void_ray", "Void Ray", 25 } },
 		},
 		-- A pill's tooltip: its yards, by the kind of its reach.
 		REACH = { range = "{1} yd range at its first rank, before bonuses.",

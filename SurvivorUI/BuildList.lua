@@ -18,7 +18,9 @@
 -- in short, read off its tooltip ("Neck  CDR · DMG"), or the piece's name.
 --
 -- From the game's addon API (AZS_SPELLS); without it nothing shows. Hold Alt
--- and drag to move; /sui build hides it.
+-- and drag to move; /sui build hides it. Reborn: learned abilities come
+-- from AZS_ABILITIES as well (RebornCompat.lua), so passives and racials
+-- that never sit on the action bar are shown too; see Draw and Fill.
 
 if SurvivorUI_Standby then return end
 
@@ -72,10 +74,22 @@ end
 
 -- "holy_wrath" as the meter and the cards name it: "Holy Wrath". The game
 -- spells soul_fire "Soulfire" (its 0.110), as the meter does (Meter.lua).
+-- The 12 keys whose names the key alone cannot spell (hyphens, apostrophes,
+-- commas, class prefixes, or dropped words), as the official data has them
+-- (azreborn.com/data/v1/spells.json, 2026-11-25).
 local NAMES = {
 	sw_pain = "Shadow Word: Pain", pw_shield = "Power Word: Shield",
 	demo_shout = "Demoralizing Shout", hunters_mark = "Hunter's Mark",
 	soul_fire = "Soulfire", rockbiter = "Rockbiter Weapon",
+	avengers_shield = "Avenger's Shield", multi_shot = "Multi-Shot",
+	dk_death_coil = "Death Coil", anti_magic_shell = "Anti-Magic Shell",
+	dragons_breath = "Dragon's Breath",
+	storm_earth_and_fire = "Storm, Earth, and Fire",
+	black_ox_statue = "Summon Black Ox Statue",
+	hundred_hand_slap = "Hundred-Hand Slap",
+	invoke_xuen = "Invoke Xuen, the White Tiger",
+	song_of_chiji = "Song of Chi-Ji", demons_bite = "Demon's Bite",
+	dh_metamorphosis = "Metamorphosis",
 }
 
 -- "of", "the" and "and" small after the first word, as the meter has them:
@@ -388,7 +402,33 @@ local function Row(index)
 	-- Its damage and crits are the damage meter's and Biggest Crits' cards.
 	row:EnableMouse(true)
 	row:SetScript("OnEnter", function()
-		if not (this.ability and this.actionSlot) then
+		if not this.ability then
+			return
+		end
+		-- Reborn: an ability with no action-bar button (a passive, or a
+		-- racial the bar does not carry) has no button tooltip; show the
+		-- description the API itself gave, with its rank history.
+		if not this.actionSlot then
+			if not this.abilityText then
+				return
+			end
+			GameTooltip:SetOwner(this, "ANCHOR_NONE")
+			GameTooltip:ClearAllPoints()
+			if SurvivorUI_RoomOnRight(list) then
+				GameTooltip:SetPoint("TOPLEFT", this, "TOPRIGHT", (list:GetRight() or 0) - (this:GetRight() or 0) + 6, 0)
+			else
+				GameTooltip:SetPoint("TOPRIGHT", this, "TOPLEFT", -((this:GetLeft() or 0) - (list:GetLeft() or 0)) - 6, 0)
+			end
+			GameTooltip:ClearLines()
+			GameTooltip:SetText(this.ability, 1, 0.82, 0)
+			if this.passive then
+				GameTooltip:AddLine("Passive", 0.7, 0.7, 0.7)
+			end
+			GameTooltip:AddLine(this.abilityText, 1, 1, 1, 1)
+			if this.abilityRank then
+				GameTooltip:AddLine("Rank "..tostring(this.abilityRank), 0.7, 0.7, 0.7)
+			end
+			GameTooltip:Show()
 			return
 		end
 		GameTooltip:SetOwner(this, "ANCHOR_NONE")
@@ -918,9 +958,22 @@ end
 -- off its tooltip ("for 8 sec", "For 14 sec"; another language's by its
 -- patterns, InfoWords).
 
+-- Self-buffs with a duration, shown with an hourglass. The new-class
+-- entries are the audit's §2d candidates, unambiguous self-buffs by name and
+-- standard behaviour (spells.json has no duration field); confirm each
+-- appears in AZS_BUFFS in-game. sacred_shield is here, not ABSORBING: its
+-- absorb amount has no tooltip pattern in the official data.
 local LASTING = { divine_shield = true, holy_shield = true, battle_shout = true,
 	slice_and_dice = true, adrenaline_rush = true, lightning_shield = true, thorns = true,
-	demonic_empowerment = true }
+	demonic_empowerment = true, sacred_shield = true, shield_wall = true,
+	avenging_wrath = true, rapid_fire = true, cloak_of_shadows = true,
+	power_infusion = true, dispersion = true, anti_magic_shell = true,
+	icebound_fortitude = true, horn_of_winter = true, bloodlust = true,
+	heroism = true, arcane_power = true, icy_veins = true, ice_block = true,
+	metamorphosis = true, barkskin = true, berserk = true,
+	storm_earth_and_fire = true, fortifying_brew = true, tigereye_brew = true,
+	mana_tea = true, dh_metamorphosis = true, blur = true, darkness = true,
+	demon_spikes = true, void_metamorphosis = true, immolation_aura = true }
 local HOURGLASS = { 1, 0.84, 0.43 }
 local buffs = { last = {} }      -- the run time the buffs were last told at; each spell's left then
 local timing = false             -- a lasting spell up: the list drawn more often
@@ -961,7 +1014,7 @@ end
 -- its tooltip ("48% of your max health"), else its amount ("Heals you for 287");
 -- in another language by its patterns (InfoWords).
 
-local HEALING = { holy_light = true, renew = true, healing_wave = true, rejuvenation = true, regrowth = true }
+local HEALING = { holy_light = true, renew = true, healing_wave = true, rejuvenation = true, regrowth = true, circle_of_healing = true, riptide = true, wild_growth = true, renewing_mist = true }
 local CROSS = { 0.42, 1, 0.5 }
 -- An absorb on yourself, Power Word: Shield's: how much of your health it
 -- holds back, "25%", under a blue shield (it lasts until it breaks, so no
@@ -1183,21 +1236,39 @@ end
 
 local function Fill(row, entry, actionSlot, isRacial)
 	local key = Field(entry, "key", 1)
-	local name = SpellName(key)
+	-- Reborn: AZS_ABILITIES carries the display name; use it when the
+	-- game gave one instead of rebuilding it from the key.
+	local apiName = Field(entry, "name", 8)
+	local name = (apiName and apiName ~= "") and apiName or SpellName(key)
 	local color = SurvivorUI_MeterColor and SurvivorUI_MeterColor(name) or { 0.8, 0.8, 0.8 }
 	row.ability, row.color = name, color
 	-- Its tooltip is its action button's; the racial's tells the race's
-	-- traits too (AbilityTooltip.lua).
+	-- traits too (AbilityTooltip.lua). With no button, the API text is
+	-- the tooltip (Row's OnEnter above).
 	row.racial = isRacial
 	row.actionSlot = actionSlot
-	row.icon:SetTexture(GetActionTexture and GetActionTexture(actionSlot) or nil)
+	row.passive = Field(entry, "passive", 4) == true
+	row.abilityText = Field(entry, "text", 10)
+	row.abilityRank = Field(entry, "rank", 3)
+	local texture = actionSlot and GetActionTexture and GetActionTexture(actionSlot) or nil
+	if not texture then
+		texture = Field(entry, "icon", 9)
+	end
+	row.icon:SetTexture(texture or nil)
 	row.icon:SetAlpha(1)
 	-- Its name as the game writes it in its language (Locale.lua).
 	local shown = SurvivorUI_Native(name)
 	FitSpell(row, shown, isRacial and SurvivorUI_T("(racial)"))
 	row.rank:SetText(RankText(Field(entry, "rank", 3)))
 	local showRange, showCooldown = Shows()
-	local lasting, symbol, tint, number, numberColor = InfoOf(entry, key, actionSlot, name, isRacial, showRange)
+	-- No action button, no button tooltip to read a range / lasting time
+	-- from: leave Info blank rather than calling the scanner with nil.
+	local lasting, symbol, tint, number, numberColor
+	if actionSlot then
+		lasting, symbol, tint, number, numberColor = InfoOf(entry, key, actionSlot, name, isRacial, showRange)
+	else
+		lasting, symbol, tint, number, numberColor = false, nil, nil, ""
+	end
 	PlaceReach(row, symbol, tint)
 	if not lasting then
 		row.range:SetText(number)
@@ -1208,12 +1279,13 @@ local function Fill(row, entry, actionSlot, isRacial)
 	if numberColor then
 		row.range:SetTextColor(numberColor[1], numberColor[2], numberColor[3])
 	end
-	Drain(row, lasting and FillLasting(row, entry, key, actionSlot, name, showRange), color)
+	Drain(row, lasting and actionSlot and FillLasting(row, entry, key, actionSlot, name, showRange), color)
 	row:Show()
 end
 
 local function Empty(row)
 	row.ability, row.color, row.racial = nil, nil, nil
+	row.abilityText, row.abilityRank, row.passive = nil, nil, nil
 	row.icon:SetTexture(FLAT)
 	row.icon:SetVertexColor(0.15, 0.15, 0.18)
 	row.icon:SetAlpha(0.8)
@@ -1355,8 +1427,46 @@ local function RankRoom()
 	return measured.width
 end
 
+-- The action-bar button for an ability key, or nil when the ability
+-- sits on no button (a passive, usually). Reborn abilities carry no slot
+-- of their own; the bar order is still AZS_SPELLS' order.
+local function SpellSlotFor(key)
+	if not key then
+		return nil
+	end
+	local spells = AZS_SPELLS or {}
+	local count = table.getn(spells)
+	for index = 1, count do
+		if Field(spells[index], "key", 1) == key then
+			return Slot(index, count)
+		end
+	end
+	return nil
+end
+
+-- The build as the Reborn snapshot sees it, or nil to keep the original
+-- AZS_SPELLS behaviour: { actives, racial, passives }.
+local function RebornBuild()
+	if not SurvivorUI_RebornAbilities then
+		return nil
+	end
+	local data = SurvivorUI_RebornAbilities()
+	if not data.complete then
+		return nil
+	end
+	return data.actives, data.racials[1], data.passives
+end
+
 local function Draw()
 	timing = false
+	-- Reborn: the snapshot is requested on entering the world and after
+	-- build changes; this call is throttled inside the compat layer.
+	if SurvivorUI_RebornRequestAbilities then
+		SurvivorUI_RebornRequestAbilities(false)
+	end
+	if SurvivorUI_RebornCheckRun then
+		SurvivorUI_RebornCheckRun()
+	end
 	-- The columns as chosen; changed, every row laid out again.
 	if Columns(Shows()) then
 		PlaceHead()
@@ -1364,10 +1474,26 @@ local function Draw()
 			PlaceRow(rows[index])
 		end
 	end
-	local spells = AZS_SPELLS or {}
-	local count = table.getn(spells)
-	-- The racial comes last in the game's list and takes no slot.
-	local slotted = math.max(0, count - 1)
+	-- Reborn (snapshot present): actives are the slotted list, the racial
+	-- is the snapshot's racial (not "the last entry"), and passives get
+	-- their own rows under it. Otherwise the original assumption holds:
+	-- AZS_SPELLS is 6 slotted actives plus the racial last.
+	local spells, count, slotted, racialEntry, passiveEntries
+	local rebornActives, rebornRacial, rebornPassives = RebornBuild()
+	if rebornActives then
+		spells = rebornActives
+		count = table.getn(spells)
+		slotted = count
+		racialEntry = rebornRacial
+		passiveEntries = rebornPassives
+	else
+		spells = AZS_SPELLS or {}
+		count = table.getn(spells)
+		-- The racial comes last in the game's list and takes no slot.
+		slotted = math.max(0, count - 1)
+		racialEntry = count >= 1 and spells[count] or nil
+		passiveEntries = {}
+	end
 	-- The three highest ranks among the slotted spells, ties to the earlier
 	-- slot: the first bold with a full border, the second a full border, the
 	-- third a faint one; the rest plain. The list itself runs in that order.
@@ -1379,7 +1505,11 @@ local function Draw()
 		row.icon:SetVertexColor(1, 1, 1)
 		local index = order[place]
 		if index then
-			Fill(row, spells[index], Slot(index, count), false)
+			if rebornActives then
+				Fill(row, spells[index], SpellSlotFor(Field(spells[index], "key", 1)), false)
+			else
+				Fill(row, spells[index], Slot(index, count), false)
+			end
 		else
 			Empty(row)
 		end
@@ -1395,11 +1525,38 @@ local function Draw()
 	end
 	local racialRow = Row(SLOTS + 1)
 	racialRow.icon:SetVertexColor(1, 1, 1)
-	if count >= 1 then
-		Fill(racialRow, spells[count], Slot(count, count), true)
+	if racialEntry then
+		if rebornActives then
+			Fill(racialRow, racialEntry, SpellSlotFor(Field(racialEntry, "key", 1)), true)
+		else
+			Fill(racialRow, racialEntry, Slot(count, count), true)
+		end
 	else
 		racialRow.base:Hide()
 		racialRow:Hide()
+	end
+	-- Passives (Reborn only): one row each under the racial, in rank
+	-- order. The list grows to hold them; with none it keeps its
+	-- original height. The tooltip says each one is passive.
+	local passiveCount = table.getn(passiveEntries)
+	table.sort(passiveEntries, function(a, b)
+		return (tonumber(Field(a, "rank", 3)) or 0) > (tonumber(Field(b, "rank", 3)) or 0)
+	end)
+	for place = 1, passiveCount do
+		local row = Row(SLOTS + 1 + place)
+		row.icon:SetVertexColor(1, 1, 1)
+		Fill(row, passiveEntries[place], SpellSlotFor(Field(passiveEntries[place], "key", 1)), false)
+		Border(row, row.color, 0.3)
+	end
+	for index = SLOTS + 2 + passiveCount, table.getn(rows) do
+		if rows[index] then
+			rows[index]:Hide()
+		end
+	end
+	if passiveCount > 0 then
+		list:SetHeight(TITLE_HEIGHT + HEAD_HEIGHT + (SLOTS + 1 + passiveCount) * ROW_HEIGHT + 6)
+	else
+		list:SetHeight(LIST_HEIGHT)
 	end
 	list.count:SetText((slotted >= SLOTS and "|cffff8080" or "|cffd0d0d0")..math.min(slotted, SLOTS).." / "..SLOTS.."|r")
 	rankWidth = RankRoom()
@@ -1687,6 +1844,23 @@ for index = 1, table.getn(GEAR_SLOTS) do
 
 	line:EnableMouse(true)
 	line:SetScript("OnEnter", function()
+		-- Reborn: a loadout piece has no inventory item, so no WoW
+		-- tooltip; show what the API actually told us, and say plainly
+		-- that per-item effects are not exposed by the API.
+		if this.rebornItem then
+			local item = this.rebornItem
+			GameTooltip:SetOwner(this, "ANCHOR_LEFT")
+			GameTooltip:SetText(item.name or "?", 1, 0.82, 0)
+			if item.rank then
+				GameTooltip:AddLine("Rank "..tostring(item.rank), 1, 1, 1)
+			end
+			if item.rarity then
+				GameTooltip:AddLine("Rarity: "..tostring(item.rarity), 1, 1, 1)
+			end
+			GameTooltip:AddLine("Per-item effects are not exposed by the AZ Reborn API. Aggregate jewelry bonuses are in the Character pane.", 0.7, 0.7, 0.7, 1)
+			GameTooltip:Show()
+			return
+		end
 		if this.slot and GetInventoryItemLink("player", this.slot) then
 			GameTooltip:SetOwner(this, "ANCHOR_LEFT")
 			GameTooltip:SetInventoryItem("player", this.slot)
@@ -1909,15 +2083,98 @@ local function PlaceGear(line, place)
 	end
 end
 
+-- Rarity as the game / loadout names it, to the row's colour. Unknown
+-- rarities fall back to plain grey; a numeric rarity (1-5) maps to the
+-- usual Common..Legendary scale.
+local function RarityColor(rarity)
+	if not rarity then
+		return 0.5, 0.5, 0.55
+	end
+	local r = string.lower(tostring(rarity))
+	local map = {
+		common = { 0.62, 0.62, 0.62 }, uncommon = { 0.12, 1, 0 }, rare = { 0, 0.44, 0.87 },
+		epic = { 0.64, 0.21, 0.93 }, legendary = { 1, 0.5, 0 },
+		["1"] = { 0.62, 0.62, 0.62 }, ["2"] = { 0.12, 1, 0 }, ["3"] = { 0, 0.44, 0.87 },
+		["4"] = { 0.64, 0.21, 0.93 }, ["5"] = { 1, 0.5, 0 },
+	}
+	local c = map[r]
+	if c then
+		return c[1], c[2], c[3]
+	end
+	return 0.5, 0.5, 0.55
+end
+
 local function DrawGear()
 	worn.title:SetText(SurvivorUI_T("Jewelry"))
 	local db = Settings()
 	local paint = GEAR_PAINT[db.jewelryColor or "row"] or GEAR_PAINT.row
 	local shown = 0
+	-- A new run clears the inventory-piece cache, so a rank read in the
+	-- last run can never be shown for this one.
+	if SurvivorUI_RebornCheckRun and SurvivorUI_RebornCheckRun() then
+		pieces = {}
+	end
+	-- Reborn first: the meter loadout / AZSGEAR list, when the game gave
+	-- one. Inventory slots are the fallback (original game, or a Reborn
+	-- build where the loadout carries no jewelry).
+	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry() or nil
+	if rebornJewelry and (rebornJewelry.source == "loadout" or rebornJewelry.source == "gear")
+		and table.getn(rebornJewelry.items) > 0 then
+		for index = 1, table.getn(GEAR_SLOTS) do
+			local line = gearLines[index]
+			line.slot = nil
+			local item = rebornJewelry.items[index]
+			if item then
+				line.rebornItem = item
+				shown = shown + 1
+				PlaceGear(line, shown)
+				local r, g, b = RarityColor(item.rarity)
+				if db.jewelryNames then
+					GearText(line, GearWords(item.slot, nil, item.name or "?"), "", true)
+				else
+					-- Left: slot + rank. Right: the name. Per-item effect
+					-- text is not exposed by the API, so it is not
+					-- invented; the hover tooltip says so.
+					local left = item.slot .. (item.rank and "  " .. tostring(item.rank) or "")
+					GearText(line, left, item.name or "?")
+				end
+				if paint.plain then
+					PaintGear(line, PLAIN[1], PLAIN[2], PLAIN[3], paint.fill, paint.edge)
+				else
+					PaintGear(line, r, g, b, paint.fill, paint.edge)
+				end
+				if not paint.words then
+					r, g, b = 1, 1, 1
+				end
+				line.label:SetTextColor(r, g, b)
+				line.tags:SetTextColor(r, g, b)
+				line:Show()
+			elseif db.jewelryEmpty ~= false then
+				line.rebornItem = nil
+				shown = shown + 1
+				PlaceGear(line, shown)
+				PaintGear(line, PLAIN[1], PLAIN[2], PLAIN[3], GEAR_PAINT.empty.fill, GEAR_PAINT.empty.edge)
+				GearText(line, SurvivorUI_T(GEAR_SLOTS[index][2]), SurvivorUI_T("empty"))
+				line.label:SetTextColor(0.45, 0.45, 0.5)
+				line.tags:SetTextColor(0.4, 0.4, 0.45)
+				line:Show()
+			else
+				line.rebornItem = nil
+				line:Hide()
+			end
+		end
+		local tall = GEAR_TOP + shown * GEAR_ROW + 5
+		if worn.tall ~= tall then
+			worn.tall = tall
+			worn:SetHeight(tall)
+		end
+		return
+	end
 	for index = 1, table.getn(GEAR_SLOTS) do
 		local slot, label = GEAR_SLOTS[index][1], GEAR_SLOTS[index][2]
 		local line = gearLines[index]
 		line.slot = slot
+		line.rebornItem = nil
 		local link = GetInventoryItemLink and GetInventoryItemLink("player", slot)
 		if link or db.jewelryEmpty ~= false then
 			shown = shown + 1
@@ -2074,10 +2331,19 @@ SurvivorUI_GameHud.build = ApplyGameHud
 -- rank, the highest first, then the racial: { name, rank, icon, color, racial,
 -- range, cd }, the range and the cooldown as the list shows them.
 function SurvivorUI_BuildSnapshot()
-	local spells = AZS_SPELLS or {}
-	local count = table.getn(spells)
+	-- Reborn: the snapshot's actives + racial + passives, not "all but
+	-- the last entry are actives and the last is the racial".
+	local rebornActives, rebornRacial, rebornPassives = RebornBuild()
+	local spells, count
+	if rebornActives then
+		spells = rebornActives
+		count = table.getn(spells)
+	else
+		spells = AZS_SPELLS or {}
+		count = table.getn(spells)
+	end
 	local order = {}
-	for index = 1, math.max(0, count - 1) do
+	for index = 1, rebornActives and count or math.max(0, count - 1) do
 		table.insert(order, index)
 	end
 	table.sort(order, function(a, b)
@@ -2091,21 +2357,35 @@ function SurvivorUI_BuildSnapshot()
 	local list = {}
 	local showRange, showCooldown = Shows()
 	local function Add(entry, slot, racial)
-		local name = SpellName(Field(entry, "key", 1))
+		local apiName = Field(entry, "name", 8)
+		local name = (apiName and apiName ~= "") and apiName or SpellName(Field(entry, "key", 1))
 		local color = SurvivorUI_MeterColor and SurvivorUI_MeterColor(name) or { 0.8, 0.8, 0.8 }
 		local rank = tonumber(Field(entry, "rank", 3))
+		local icon = slot and GetActionTexture and GetActionTexture(slot) or Field(entry, "icon", 9)
 		table.insert(list, {
 			name = name, rank = rank, racial = racial,
-			icon = GetActionTexture and GetActionTexture(slot) or nil,
+			passive = Field(entry, "passive", 4) == true,
+			icon = icon,
 			color = { color[1], color[2], color[3] },
-			range = showRange and (Reach(slot, name, rank) or "") or nil,
+			range = showRange and slot and (Reach(slot, name, rank) or "") or nil,
 			cd = showCooldown and CooldownText(entry) or nil,
 		})
 	end
 	for index = 1, table.getn(order) do
-		Add(spells[order[index]], Slot(order[index], count), false)
+		if rebornActives then
+			Add(spells[order[index]], SpellSlotFor(Field(spells[order[index]], "key", 1)), false)
+		else
+			Add(spells[order[index]], Slot(order[index], count), false)
+		end
 	end
-	if count >= 1 then
+	if rebornActives then
+		if rebornRacial then
+			Add(rebornRacial, SpellSlotFor(Field(rebornRacial, "key", 1)), true)
+		end
+		for index = 1, table.getn(rebornPassives) do
+			Add(rebornPassives[index], SpellSlotFor(Field(rebornPassives[index], "key", 1)), false)
+		end
+	elseif count >= 1 then
 		Add(spells[count], Slot(count, count), true)
 	end
 	return list
@@ -2217,38 +2497,60 @@ function SurvivorUI_BuildRows()
 	if not Running() then
 		return nil
 	end
-	local spells = AZS_SPELLS
-	local count = table.getn(spells)
-	local order = RankOrder(spells, math.max(0, count - 1))
+	-- Reborn: snapshot actives + racial + passives when present.
+	local rebornActives, rebornRacial, rebornPassives = RebornBuild()
+	local spells, count
+	if rebornActives then
+		spells, count = rebornActives, table.getn(rebornActives)
+	else
+		spells = AZS_SPELLS
+		count = table.getn(spells)
+	end
+	local order = RankOrder(spells, rebornActives and count or math.max(0, count - 1))
 	local showRange, showCooldown = Shows()
 	local shown = {}
 	local function Add(entry, actionSlot, racial)
 		local key = Field(entry, "key", 1)
-		local name = SpellName(key)
+		local apiName = Field(entry, "name", 8)
+		local name = (apiName and apiName ~= "") and apiName or SpellName(key)
 		local native = SurvivorUI_Native(name)
+		local passive = Field(entry, "passive", 4) == true
 		local row = {
-			name = racial and native.."  |cff8a8a8a"..SurvivorUI_T("(racial)").."|r" or native,
-			spell = native, tag = racial and SurvivorUI_T("(racial)") or nil,
-			rank = tonumber(Field(entry, "rank", 3)) or "", racial = racial,
-			icon = GetActionTexture and GetActionTexture(actionSlot) or nil,
+			name = racial and native.."  |cff8a8a8a"..SurvivorUI_T("(racial)").."|r" or passive and native.."  |cff8a8a8a(passive)|r" or native,
+			spell = native, tag = racial and SurvivorUI_T("(racial)") or passive and "(passive)" or nil,
+			rank = tonumber(Field(entry, "rank", 3)) or "", racial = racial, passive = passive,
+			icon = actionSlot and GetActionTexture and GetActionTexture(actionSlot) or Field(entry, "icon", 9),
 			color = SurvivorUI_MeterColor and SurvivorUI_MeterColor(name) or { 0.8, 0.8, 0.8 },
 			cd = showCooldown and CooldownText(entry) or "",
 		}
 		local lasting
-		lasting, row.symbol, row.tint, row.number, row.numberColor = InfoOf(entry, key, actionSlot, name, racial, showRange)
-		if lasting then
-			row.number, row.numberColor, row.share = LastingCell(entry, key, actionSlot, name, showRange)
+		if actionSlot then
+			lasting, row.symbol, row.tint, row.number, row.numberColor = InfoOf(entry, key, actionSlot, name, racial, showRange)
+			if lasting then
+				row.number, row.numberColor, row.share = LastingCell(entry, key, actionSlot, name, showRange)
+			end
 		end
 		table.insert(shown, row)
 	end
 	for place = 1, SLOTS do
 		if order[place] then
-			Add(spells[order[place]], Slot(order[place], count), false)
+			if rebornActives then
+				Add(spells[order[place]], SpellSlotFor(Field(spells[order[place]], "key", 1)), false)
+			else
+				Add(spells[order[place]], Slot(order[place], count), false)
+			end
 		else
 			table.insert(shown, { empty = true, name = SurvivorUI_T("empty slot") })
 		end
 	end
-	if count >= 1 then
+	if rebornActives then
+		if rebornRacial then
+			Add(rebornRacial, SpellSlotFor(Field(rebornRacial, "key", 1)), true)
+		end
+		for index = 1, table.getn(rebornPassives) do
+			Add(rebornPassives[index], SpellSlotFor(Field(rebornPassives[index], "key", 1)), false)
+		end
+	elseif count >= 1 then
 		Add(spells[count], Slot(count, count), true)
 	end
 	return shown
@@ -2287,6 +2589,26 @@ end
 -- For the last runs too: the jewelry lines as they read, one a slot: { label,
 -- tags, color, item, name, tip }, or { label, empty } for a slot with nothing.
 function SurvivorUI_GearSnapshot()
+	-- Reborn: the loadout list, when the game gave one; its rows carry
+	-- name / rank / rarity / icon where the API gave them, and no
+	-- invented effect text.
+	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry() or nil
+	if rebornJewelry and (rebornJewelry.source == "loadout" or rebornJewelry.source == "gear")
+		and table.getn(rebornJewelry.items) > 0 then
+		local gear = {}
+		for index = 1, table.getn(rebornJewelry.items) do
+			local item = rebornJewelry.items[index]
+			local r, g, b = RarityColor(item.rarity)
+			table.insert(gear, {
+				label = item.slot .. (item.rank and "  " .. tostring(item.rank) or ""),
+				tags = item.name or "?",
+				color = { r, g, b },
+				item = item.key, name = item.name, tip = nil,
+				icon = item.icon,
+			})
+		end
+		return gear
+	end
 	local gear = {}
 	for index = 1, table.getn(GEAR_SLOTS) do
 		local slot, label = GEAR_SLOTS[index][1], GEAR_SLOTS[index][2]

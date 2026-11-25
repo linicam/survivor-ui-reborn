@@ -3949,8 +3949,17 @@ local function PickSpot(index)
 	return spot
 end
 
-local function PaintPick(spot, name, rank, top)
-	local art = SurvivorUI_TALENT_ICONS and SurvivorUI_TALENT_ICONS[name]
+-- Two talent names are shared by two classes with different icons, and a
+-- name-keyed map cannot hold both: the druid Ferocity is the hyena, the
+-- monk Tranquil Spirit is Effuse (the map keeps the hunter / druid one).
+local CLASS_TALENT_ICONS = {
+	DRUID = { ["Ferocity"] = "Ability_Hunter_Pet_Hyena" },
+	MONK = { ["Tranquil Spirit"] = "ability_monk_effuse" },
+}
+
+local function PaintPick(spot, name, rank, top, classKey)
+	local classIcons = classKey and CLASS_TALENT_ICONS[classKey]
+	local art = (classIcons and classIcons[name]) or (SurvivorUI_TALENT_ICONS and SurvivorUI_TALENT_ICONS[name])
 	spot.name = name
 	spot.points = (rank or 0)..(top and "/"..top or "")
 	spot.icon:SetTexture(art and ("Interface\\Icons\\"..art) or "Interface\\Icons\\INV_Misc_QuestionMark")
@@ -3984,7 +3993,7 @@ local function DrawTalents(run)
 			local rank = points[talent[1]]
 			count = count + 1
 			local spot = PickSpot(count)
-			PaintPick(spot, talent[1], rank, talent[4])
+			PaintPick(spot, talent[1], rank, talent[4], run.classKey)
 			spot:SetPoint("TOPLEFT", talentBox, "TOPLEFT", left + talent[3] * PICK_STEP, -TREE_TOP - talent[2] * PICK_STEP)
 			spent[index] = spent[index] + (rank or 0)
 			points[talent[1]] = nil
@@ -3996,7 +4005,7 @@ local function DrawTalents(run)
 	for name, rank in pairs(points) do
 		count = count + 1
 		local spot = PickSpot(count)
-		PaintPick(spot, name, rank)
+		PaintPick(spot, name, rank, nil, run.classKey)
 		spot:SetPoint("TOPLEFT", talentBox, "TOPLEFT", 6 + across * PICK_STEP, y)
 		across = across + 1
 	end

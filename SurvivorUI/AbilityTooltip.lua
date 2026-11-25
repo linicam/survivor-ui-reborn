@@ -50,7 +50,7 @@ for school, names in pairs({
 	Shadow = { "Shadow Word: Pain", "Mind Blast", "Mind Flay", "Psychic Scream", "Devouring Plague", "Shadow Bolt",
 		"Corruption", "Curse of Agony", "Death Coil", "Drain Life", "Fear", "Shadowmeld" },
 	Fire = { "Flame Shock", "Magma Totem", "Searing Totem", "Fire Nova", "Fireball", "Flamestrike",
-		"Fire Blast", "Blast Wave", "Pyroblast", "Immolate", "Rain of Fire", "Hellfire", "Searing Pain", "Soul Fire",
+		"Fire Blast", "Blast Wave", "Pyroblast", "Immolate", "Rain of Fire", "Hellfire", "Searing Pain", "Soulfire",
 		"Explosive Trap", "Immolation Trap" },
 	Frost = { "Frost Shock", "Frostbolt", "Frost Nova", "Blizzard", "Cone of Cold", "Ice Barrier", "Frost Trap" },
 	Arcane = { "Arcane Missiles", "Arcane Explosion", "Polymorph", "Arcane Shot", "Moonfire", "Starfire",
