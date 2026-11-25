@@ -16,7 +16,9 @@
 -- points them north up instead, as the minimap does.
 --
 -- Over the list, the achievement "Slay four guardians before 8:00": how many
--- fell before 8:00 and the time left, green once four did.
+-- fell before 8:00 and the time left, green once four did. (Original game
+-- only: the Reborn API documents no such goal, so in Reborn the line is
+-- not drawn; the lairs' positions, health and respawn countdowns are.)
 --
 -- Walking straight at a guardian turns its arrow gold, with a glow; within 10
 -- yards of a living one, its line (or stretch) flashes.
@@ -348,6 +350,18 @@ end
 -- function apart from Draw: the game's Lua (5.0, from the game's 0.101) lets
 -- a function reach at most 32 of the file's locals.
 local function DrawGoal(time)
+	-- Reborn: no "four before 8:00" line. That goal is the original
+	-- game's achievement; the Reborn API documents no such goal (no
+	-- field carries it — AZS_RUN has only guardians slain/awake and
+	-- the lair count), so the line would claim a target the game
+	-- never set. The lairs themselves stay: position arrows, health
+	-- while awake, and the respawn countdown (AZS_LAIRS.left, the
+	-- seconds until an empty lair fills) are all Reborn data.
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+		goal:SetText("")
+		goalText, goalColor = "", MUTED
+		return
+	end
 	local slain = tonumber(AZS_RUN and AZS_RUN.gk) or 0
 	if time < GOAL_TIME then
 		before = math.max(before, slain)
@@ -380,6 +394,11 @@ local function Draw()
 	local px, py, facing
 	if SurvivorUI_HeroWorld then
 		px, py, facing = SurvivorUI_HeroWorld()
+	end
+	-- Reborn (3.3.5 client): the client itself knows the facing,
+	-- even standing still; the game may not send one.
+	if not facing and GetPlayerFacing then
+		facing = -GetPlayerFacing()
 	end
 	local heroX, heroY, span
 	if not px then
@@ -417,9 +436,25 @@ local function Draw()
 		local entry = { place = place, state = state, alive = state ~= "empty", name = Field(lair, "name", 3) or "?",
 			id = tonumber(Field(lair, "id", 4)) or 0 }
 		if state == "empty" then
-			entry.left = (tonumber(Field(lair, "left", 5)) or -1) - since
+			-- Reborn: no respawn countdown. Guardians do not come
+			-- back at the fixed lair point there, so a countdown
+			-- pinned to it misleads; the lair's place and distance
+			-- still show. (AZS_LAIRS.left is documented, but the
+			-- fixed-point respawn it describes is the original
+			-- game's behaviour.)
+			if not (SurvivorUI_RebornActive and SurvivorUI_RebornActive()) then
+				entry.left = (tonumber(Field(lair, "left", 5)) or -1) - since
+			end
 		elseif state == "awake" then
 			entry.share = healths[entry.id]
+			if not entry.share then
+				-- Reborn lairs carry their own hp/hpm; the unit
+				-- list may not name the guardian.
+				local hp, hpm = tonumber(Field(lair, "hp", 12)), tonumber(Field(lair, "hpm", 13))
+				if hp and hpm and hpm > 0 then
+					entry.share = hp / hpm
+				end
+			end
 		elseif healths[entry.id] and healths[entry.id] < 1 then
 			-- Hurt while the game still calls it asleep (feared or held from
 			-- the first hit, it never turned on the hero): a fight all the same.
@@ -466,7 +501,9 @@ local function Draw()
 		end
 		if entry.state == "empty" then
 			row.name:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
-			if entry.left and entry.left > 0 then
+			if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+				row.state:SetText("")
+			elseif entry.left and entry.left > 0 then
 				row.state:SetText(Clock(entry.left))
 			else
 				row.state:SetText(SurvivorUI_T("soon"))
@@ -474,7 +511,7 @@ local function Draw()
 			row.state:SetTextColor(RESPAWN[1], RESPAWN[2], RESPAWN[3])
 			row.color = MUTED
 		elseif entry.state == "awake" then
-			local share = healths[entry.id]
+			local share = entry.share
 			row.name:SetTextColor(AWAKE[1], AWAKE[2], AWAKE[3])
 			row.state:SetText(share and string.format("%d%%", share * 100 + 0.5) or SurvivorUI_T("AWAKE"))
 			row.state:SetTextColor(AWAKE[1], AWAKE[2], AWAKE[3])
@@ -747,7 +784,15 @@ local function Cell(entry)
 	if cell.empty then
 		cell.text = entry.left and entry.left > -1 and Clock(math.max(0, entry.left)) or nil
 	elseif cell.awake then
-		cell.text = entry.share and string.format("%d%%", entry.share * 100 + 0.5) or SurvivorUI_T("FIGHT")
+		if entry.share and entry.share < 1 then
+			cell.text = string.format("%d%%", entry.share * 100 + 0.5)
+		elseif SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+			-- Reborn calls every spawned guardian awake; only a
+			-- damaged one is in a fight. Undamaged: no word.
+			cell.text = nil
+		else
+			cell.text = entry.share and string.format("%d%%", entry.share * 100 + 0.5) or SurvivorUI_T("FIGHT")
+		end
 	end
 	return cell
 end

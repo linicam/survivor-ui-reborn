@@ -29,6 +29,12 @@ if SurvivorUI_Standby then return end
 local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 local FONT_BUMP = SurvivorUI_FONT_BUMP or 0
 
+-- A name with case and punctuation dropped ("Dread Lord" -> "dreadlord"),
+-- for matching the game's spellings that differ only so.
+local function LooseName(name)
+	return (string.gsub(string.lower(name or ""), "[^%a%d]", ""))
+end
+
 local WIDTH = 228
 local BAR_HEIGHT = 18           -- as the build list's rows
 local BAR_GAP = 2
@@ -1003,7 +1009,23 @@ do
 	end
 
 	function SurvivorUI_MeterPetIcon(name)
-		return name and summonIcons[name]
+		if not name then
+			return nil
+		end
+		if summonIcons[name] then
+			return summonIcons[name]
+		end
+		-- The meter may spell a summon without its space ("Dreadlord"
+		-- for "Dread Lord", as the game's summons name it).
+		local loose = LooseName(name)
+		if loose ~= "" then
+			for known, icon in pairs(summonIcons) do
+				if LooseName(known) == loose then
+					return icon
+				end
+			end
+		end
+		return nil
 	end
 
 	-- Whether the game's meter has a line of that name (AZS_METER, as sent).
@@ -1095,6 +1117,19 @@ local PETS = {
 	["Pets"] = "Ability_Hunter_BeastCall",        -- the game's meter's one line for a hunter's beasts
 }
 
+-- Pet icons by loose name too: the meter spells the Dread Lord
+-- "Dreadlord" in Reborn, and a miss here left its row English and
+-- iconless while every other summon translated.
+local PETS_LOOSE = {}
+for pet, icon in pairs(PETS) do
+	PETS_LOOSE[LooseName(pet)] = icon
+end
+
+local function PetIcon(name)
+	local loose = LooseName(name)
+	return PETS[name] or (loose ~= "" and PETS_LOOSE[loose] or nil)
+end
+
 -- What pets cast that the hero may not have, so no button or spellbook shows
 -- it: the Imp's Fireball, the Infernal's fall from the sky (Inferno: a great
 -- fireball, a meteor; not the Infernal's own icon, so its row and the
@@ -1109,14 +1144,14 @@ local PET_SPELLS = {
 -- and its spell; nil for anything else ("Magma Totem's Magma Totem").
 local function PetSpell(name)
 	local _, _, owner, spell = string.find(name or "", "^(.-)'s (.+)$")
-	if owner and PETS[owner] then
+	if owner and PetIcon(owner) then
 		return owner, spell
 	end
 end
 
 -- True for a pet's or a summon's name (Biggest Crits keeps it before its spell).
 function SurvivorUI_IsPet(name)
-	return PETS[English(name)] ~= nil
+	return PetIcon(English(name)) ~= nil
 end
 
 local function ColorOf(name)
@@ -1260,8 +1295,9 @@ local function IconOf(name)
 	if weapon then
 		return weapon
 	end
-	if PETS[name] then
-		return "Interface\\Icons\\"..PETS[name]
+	local petIcon = PetIcon(name)
+	if petIcon then
+		return "Interface\\Icons\\"..petIcon
 	end
 	-- A summon on a line of its own with no icon of ours: the game's for it.
 	local summoned = SurvivorUI_MeterPetIcon and SurvivorUI_MeterPetIcon(name)
@@ -1271,7 +1307,7 @@ local function IconOf(name)
 	-- "Imp's Fireball": the spell's icon, else its pet's.
 	local pet, spell = PetSpell(name)
 	if pet then
-		return IconOf(spell) or "Interface\\Icons\\"..PETS[pet]
+		return IconOf(spell) or "Interface\\Icons\\"..PetIcon(pet)
 	end
 	-- A spell of the build: its button's icon, read each time (cheap), never
 	-- kept: a reading in a wrong instant would stay the whole run.

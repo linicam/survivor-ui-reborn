@@ -29,7 +29,8 @@
 -- - Guardians' rings: where a sleeping guardian wakes, and how far from its
 --   lair an awake one lets you go before it gives up (the game's rule, read
 --   in its 0.139.2), with a warning in your last yards; on the minimap too
---   (MapPins.lua).
+--   (MapPins.lua). Original game only: in Reborn the rings are not drawn
+--   (the API publishes no wake/leash radii).
 --
 -- An enemy whose Survivor Plates plate shows (SurvivorPlates_PlateShows) is
 -- left to it: the plate names it and wears the mark drawn beside its bar.
@@ -125,7 +126,17 @@ local looks = 0                  -- counts the changes of look, for the dots to 
 local LINE_SHARE, PIECE_MOST, MOST_PIECES = 0.6, 14, 300
 local BAND_UV = 4 / 64
 
+local LEASH_KEYS = { leashWake = true, leashReset = true, leashWarn = true, leashMinimap = true }
+
 local function On(key)
+	-- Reborn: no guardians' rings, on the ground or the minimap. The
+	-- radii (WAKE 20, LEASH 97.5) are the original game's rule, read
+	-- from its 0.139.2; the Reborn API publishes no wake/leash radii,
+	-- so the circles would claim ranges the game never told. Lair
+	-- pins and marks (positions) stay.
+	if LEASH_KEYS[key] and SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+		return false
+	end
 	local value = SurvivorUIDB and SurvivorUIDB[key]
 	if value == nil then
 		return DEFAULTS[key]
@@ -420,14 +431,17 @@ local function ReadAll()
 	local lairs = {}
 	spots.lairs = lairs
 	-- When each empty lair is claimed again (AZS_LAIRS' "left", seconds from
-	-- its line, as Guardians.lua reads it).
+	-- its line, as Guardians.lua reads it). Not in Reborn: guardians do not
+	-- respawn at the fixed lair point there, so no countdown is shown.
 	local refill = {}
 	local since = AZS_LAIRS_UPDATED and (GetTime() - AZS_LAIRS_UPDATED) or 0
-	for index = 1, table.getn(AZS_LAIRS or {}) do
-		local lair = AZS_LAIRS[index]
-		local left = tonumber(Field(lair, "left", 5))
-		if left then
-			refill[tonumber(Field(lair, "index", 1)) or index] = GetTime() + left - since
+	if not (SurvivorUI_RebornActive and SurvivorUI_RebornActive()) then
+		for index = 1, table.getn(AZS_LAIRS or {}) do
+			local lair = AZS_LAIRS[index]
+			local left = tonumber(Field(lair, "left", 5))
+			if left then
+				refill[tonumber(Field(lair, "index", 1)) or index] = GetTime() + left - since
+			end
 		end
 	end
 	-- The enemies first, each by its unit, so a lair's guardian is found.
@@ -474,7 +488,11 @@ local function ReadAll()
 				spot = { anchor = entry.anchorId, attachment = "position", lift = 3, look = "lair", name = entry.name,
 					empty = true, refill = refill[tonumber(entry.lairIndex)] }
 			elseif entry.state ~= "asleep" and entry.state ~= "awake" then
-				spot = nil
+				-- A state this build does not name (Reborn may call
+				-- a spawned guardian something else): still mark
+				-- the lair, as an alive one.
+				spot = { anchor = entry.anchorId, attachment = "position", lift = 3, look = "lair", arrow = true,
+					name = entry.name, awake = false }
 			elseif guardian and guardian.spot then
 				guardian.spot.lair = entry.name
 			elseif guardian then
@@ -742,13 +760,17 @@ local function Paint(mark, spot, x, y, yards)
 		if spot.empty then
 			icon:SetVertexColor(0.6, 0.6, 0.6, 0.6)
 			name:SetTextColor(0.55, 0.55, 0.55)
-			local left = spot.refill and spot.refill - GetTime()
-			mark.yards:SetText(left and left > 0 and Clock(left) or (SurvivorUI_T and SurvivorUI_T("soon") or "soon"))
-			mark.yards:SetTextColor(RESPAWN[1], RESPAWN[2], RESPAWN[3])
-			mark.yards:ClearAllPoints()
-			mark.yards:SetPoint("TOP", mark, "CENTER", 0, -12)
-			mark.yards:Show()
-			yards = nil
+			-- In Reborn there is no refill countdown (see ReadAll):
+			-- the distance below shows instead.
+			if spot.refill then
+				local left = spot.refill - GetTime()
+				mark.yards:SetText(left and left > 0 and Clock(left) or (SurvivorUI_T and SurvivorUI_T("soon") or "soon"))
+				mark.yards:SetTextColor(RESPAWN[1], RESPAWN[2], RESPAWN[3])
+				mark.yards:ClearAllPoints()
+				mark.yards:SetPoint("TOP", mark, "CENTER", 0, -12)
+				mark.yards:Show()
+				yards = nil
+			end
 		end
 	elseif look == "downed" then
 		local pulse = 1 + 0.12 * math.sin(GetTime() * 5)

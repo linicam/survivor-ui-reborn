@@ -234,6 +234,24 @@ unchanged in substance); the full audit is in the research notes
   guardian tracking are untouched. Dead rows show only the second
   the boss fell, when seen. Original-game behaviour is preserved
   behind the same Reborn gate.
+- **Guardians**: the "8:00前 0/4" line is the original game's
+  "Slay four guardians before 8:00" achievement (hardcoded
+  `GOAL=4, GOAL_TIME=480`). The Reborn API documents no such goal
+  (no field carries it; `AZS_RUN` has only guardians slain/awake
+  and the lair count), so the line is no longer drawn in Reborn.
+  What stays is all Reborn data: lair positions (arrows/distance)
+  and guardian health while awake. The respawn countdowns at the
+  fixed lair point are removed in Reborn: guardians do not come
+  back at that point there (in-game report, 2026-11-26), so a
+  countdown pinned to it misleads, even though `AZS_LAIRS.left`
+  is documented. The
+  `/20:00` in the clock is `AZS_ZONE.len` ("run seconds to the
+  final boss"), a real Reborn field, and stays. The guardians'
+  wake/leash rings (the dotted circles on the ground and the
+  minimap) are likewise original-game constants (WAKE 20, LEASH
+  97.5, read from the original's 0.139.2) with no Reborn API
+  basis, and are no longer drawn in Reborn; lair pins and
+  position marks stay.
 - **Localization**: the zhCN translations were not missing — they
   were not delivered. Every load-time label (`This Run`, the 11 stat
   rows, `Biggest Crits`, `Reset`, `Stats`, `Build`, `Info`, `Rank`,
@@ -262,18 +280,21 @@ unchanged in substance); the full audit is in the research notes
   per-upgrade data at all (no `AZS_UPGRADES` table, no upgrade
   event; `AZS_PickCard` is an action, not a feed; only `rank` is
   exposed). Individual upgrade identity therefore cannot be
-  restored; what is restored is the honest part: the rank-history
+  restored; what is restored is the honest part: the tooltip
   helper (`SurvivorUI_RebornAbilityTooltipLines`, dead code in
   Round 1) is now wired into both tooltip paths, so hovering shows
-  the base description, `Passive` where applicable, current rank,
-  each rank rise observed this run with its run-clock timestamp
-  (e.g. `Rank 1 → 2 at 1:12`), and the note that individual
-  choices are not exposed. Rank 11 is shown as a rank, never as a
-  pick count. Rank history is in-memory only and is lost on
-  `/reload`. Caveat: the slotted (action-button) path appends lines
-  after `SetAction`; `AbilityTooltip.lua`'s re-layout watcher may
-  strip appended lines in-game — the button-less (passive) path is
-  the reliable one and needs a live check.
+  the base description, `Passive` where applicable, and the
+  current rank. Rank-rise timestamps were shown briefly and then
+  removed (2026-11-26): without the concrete upgrade effects they
+  are clutter, not information. Rank 11 is shown as a rank, never
+  as a pick count. Caveat: the slotted (action-button) path
+  appends lines after `SetAction`; `AbilityTooltip.lua`'s
+  re-layout watcher may strip appended lines in-game — the
+  button-less (passive) path is the reliable one.
+- **Meter summon names**: the Reborn meter spells the Dread Lord
+  "Dreadlord" (no space), which missed the pet-name table and left
+  its row English and iconless while other summons translated.
+  Pet/summon matching is now loose (case/punctuation-insensitive).
 - **Racial section removed (Reborn only)**: the screenshot's
   Demonic Knowledge was not in the racial row at all — it was the
   passive row directly under it, rendered without a label. The
@@ -304,11 +325,15 @@ unchanged in substance); the full audit is in the research notes
   loadout gave one; rarity colour is used only when a real rarity
   is known, never invented from the rank/level number. Per-item
   effects are still genuinely unavailable: the API documents only
-  aggregate `AZS_STATS` `g*` shares, and the loadout/`AZSGEAR`
-  row shapes are unpublished. What the numbers 55 / 63 / 1 mean
-  is still unverified — run `/sui reborn jewelry raw` in a run
-  and send the output (see Diagnostics); it dumps every raw field
-  of each loadout entry, its source, and each `AZSGEAR` row.
+  aggregate `AZS_STATS` `g*` shares. The loadout shape is now
+  verified in game (2026-11-26, `/sui reborn jewelry raw`):
+  `runJewelry[i] = { category, slotId, sourceKey = "jewel:<slot>",
+  itemInstanceKey }`, `sources[sourceKey] = { name (localized),
+  rank, icon (a table), itemKey, ... }`, and `AZSGEAR` is absent.
+  So the numbers after the slot word (55/63/1, later 68/43/1) are
+  the source `rank`; the slot comes from `sourceKey` (with
+  `category` as fallback); the icon path is read out of the icon
+  table defensively. No rarity field exists in the payload.
   Rarity for rings/trinkets does not exist in the official static
   data (`jewelry.json` has key/name/icon/slot only), so grey rows
   for those pieces mean "rarity unknown", not "common".

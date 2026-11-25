@@ -407,9 +407,7 @@ local function Row(index)
 		end
 		local reborn = SurvivorUI_RebornActive and SurvivorUI_RebornActive()
 		-- The ability's lines from the Reborn compat layer, when the
-		-- snapshot knows it: base description, rank, rank rises
-		-- observed this run with timestamps, and the honest note that
-		-- individual upgrade choices are not exposed by the API.
+		-- snapshot knows it: base description, passive flag, rank.
 		local function RebornLines()
 			if not reborn or not SurvivorUI_RebornAbilityTooltipLines then
 				return nil
@@ -1440,6 +1438,59 @@ local function RankOrder(spells, slotted)
 	return order
 end
 
+-- Reborn: the build list in skill-bar order (the game's AZS_SPELLS
+-- order), so the list reads as the bar does. Actives on no button
+-- follow the slotted ones (the account-talent active on button 7),
+-- racial actives last (button 12).
+local function BarOrder(spells, slotted)
+	local barIndex = {}
+	local bar = AZS_SPELLS or {}
+	for index = 1, table.getn(bar) do
+		barIndex[Field(bar[index], "key", 1)] = index
+	end
+	local function Group(index)
+		if barIndex[Field(spells[index], "key", 1)] then
+			return 0
+		end
+		if Field(spells[index], "kind", 5) == "racial" then
+			return 2
+		end
+		return 1
+	end
+	local order = {}
+	for index = 1, slotted do
+		table.insert(order, index)
+	end
+	table.sort(order, function(a, b)
+		local ga, gb = Group(a), Group(b)
+		if ga ~= gb then
+			return ga < gb
+		end
+		if ga == 0 then
+			return barIndex[Field(spells[a], "key", 1)] < barIndex[Field(spells[b], "key", 1)]
+		end
+		return a < b
+	end)
+	return order
+end
+
+-- Reborn passives: snapshot order, racial passives last.
+local function PassiveOrder(passives)
+	local order = {}
+	for index = 1, table.getn(passives) do
+		table.insert(order, index)
+	end
+	table.sort(order, function(a, b)
+		local ra = Field(passives[a], "kind", 5) == "racial"
+		local rb = Field(passives[b], "kind", 5) == "racial"
+		if ra ~= rb then
+			return rb
+		end
+		return a < b
+	end)
+	return order
+end
+
 -- Roman ranks: the rank column as wide as the longest of them needs
 -- (LXXXVIII), a number's at least; measured on a word of its own (at the
 -- ranks' size, the piece's text size too) as the ranks change, the rows laid
@@ -1489,6 +1540,14 @@ local function SpellSlotFor(key)
 			return Slot(index, count)
 		end
 	end
+	-- Reborn: actives the bar layout does not carry sit on the extra
+	-- buttons (7 account-talent, 12 racial).
+	if SurvivorUI_RebornAbilityByKey then
+		local ability = SurvivorUI_RebornAbilityByKey(key)
+		if ability and not ability.passive then
+			return ability.kind == "racial" and 12 or 7
+		end
+	end
 	return nil
 end
 
@@ -1506,7 +1565,7 @@ local function RebornBuild()
 	if not data.complete then
 		return nil
 	end
-	return data.actives, nil, data.passives
+	return data.actives, nil, data.passives, data.all
 end
 
 local function Draw()
@@ -1515,6 +1574,9 @@ local function Draw()
 	-- build changes; this call is throttled inside the compat layer.
 	if SurvivorUI_RebornRequestAbilities then
 		SurvivorUI_RebornRequestAbilities(false)
+	end
+	if SurvivorUI_RebornPlaceRacialButton then
+		SurvivorUI_RebornPlaceRacialButton()
 	end
 	if SurvivorUI_RebornCheckRun then
 		SurvivorUI_RebornCheckRun()
@@ -1533,13 +1595,59 @@ local function Draw()
 	-- active/passive lists. Otherwise the original assumption holds:
 	-- AZS_SPELLS is 6 slotted actives plus the racial last.
 	local spells, count, slotted, racialEntry, passiveEntries
-	local rebornActives, rebornRacial, rebornPassives = RebornBuild()
+	local rebornActives, rebornRacial, rebornPassives, rebornAll = RebornBuild()
 	if rebornActives then
-		spells = rebornActives
+		-- One list in bar order: actives follow the bar, passives sit
+		-- where the snapshot learned them among the actives, and a
+		-- racial passive closes the list.
+		local barOrder = BarOrder(rebornActives, table.getn(rebornActives))
+		local queue, passiveByKey = {}, {}
+		for place = 1, table.getn(barOrder) do
+			table.insert(queue, rebornActives[barOrder[place]])
+		end
+		for index = 1, table.getn(rebornPassives) do
+			passiveByKey[Field(rebornPassives[index], "key", 1)] = rebornPassives[index]
+		end
+		local combined, deferred, emitted = {}, {}, {}
+		local nextActive = 1
+		local function Emit(entry)
+			local key = Field(entry, "key", 1)
+			if key and not emitted[key] then
+				emitted[key] = true
+				table.insert(combined, entry)
+			end
+		end
+		for index = 1, table.getn(rebornAll or {}) do
+			local entry = rebornAll[index]
+			local passive = passiveByKey[Field(entry, "key", 1)]
+			if passive then
+				if Field(passive, "kind", 5) == "racial" then
+					table.insert(deferred, passive)
+				else
+					Emit(passive)
+				end
+			elseif queue[nextActive] then
+				Emit(queue[nextActive])
+				nextActive = nextActive + 1
+			end
+		end
+		while queue[nextActive] do
+			Emit(queue[nextActive])
+			nextActive = nextActive + 1
+		end
+		for index = 1, table.getn(rebornPassives) do
+			if Field(rebornPassives[index], "kind", 5) ~= "racial" then
+				Emit(rebornPassives[index])
+			end
+		end
+		for index = 1, table.getn(deferred) do
+			Emit(deferred[index])
+		end
+		spells = combined
 		count = table.getn(spells)
 		slotted = count
 		racialEntry = nil
-		passiveEntries = rebornPassives
+		passiveEntries = {}
 	else
 		spells = AZS_SPELLS or {}
 		count = table.getn(spells)
@@ -1548,13 +1656,21 @@ local function Draw()
 		racialEntry = count >= 1 and spells[count] or nil
 		passiveEntries = {}
 	end
-	-- The three highest ranks among the slotted spells, ties to the earlier
-	-- slot: the first bold with a full border, the second a full border, the
-	-- third a faint one; the rest plain. The list itself runs in that order.
-	local order = RankOrder(spells, slotted)
+	-- Reborn: skill-bar order, so the list reads as the bar does.
+	-- Original game: highest rank first. Reborn actives can number
+	-- seven (the account-talent active ahead of the racial active).
+	local order = {}
+	if rebornActives then
+		for index = 1, count do
+			order[index] = index
+		end
+	else
+		order = RankOrder(spells, slotted)
+	end
+	local activeSlots = rebornActives and count or SLOTS
 	-- Rows from the highest rank down; each spell keeps its own action button
 	-- for its icon.
-	for place = 1, SLOTS do
+	for place = 1, activeSlots do
 		local row = Row(place)
 		row.icon:SetVertexColor(1, 1, 1)
 		local index = order[place]
@@ -1569,10 +1685,11 @@ local function Draw()
 		end
 	end
 	-- Every spell the same border in its color; the order says the rest.
-	for slot = 1, SLOTS do
+	for slot = 1, activeSlots do
 		local row = rows[slot]
 		if order[slot] then
-			Border(row, row.color, 0.6)
+			local entry = spells[order[slot]]
+			Border(row, row.color, Field(entry, "passive", 4) and 0.3 or 0.6)
 		else
 			Border(row, nil, 0)
 		end
@@ -1591,19 +1708,15 @@ local function Draw()
 		racialRow.base:Hide()
 		racialRow:Hide()
 	end
-	-- Passives (Reborn only): one row each, in rank order, directly
-	-- under the actives. The list grows to hold them; with none it
-	-- keeps its height (6 rows in Reborn, 7 with the racial in the
-	-- original game). Each row carries the "(passive)" tag (Fill).
+	-- Passives (Reborn only): one row each, snapshot order with
+	-- racial passives last, directly under the actives.
 	local passiveCount = table.getn(passiveEntries)
-	local passiveBase = rebornActives and SLOTS or SLOTS + 1
-	table.sort(passiveEntries, function(a, b)
-		return (tonumber(Field(a, "rank", 3)) or 0) > (tonumber(Field(b, "rank", 3)) or 0)
-	end)
+	local passiveBase = rebornActives and activeSlots or SLOTS + 1
+	local passiveOrder = PassiveOrder(passiveEntries)
 	for place = 1, passiveCount do
 		local row = Row(passiveBase + place)
 		row.icon:SetVertexColor(1, 1, 1)
-		Fill(row, passiveEntries[place], SpellSlotFor(Field(passiveEntries[place], "key", 1)), false)
+		Fill(row, passiveEntries[passiveOrder[place]], SpellSlotFor(Field(passiveEntries[passiveOrder[place]], "key", 1)), false)
 		Border(row, row.color, 0.3)
 	end
 	for index = passiveBase + passiveCount + 1, table.getn(rows) do
@@ -1614,11 +1727,16 @@ local function Draw()
 	if passiveCount > 0 then
 		list:SetHeight(TITLE_HEIGHT + HEAD_HEIGHT + (passiveBase + passiveCount) * ROW_HEIGHT + 6)
 	elseif rebornActives then
-		list:SetHeight(TITLE_HEIGHT + HEAD_HEIGHT + SLOTS * ROW_HEIGHT + 6)
+		list:SetHeight(TITLE_HEIGHT + HEAD_HEIGHT + activeSlots * ROW_HEIGHT + 6)
 	else
 		list:SetHeight(LIST_HEIGHT)
 	end
-	list.count:SetText((slotted >= SLOTS and "|cffff8080" or "|cffd0d0d0")..math.min(slotted, SLOTS).." / "..SLOTS.."|r")
+	if rebornActives then
+		local cap = math.max(SLOTS, math.min(table.getn(rebornActives), 8))
+		list.count:SetText((table.getn(rebornActives) >= cap and "|cffff8080" or "|cffd0d0d0")..math.min(table.getn(rebornActives), cap).." / "..cap.."|r")
+	else
+		list.count:SetText((slotted >= activeSlots and "|cffff8080" or "|cffd0d0d0")..math.min(slotted, activeSlots).." / "..activeSlots.."|r")
+	end
 	rankWidth = RankRoom()
 end
 
@@ -2614,7 +2732,7 @@ function SurvivorUI_BuildRows()
 		spells = AZS_SPELLS
 		count = table.getn(spells)
 	end
-	local order = RankOrder(spells, rebornActives and count or math.max(0, count - 1))
+	local order = rebornActives and BarOrder(spells, count) or RankOrder(spells, math.max(0, count - 1))
 	local showRange, showCooldown = Shows()
 	local shown = {}
 	local function Add(entry, actionSlot, racial)
@@ -2640,7 +2758,7 @@ function SurvivorUI_BuildRows()
 		end
 		table.insert(shown, row)
 	end
-	for place = 1, SLOTS do
+	for place = 1, rebornActives and math.max(SLOTS, math.min(count, 8)) or SLOTS do
 		if order[place] then
 			if rebornActives then
 				Add(spells[order[place]], SpellSlotFor(Field(spells[order[place]], "key", 1)), false)
@@ -2655,8 +2773,9 @@ function SurvivorUI_BuildRows()
 		if rebornRacial then
 			Add(rebornRacial, SpellSlotFor(Field(rebornRacial, "key", 1)), true)
 		end
+		local passiveOrder = PassiveOrder(rebornPassives)
 		for index = 1, table.getn(rebornPassives) do
-			Add(rebornPassives[index], SpellSlotFor(Field(rebornPassives[index], "key", 1)), false)
+			Add(rebornPassives[passiveOrder[index]], SpellSlotFor(Field(rebornPassives[passiveOrder[index]], "key", 1)), false)
 		end
 	elseif count >= 1 then
 		Add(spells[count], Slot(count, count), true)

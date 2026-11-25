@@ -161,6 +161,14 @@ SurvivorUI_LANGUAGE_FONTS = {
 }
 
 local BAR_BUTTONS = { 1, 2, 3, 4, 5, 6, 12 }     -- 12 is the = key
+-- Reborn adds button 7 before the racial: an account-talent active
+-- (Divine Steed) sits there, ahead of the racial active on 12.
+local function BarButtons()
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+		return { 1, 2, 3, 4, 5, 6, 7, 12 }
+	end
+	return BAR_BUTTONS
+end
 local BUTTON_SIZE = 36
 local BUTTON_GAP = 2
 local ROW_BELOW_CENTER = 150                    -- the row sits this far under the hero, who stands mid-screen
@@ -931,7 +939,7 @@ row:SetFrameStrata("LOW")
 -- slot. These are frames of the row, not textures of the buttons: a texture
 -- added to a button's own background layer draws over its icon.
 row.slots = {}
-for position = 1, table.getn(BAR_BUTTONS) do
+for position = 1, 8 do
 	local slot = CreateFrame("Frame", nil, row)
 	row.slots[position] = slot
 	slot:SetWidth(BUTTON_SIZE)
@@ -939,6 +947,72 @@ for position = 1, table.getn(BAR_BUTTONS) do
 	slot:SetPoint("LEFT", row, "LEFT", (position - 1) * (BUTTON_SIZE + BUTTON_GAP), 0)
 	AddBorder(slot)
 	AddBacking(slot)
+end
+
+-- Reborn's extra actives (button 7 account-talent, button 12 racial)
+-- are not placed by the game, and PickupSpell cannot pick up spells
+-- the spellbook does not hold (selected racials, account talents).
+-- Secure buttons over those two slots cast them directly; their
+-- spell is set out of combat by SurvivorUI_SetExtraButton.
+do
+	row.extraButtons = {}
+	for _, spec in pairs({ { button = 7, position = 7, key = "7" }, { button = 12, position = 8, key = "=" } }) do
+		local frame = CreateFrame("Button", "SurvivorUIExtra" .. spec.button, row, "SecureActionButtonTemplate")
+		frame:SetWidth(BUTTON_SIZE)
+		frame:SetHeight(BUTTON_SIZE)
+		frame:SetPoint("LEFT", row, "LEFT", (spec.position - 1) * (BUTTON_SIZE + BUTTON_GAP), 0)
+		frame:SetAttribute("type", "spell")
+		frame.icon = frame:CreateTexture(nil, "ARTWORK")
+		frame.icon:SetAllPoints(frame)
+		frame.cooldown = CreateFrame("Cooldown", nil, frame, "CooldownFrameTemplate")
+		frame.cooldown:SetAllPoints(frame)
+		-- The cooldown sweep must refresh in combat too, when the
+		-- secure attribute may not change: poll the spell's cooldown.
+		frame:SetScript("OnUpdate", function(self, elapsed)
+			self.cdElapsed = (self.cdElapsed or 0) + (elapsed or 0)
+			if self.cdElapsed < 0.1 or not self.spell then
+				return
+			end
+			self.cdElapsed = 0
+			if GetSpellCooldown and CooldownFrame_SetTimer then
+				local start, duration = GetSpellCooldown(self.spell)
+				if start and duration then
+					CooldownFrame_SetTimer(self.cooldown, start, duration, 1)
+				end
+			end
+		end)
+		frame:Hide()
+		if SetBindingClick then
+			SetBindingClick(spec.key, "SurvivorUIExtra" .. spec.button)
+		end
+		row.extraButtons[spec.button] = frame
+	end
+end
+
+function SurvivorUI_SetExtraButton(button, spell, icon)
+	local frame = row.extraButtons[button]
+	if not frame then
+		return
+	end
+	if not spell then
+		frame:Hide()
+		return
+	end
+	if InCombatLockdown and InCombatLockdown() then
+		return
+	end
+	frame:SetAttribute("spell", spell)
+	frame.spell = spell
+	if icon then
+		frame.icon:SetTexture(icon)
+	end
+	frame:Show()
+	if GetSpellCooldown and CooldownFrame_SetTimer then
+		local start, duration = GetSpellCooldown(spell)
+		if start and duration then
+			CooldownFrame_SetTimer(frame.cooldown, start, duration, 1)
+		end
+	end
 end
 
 ------------------------------------------------------------------------------
@@ -1372,9 +1446,18 @@ local function LayoutBar()
 		end
 	end
 
+	local buttons = BarButtons()
+	row:SetWidth(table.getn(buttons) * (BUTTON_SIZE + BUTTON_GAP) - BUTTON_GAP)
+	for position = 1, table.getn(row.slots) do
+		if position <= table.getn(buttons) then
+			row.slots[position]:Show()
+		else
+			row.slots[position]:Hide()
+		end
+	end
 	local positions = {}
-	for position = 1, table.getn(BAR_BUTTONS) do
-		positions[BAR_BUTTONS[position]] = position
+	for position = 1, table.getn(buttons) do
+		positions[buttons[position]] = position
 	end
 
 	-- A stance bar's buttons, when a class has one, sit where the main bar's do.

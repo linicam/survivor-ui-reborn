@@ -1165,7 +1165,7 @@ local function Draw(game, phase)
 		length = Num(game.fin)
 	end
 	local endless = Num(game.endl) == 1
-	if endless or length <= 0 then
+	if endless or length <= 0 or (SurvivorUI_RebornActive and SurvivorUI_RebornActive()) then
 		head.clock:SetText(Clock(seconds))
 	else
 		head.clock:SetText(Clock(seconds).." |cff8a8a8a/|r |cffb0b0b0"..Clock(length).."|r")
@@ -1379,6 +1379,45 @@ local function Draw(game, phase)
 		y = Put(slainLine, y, 13)
 	else
 		head.endlessSlain:Hide()
+	end
+	-- An active curse (Reborn), under the boss lines.
+	if SurvivorUI_RebornCurses then
+		local curseItems = SurvivorUI_RebornCurses().items
+		if table.getn(curseItems) > 0 then
+			if not head.curseLine then
+				head.curseLine = BossLine(table.getn(head.bosses) + 1)
+				head.bosses[table.getn(head.bosses)] = nil
+			end
+			local parts = {}
+			for i = 1, table.getn(curseItems) do
+				table.insert(parts, curseItems[i].text .. " " .. string.format("%ds", math.ceil(curseItems[i].left)))
+			end
+			head.curseLine.name:SetText(SurvivorUI_T("Curse") .. "：" .. table.concat(parts, " · "))
+			head.curseLine.name:SetTextColor(1, 0.45, 0.45)
+			head.curseLine.time:SetText("")
+			y = Put(head.curseLine, y, 13)
+		elseif head.curseLine then
+			head.curseLine:Hide()
+		end
+	end
+	-- Rift crystals (Reborn): AZS_RIFT carries the count only
+	-- (got/need/st, verified in game 2026-11-26); positions are
+	-- not in it, so this is a counter, not guidance.
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() and type(AZS_RIFT) == "table" then
+		local got, need = tonumber(AZS_RIFT.got), tonumber(AZS_RIFT.need)
+		if got and need and need > 0 then
+			if not head.riftLine then
+				head.riftLine = BossLine(table.getn(head.bosses) + 1)
+				head.bosses[table.getn(head.bosses)] = nil
+			end
+			head.riftLine.name:SetText(SurvivorUI_T("Rift crystals"))
+			head.riftLine.name:SetTextColor(0.75, 0.55, 1.00)
+			head.riftLine.time:SetText(got .. " / " .. need)
+			head.riftLine.time:SetTextColor(1, 1, 1)
+			y = Put(head.riftLine, y, 13)
+		elseif head.riftLine then
+			head.riftLine:Hide()
+		end
 	end
 	-- The guardians' bar, when it stands here (Guardians.lua).
 	local above = y
@@ -1603,6 +1642,33 @@ end)
 
 ------------------------------------------------------------------------------
 -- More on hover: the time to the final boss, the run's settings.
+
+-- The stock zone-transition text ("Netherstorm") uses the client's
+-- map name, English on Reborn even in a zhCN client, while the run
+-- itself names the zone localized (AZS_ZONE.zname/zsub). Show the
+-- run's names there instead, in Reborn only.
+do
+	local frame = getglobal("ZoneTextFrame")
+	local zoneText = getglobal("ZoneTextString")
+	local subText = getglobal("SubZoneTextString")
+	if frame and zoneText then
+		local stockOnShow = frame:GetScript("OnShow")
+		frame:SetScript("OnShow", function()
+			if stockOnShow then
+				stockOnShow()
+			end
+			if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+				local zone = AZS_ZONE or {}
+				if zone.zname and zone.zname ~= "" then
+					zoneText:SetText(zone.zname)
+				end
+				if subText and zone.zsub and zone.zsub ~= "" then
+					subText:SetText(zone.zsub)
+				end
+			end
+		end)
+	end
+end
 
 local MOD_NAMES = { "Enemy density", "Enemy health", "Enemy damage", "Enemy speed" }
 head:SetScript("OnEnter", function()

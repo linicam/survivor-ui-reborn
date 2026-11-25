@@ -112,7 +112,7 @@ eq("boss rift: latest minute", nb and nb.atLatestMinute, 5)
 eq("boss rift: name", nb and nb.name, "Rift Boss")
 eq("boss rift: number", nb and nb.number, 3)
 local text, isRift = SurvivorUI_RebornNextBossText(nb)
-eq("boss rift: text", text, "Rift 42%")
+eq("boss rift: text", text, "42%")
 check("boss rift: text is rift", isRift == true)
 
 resetGame()
@@ -121,7 +121,7 @@ AZS_RUN = { ph = "playing", t = 10, nbs = "known", nbm = "rift", nb = -1, nbn = 
 nb = SurvivorUI_RebornNextBoss()
 check("boss rift missing: mode", nb and nb.mode == "rift")
 eq("boss rift missing: rift is nil, not 0", nb and nb.rift, nil)
-eq("boss rift missing: text", SurvivorUI_RebornNextBossText(nb), "Rift")
+eq("boss rift missing: text", SurvivorUI_RebornNextBossText(nb), "")
 
 resetGame()
 AZS_RUN = { ph = "playing", t = 300, nbs = "known", nbm = "time", nb = 75, nbc = 2, nbn = "Timed Boss" }
@@ -331,13 +331,21 @@ eq("jewelry empty shape: source none", jew.source, "none")
 eq("jewelry empty shape: items empty", table.getn(jew.items), 0)
 
 -- ===========================================================================
--- Curses (VERIFIED: not documented)
+-- Curses (VERIFIED in game: kind="curse" banner + AZS_BUFFS row)
 -- ===========================================================================
 resetGame()
 local curses = SurvivorUI_RebornCurses()
-check("curses: not supported", curses.supported == false)
-eq("curses: no items invented", table.getn(curses.items), 0)
-check("curses: reason explains the blocker", curses.reason ~= nil and string.find(curses.reason, "not documented") ~= nil or string.find(curses.reason, "No curse") ~= nil)
+check("curses: supported", curses.supported == true)
+eq("curses: no items without a banner", table.getn(curses.items), 0)
+AZS_BANNERS = { { kind = "curse", boss = false, name = "", time = 100,
+	text = "Проклятие тяготеет над тобой: орда накатывает волной (20 с)!" } }
+AZS_RequestAbilities = function() end
+AZS_BUFFS = { { spell = 47241, left = 10 } }
+AZS_GetRunTime = function() return 110 end
+curses = SurvivorUI_RebornCurses()
+eq("curses: one active item", table.getn(curses.items), 1)
+eq("curses: effect translated", curses.items[1].text, "敌潮涌动")
+eq("curses: countdown from buff", curses.items[1].left, 10)
 
 -- ===========================================================================
 -- Run reset (VERIFIED run id)
@@ -388,8 +396,9 @@ for i = 1, table.getn(data.actives) do keys[data.actives[i].key] = true end
 check("round2 racial: berserking (cdmax 60, cd 0) is active", keys["berserking"] == true)
 check("round2 racial: demonic empowerment is active", keys["demonic_empowerment"] == true)
 
--- Rank rises observed this run reach the tooltip; rank 11 is shown as a
--- rank, never as a pick count.
+-- Rank rises are recorded for diagnostics but never shown in the
+-- tooltip: without concrete upgrade effects, rise timestamps are
+-- clutter. Rank 11 is shown as a rank, never as a pick count.
 AZS_RUN.t = 72
 AZS_ABILITIES[2].rank = 2 -- empowerment 1 -> 2 at 1:12
 AZS_ABILITIES_UPDATED = 2
@@ -400,8 +409,8 @@ local joined = ""
 for i = 1, table.getn(lines) do joined = joined .. "|" .. lines[i].text end
 check("round2 tooltip: base text", string.find(joined, "Empowers your demon.", 1, true) ~= nil)
 check("round2 tooltip: rank line", string.find(joined, "Rank 2", 1, true) ~= nil)
-check("round2 tooltip: history line with timestamp", string.find(joined, "Rank 1", 1, true) ~= nil and string.find(joined, "1:12", 1, true) ~= nil)
-check("round2 tooltip: honest note", string.find(joined, "Individual upgrade choices are not exposed", 1, true) ~= nil)
+check("round2 tooltip: no history lines", string.find(joined, "1:12", 1, true) == nil)
+check("round2 tooltip: no upgrade note", string.find(joined, "Individual upgrade choices are not exposed", 1, true) == nil)
 check("round2 tooltip: no passive line for active", string.find(joined, "Passive", 1, true) == nil)
 local dk = SurvivorUI_RebornAbilityByKey("demonic_knowledge")
 local lines2 = SurvivorUI_RebornAbilityTooltipLines(dk)
@@ -453,7 +462,7 @@ local lines = SurvivorUI_RebornProbe()
 check("probe: returns lines", type(lines) == "table" and table.getn(lines) > 5)
 local joined = table.concat(lines, "\n")
 check("probe: mentions rift", string.find(joined, "rift") ~= nil)
-check("probe: mentions curses unsupported", string.find(joined, "curses: supported=false") ~= nil)
+check("probe: mentions curses supported", string.find(joined, "curses: supported=true") ~= nil)
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end
