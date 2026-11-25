@@ -168,6 +168,10 @@ function SurvivorUI_RebornRunId()
 end
 
 local lastRunId = nil
+local activeCurses = {}
+local seenCurseIds = {}
+local capturedBanners = {}
+local bannerHandlerRegistered = false
 local resetWatchers = {}
 
 -- Modules with per-run caches register here; they are called (pcall) when
@@ -188,6 +192,8 @@ local function ResetOwnCaches()
 	jewelryStamp = nil
 	jewelryError = nil
 	lastLoadoutAt = 0
+	activeCurses = {}
+	seenCurseIds = {}
 end
 
 -- Call on every draw / poll that already runs: cheap (one string compare).
@@ -1099,9 +1105,22 @@ local function CurseEffectText(text)
 			return CURSE_EFFECTS[i][2]
 		end
 	end
-	local pct = string.match(text, "исцеление снижено на (%d+)%%")
-	if pct then
-		return "治疗效果降低" .. pct .. "%"
+	-- The documented curse categories (runs-and-zones guide): faster
+	-- enemies, a faster and thicker horde, more damage taken, healing
+	-- cut. Match Russian stems and carry the banner's own percent.
+	local pct = string.match(text, "(%d+)%%")
+	local suffix = pct and (pct .. "%") or ""
+	if string.find(text, "исцеление", 1, true) or string.find(text, "лечение", 1, true) then
+		return "治疗效果降低" .. suffix
+	end
+	if string.find(text, "получаемый урон", 1, true) or string.find(text, "урон по вам", 1, true) then
+		return "受到伤害提高" .. suffix
+	end
+	if string.find(text, "скорость врагов", 1, true) or string.find(text, "враги быстрее", 1, true) then
+		return "敌人移动速度提高" .. suffix
+	end
+	if string.find(text, "орда", 1, true) then
+		return "敌潮增强" .. suffix
 	end
 	pct = string.match(text, "урон снижен на (%d+)%%")
 	if pct then
@@ -1118,9 +1137,6 @@ local function CurseEffectText(text)
 	return nil
 end
 
--- The latched curse: banners scroll off the kept list, so the curse
--- is remembered by banner id until its own expiry.
-local latchedCurse = nil
 local function CurseDuration(text)
 	local minutes = tonumber(string.match(text, "%((%d+)%s*мин"))
 	if minutes then
@@ -1129,39 +1145,84 @@ local function CurseDuration(text)
 	return tonumber(string.match(text, "%((%d+)")) or 0
 end
 
+local function DumpBannerValue(value, depth)
+	if type(value) ~= "table" then
+		return tostring(value)
+	end
+	if depth >= 2 then
+		return "{...}"
+	end
+	local parts = {}
+	for k, v in pairs(value) do
+		table.insert(parts, tostring(k) .. "=" .. DumpBannerValue(v, depth + 1))
+	end
+	table.sort(parts)
+	return "{" .. table.concat(parts, ",") .. "}"
+end
+
+local function LatchCurseBanner(banner)
+	if type(banner) ~= "table" then
+		return
+	end
+	table.insert(capturedBanners, DumpBannerValue(banner, 0))
+	if table.getn(capturedBanners) > 20 then
+		table.remove(capturedBanners, 1)
+	end
+	local text = Field(banner, "text", 5) or ""
+	if Field(banner, "kind", 2) ~= "curse" or not string.find(text, "Проклятие", 1, true) then
+		return
+	end
+	local id = Field(banner, "id", 1)
+	local key = id ~= nil and tostring(id) or text
+	if seenCurseIds[key] then
+		return
+	end
+	seenCurseIds[key] = true
+	local now = AZS_GetRunTime and AZS_GetRunTime() or nil
+	table.insert(activeCurses, {
+		id = id, text = text,
+		at = tonumber(Field(banner, "time", 6)) or now or 0,
+		duration = CurseDuration(text),
+	})
+end
+
+local function EnsureBannerHandler()
+	if bannerHandlerRegistered then
+		return
+	end
+	if AZS_RegisterBannerHandler then
+		bannerHandlerRegistered = true
+		AZS_RegisterBannerHandler(LatchCurseBanner)
+	end
+end
+
 function SurvivorUI_RebornCurses()
 	local items = {}
-	if SurvivorUI_RebornActive() and type(AZS_BANNERS) == "table" then
+	if SurvivorUI_RebornActive() then
+		EnsureBannerHandler()
 		local now = AZS_GetRunTime and AZS_GetRunTime() or nil
-		for i = 1, table.getn(AZS_BANNERS) do
-			local b = AZS_BANNERS[i]
-			local text = Field(b, "text", 5) or ""
-			if Field(b, "kind", 2) == "curse" and string.find(text, "Проклятие", 1, true) then
-				local id = Field(b, "id", 1)
-				if not latchedCurse or latchedCurse.id ~= id then
-					latchedCurse = {
-						id = id, text = text,
-						at = tonumber(Field(b, "time", 6)) or now or 0,
-						duration = CurseDuration(text),
-					}
-				end
+		if type(AZS_BANNERS) == "table" then
+			for i = 1, table.getn(AZS_BANNERS) do
+				LatchCurseBanner(AZS_BANNERS[i])
 			end
 		end
-		if latchedCurse and now then
-			local text = latchedCurse.text
-			local left = latchedCurse.duration - (now - latchedCurse.at)
-			if left <= 0 then
-				latchedCurse = nil
-			else
-				local effect = CurseEffectText(text)
-				table.insert(items, { text = effect or "诅咒", left = left })
+		if now then
+			local alive = {}
+			for i = 1, table.getn(activeCurses) do
+				local curse = activeCurses[i]
+				local left = curse.duration - (now - curse.at)
+				if left > 0 then
+					table.insert(alive, curse)
+					table.insert(items, { text = CurseEffectText(curse.text) or "诅咒", left = left, raw = curse.text })
+				end
 			end
+			activeCurses = alive
 		end
 	end
 	return {
 		supported = true,
 		items = items,
-		reason = "Curse effects arrive as kind=\"curse\" banners with the effect in AZS_BUFFS (verified in game 2026-11-26); the latest effect is shown with its countdown.",
+		reason = "Curse effects arrive as kind=\"curse\" banners (AZS_RegisterBannerHandler, verified in game 2026-11-26). Banners are not retold after a reload, so curses taken before a reload cannot be reconstructed.",
 	}
 end
 
@@ -1260,6 +1321,10 @@ function SurvivorUI_RebornProbe()
 				tostring(Field(b, "name", 4)), tostring(Field(b, "time", 6)),
 				tostring(Field(b, "text", 5))))
 		end
+	end
+	Add("banner handler: register=" .. tostring(AZS_RegisterBannerHandler ~= nil) .. " registered=" .. tostring(bannerHandlerRegistered))
+	for i = 1, table.getn(capturedBanners) do
+		Add("  captured banner: " .. capturedBanners[i])
 	end
 	if AZS_GetWorldAnchors then
 		local kinds = { "cache", "guardianLair", "guardian", "elite", "boss", "finalBoss", "enemy", "ping" }

@@ -1382,16 +1382,19 @@ local function Draw(game, phase)
 	end
 	-- An active curse (Reborn), under the boss lines.
 	if SurvivorUI_RebornCurses then
-		local curse = SurvivorUI_RebornCurses().items[1]
-		if curse then
+		local curseItems = SurvivorUI_RebornCurses().items
+		if table.getn(curseItems) > 0 then
 			if not head.curseLine then
 				head.curseLine = BossLine(table.getn(head.bosses) + 1)
 				head.bosses[table.getn(head.bosses)] = nil
 			end
-			head.curseLine.name:SetText(SurvivorUI_T("Curse") .. "：" .. curse.text)
+			local parts = {}
+			for i = 1, table.getn(curseItems) do
+				table.insert(parts, curseItems[i].text .. " " .. string.format("%ds", math.ceil(curseItems[i].left)))
+			end
+			head.curseLine.name:SetText(SurvivorUI_T("Curse") .. "：" .. table.concat(parts, " · "))
 			head.curseLine.name:SetTextColor(1, 0.45, 0.45)
-			head.curseLine.time:SetText(string.format("%ds", math.ceil(curse.left)))
-			head.curseLine.time:SetTextColor(1, 0.45, 0.45)
+			head.curseLine.time:SetText("")
 			y = Put(head.curseLine, y, 13)
 		elseif head.curseLine then
 			head.curseLine:Hide()
