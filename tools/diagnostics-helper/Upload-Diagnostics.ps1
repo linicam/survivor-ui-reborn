@@ -162,22 +162,79 @@ function Find-SavedVariables {
 }
 
 # ---------- GitHub upload ----------
-function GhApi($method, $path, $bodyObj) {
-    $args = @("api", "--method", $method, $path)
+$script:GhPath = $null
+function Quote-NativeArg($arg) {
+    $text = [string]$arg
+    if ($text -eq "") { return '""' }
+    if ($text -notmatch '[\s"]') { return $text }
+    return '"' + ($text -replace '\\', '\\' -replace '"', '\"') + '"'
+}
+function Invoke-GhNative($arguments) {
+    # Windows PowerShell 5.1 can turn native stderr into a terminating
+    # NativeCommandError under $ErrorActionPreference="Stop". Run gh
+    # as a child process with redirected streams instead, and read
+    # the exit code explicitly.
+    $outFile = [System.IO.Path]::GetTempFileName()
+    $errFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $argString = ($arguments | ForEach-Object { Quote-NativeArg $_ }) -join " "
+        $process = Start-Process -FilePath $script:GhPath -ArgumentList $argString `
+            -RedirectStandardOutput $outFile -RedirectStandardError $errFile `
+            -Wait -PassThru -NoNewWindow
+        $stdout = ""
+        $stderr = ""
+        if (Test-Path $outFile) { $stdout = Get-Content -Path $outFile -Raw -ErrorAction SilentlyContinue }
+        if (Test-Path $errFile) { $stderr = Get-Content -Path $errFile -Raw -ErrorAction SilentlyContinue }
+        if ($null -eq $stdout) { $stdout = "" }
+        if ($null -eq $stderr) { $stderr = "" }
+        return [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            StdOut = $stdout
+            StdErr = $stderr
+        }
+    } finally {
+        Remove-Item $outFile -Force -ErrorAction SilentlyContinue
+        Remove-Item $errFile -Force -ErrorAction SilentlyContinue
+    }
+}
+function GhApiResult($method, $path, $bodyObj) {
+    $ghArgs = @("api", "--method", $method, $path)
     $tmp = $null
     try {
         if ($null -ne $bodyObj) {
             $tmp = [System.IO.Path]::GetTempFileName()
-            ($bodyObj | ConvertTo-Json -Depth 10 -Compress) | Set-Content -Path $tmp -Encoding UTF8
-            $args += @("--input", $tmp)
+            WriteExactText $tmp ($bodyObj | ConvertTo-Json -Depth 10 -Compress)
+            $ghArgs += @("--input", $tmp)
         }
-        $out = & gh @args 2>$null
-        if ($LASTEXITCODE -ne 0) { return $null }
-        if ($out) { return ($out | ConvertFrom-Json) }
-        return $true
+        $result = Invoke-GhNative $ghArgs
+        if ($result.ExitCode -eq 0) {
+            $data = $true
+            if ($result.StdOut -and $result.StdOut.Trim() -ne "") {
+                $data = $result.StdOut | ConvertFrom-Json
+            }
+            return [pscustomobject]@{
+                Ok = $true; IsNotFound = $false; StatusCode = 200
+                ExitCode = 0; Data = $data; Error = ""
+            }
+        }
+        $combined = ($result.StdErr + "`n" + $result.StdOut).Trim()
+        $statusCode = $null
+        if ($combined -match 'HTTP\s+(\d{3})') { $statusCode = [int]$Matches[1] }
+        return [pscustomobject]@{
+            Ok = $false; IsNotFound = ($statusCode -eq 404); StatusCode = $statusCode
+            ExitCode = $result.ExitCode; Data = $null; Error = $combined
+        }
     } finally {
         if ($tmp -and (Test-Path $tmp)) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
     }
+}
+function GhApi($method, $path, $bodyObj) {
+    $result = GhApiResult $method $path $bodyObj
+    if ($result.Ok) { return $result.Data }
+    if ($result.IsNotFound) { return $null }
+    $detail = $result.Error
+    if (-not $detail) { $detail = "no error output from gh" }
+    Fail "GitHub API $method $path failed (exit $($result.ExitCode)): $detail"
 }
 function Sha256Hex($text) {
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
@@ -209,8 +266,12 @@ function PutFile($path, $contentText, $message) {
 $BaseDir = "sessions"
 if ($SelfTest) { $BaseDir = "test" }
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { Fail "GitHub CLI (gh) was not found. Install it and run: gh auth login" }
-& gh auth status 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) { Fail "GitHub CLI is not authenticated. Run: gh auth login" }
+$script:GhPath = (Get-Command gh).Source
+$auth = Invoke-GhNative @("auth", "status")
+if ($auth.ExitCode -ne 0) {
+    $detail = ($auth.StdErr + "`n" + $auth.StdOut).Trim()
+    Fail "GitHub CLI is not authenticated. Run: gh auth login. $detail"
+}
 $repoInfo = GhApi "GET" "repos/$Repo"
 if ($null -eq $repoInfo) { Fail "Repository $Repo was not found or is not accessible." }
 if (-not $repoInfo.private) { Fail "Repository $Repo is public. Refusing to upload diagnostics to a public repository." }
