@@ -1165,7 +1165,7 @@ local function Draw(game, phase)
 		length = Num(game.fin)
 	end
 	local endless = Num(game.endl) == 1
-	if endless or length <= 0 then
+	if endless or length <= 0 or (SurvivorUI_RebornActive and SurvivorUI_RebornActive()) then
 		head.clock:SetText(Clock(seconds))
 	else
 		head.clock:SetText(Clock(seconds).." |cff8a8a8a/|r |cffb0b0b0"..Clock(length).."|r")

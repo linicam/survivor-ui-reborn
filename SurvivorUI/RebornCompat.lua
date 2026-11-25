@@ -586,6 +586,30 @@ end
 -- Reborn's AZS_SPELLS layout leaves both empty, so put the
 -- snapshot's extra actives there — only while a button is empty
 -- and out of combat, never over the player's own placement.
+-- A spellbook entry by its (localized) name: spell id and book
+-- index, or nil. The snapshot's racial actives can carry spell 0,
+-- while the spellbook always knows the spell itself.
+local function SpellbookSpell(name)
+	if not name or name == "" or not (GetNumSpellTabs and GetSpellTabInfo and GetSpellName) then
+		return nil
+	end
+	for tab = 1, GetNumSpellTabs() do
+		local _, _, offset, numSpells = GetSpellTabInfo(tab)
+		for i = 1, numSpells or 0 do
+			local index = offset + i
+			if GetSpellName(index, "spell") == name then
+				local spellId
+				if GetSpellLink then
+					local link = GetSpellLink(index, "spell")
+					spellId = link and tonumber(string.match(link, "spell:(%d+)"))
+				end
+				return spellId, index
+			end
+		end
+	end
+	return nil
+end
+
 local lastPlaceAt = 0
 function SurvivorUI_RebornPlaceRacialButton()
 	if not SurvivorUI_RebornActive() then
@@ -613,7 +637,7 @@ function SurvivorUI_RebornPlaceRacialButton()
 	local extra, racial
 	for i = 1, table.getn(data.actives) do
 		local a = data.actives[i]
-		if (a.spell and a.spell > 0 or a.bookIndex) and not onBar[a.key] then
+		if not onBar[a.key] then
 			if a.kind == "racial" then
 				racial = racial or a
 			else
@@ -621,20 +645,26 @@ function SurvivorUI_RebornPlaceRacialButton()
 			end
 		end
 	end
-	if extra and not GetActionInfo(7) then
-		if extra.spell and extra.spell > 0 then
-			PickupSpell(extra.spell)
-		elseif PickupSpellBookItem then
-			PickupSpellBookItem(extra.bookIndex, "spell")
+	local function Place(ability, button)
+		if not ability or GetActionInfo(button) then
+			return
 		end
-		PlaceAction(7)
+		local spellId, bookIndex = ability.spell, ability.bookIndex
+		if not (spellId and spellId > 0) and not bookIndex then
+			spellId, bookIndex = SpellbookSpell(ability.name)
+		end
+		if spellId and spellId > 0 then
+			PickupSpell(spellId)
+		elseif bookIndex and PickupSpellBookItem then
+			PickupSpellBookItem(bookIndex, "spell")
+		else
+			return
+		end
+		PlaceAction(button)
 		ClearCursor()
 	end
-	if racial and not GetActionInfo(12) then
-		PickupSpell(racial.spell)
-		PlaceAction(12)
-		ClearCursor()
-	end
+	Place(extra, 7)
+	Place(racial, 12)
 end
 
 function SurvivorUI_RebornAbilityByKey(key)
@@ -1137,8 +1167,8 @@ function SurvivorUI_RebornProbe()
 		data.source, tostring(data.complete)))
 	for i = 1, table.getn(data.all) do
 		local a = data.all[i]
-		Add(string.format("  ability: key=%s rank=%s passive=%s kind=%s name=%s",
-			tostring(a.key), tostring(a.rank), tostring(a.passive), tostring(a.kind), tostring(a.name)))
+		Add(string.format("  ability: key=%s spell=%s rank=%s passive=%s kind=%s name=%s",
+			tostring(a.key), tostring(a.spell), tostring(a.rank), tostring(a.passive), tostring(a.kind), tostring(a.name)))
 	end
 	Add("rankEvents this run: " .. tostring(table.getn(rankEvents)))
 	for i = 1, table.getn(rankEvents) do
