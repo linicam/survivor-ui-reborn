@@ -545,5 +545,27 @@ local curses2 = SurvivorUI_RebornCurses()
 eq("pr4 curse: stale future banner ignored", table.getn(curses2.items), 1)
 check("pr4 curse: unknown effect keeps raw text", string.find(curses2.items[1].text, "странное", 1, true) ~= nil)
 
+-- Diagnostic recorder: disabled by default, bounded, sanitized.
+dofile("SurvivorUI/RebornDiagnostics.lua")
+SurvivorUI_RebornRecord("test_event", { x = 1 })
+local st = SurvivorUI_RebornRecordStatus()
+eq("diag: inactive by default", st.active, false)
+eq("diag: nothing recorded while inactive", st.events, 0)
+local sid = SurvivorUI_RebornRecordStart()
+check("diag: session id issued", sid ~= nil)
+SurvivorUI_RebornRecord("test_event", { ownerId = "hero:secret", value = "Проклятие" })
+local db = SurvivorUIRebornDiagnostics
+local sess = db.sessions[sid]
+check("diag: events recorded", table.getn(sess.events) >= 2)
+local foundSanitized = false
+for i = 1, table.getn(sess.events) do
+	if sess.events[i].type == "test_event" and sess.events[i].data.ownerId == "<sanitized>" then
+		foundSanitized = true
+	end
+end
+check("diag: owner identifiers sanitized", foundSanitized)
+eq("diag: stop completes session", SurvivorUI_RebornRecordStop(), sid)
+eq("diag: completed status", sess.status, "completed")
+
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

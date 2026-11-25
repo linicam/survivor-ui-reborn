@@ -240,6 +240,9 @@ function SurvivorUI_RebornCheckRun()
 		local first = lastRunId == nil
 		lastRunId = id
 		if CaptureAdd then CaptureAdd("run transition -> " .. tostring(id)) end
+		if SurvivorUI_RebornRecord then
+			SurvivorUI_RebornRecord("run_transition", { to = id, first = first })
+		end
 		ResetOwnCaches()
 		if not first then
 			for _, fn in pairs(resetWatchers) do
@@ -555,6 +558,11 @@ local function RefreshAbilitiesCache()
 	abilitiesSeen = byKey
 	abilitiesStamp = AZS_ABILITIES_UPDATED
 	spellsStamp = AZS_SPELLS_UPDATED
+	if SurvivorUI_RebornRecord then
+		SurvivorUI_RebornRecord("abilities_update", {
+			rawAbilities = AZS_ABILITIES, rawSpells = AZS_SPELLS, normalized = merged,
+		})
+	end
 	TrackRanks(merged)
 	return merged
 end
@@ -771,6 +779,9 @@ function SurvivorUI_RebornRequestAbilities(force)
 	lastRequestCardsStamp = AZS_CARDS_UPDATED
 	requestRunId = SurvivorUI_RebornRunId()
 	abilitiesRequested = true
+	if SurvivorUI_RebornRecord then
+		SurvivorUI_RebornRecord("abilities_request", { signature = signature, forced = force == true })
+	end
 	return true
 end
 
@@ -839,6 +850,12 @@ function TrackRanks(merged)
 			elseif a.rank > prev.rank then
 				table.insert(rankEvents, { key = a.key, from = prev.rank, to = a.rank, at = seconds })
 				if CaptureAdd then CaptureAdd(string.format("rank %s %s -> %s at %s", tostring(a.key), tostring(prev.rank), tostring(a.rank), tostring(seconds))) end
+				if SurvivorUI_RebornRecord then
+					SurvivorUI_RebornRecord("rank_change", { key = a.key, from = prev.rank, to = a.rank, at = seconds })
+					if SurvivorUI_RebornRecordTooltipSoon then
+						SurvivorUI_RebornRecordTooltipSoon(a.key)
+					end
+				end
 				prev.rank = a.rank
 				prev.increases = prev.increases + 1
 			elseif a.rank < prev.rank then
@@ -1144,6 +1161,11 @@ function SurvivorUI_RebornJewelry(force)
 		if signature ~= captureJewelrySignature then
 			captureJewelrySignature = signature
 			CaptureAdd("jewelry now: " .. signature)
+			if SurvivorUI_RebornRecord then
+				SurvivorUI_RebornRecord("jewelry_update", {
+					source = source, items = items, aggregate = aggregate, duplicates = duplicates,
+				})
+			end
 		end
 	end
 	jewelryStamp = AZSGEAR_UPDATED
@@ -1279,6 +1301,12 @@ local function LatchCurseBanner(banner, fromHistory)
 	end
 	seenCurseIds[key] = true
 	if CaptureAdd then CaptureAdd("curse banner: " .. DumpBannerValue(banner, 0)) end
+	if SurvivorUI_RebornRecord then
+		SurvivorUI_RebornRecord("curse_banner", {
+			raw = banner, buffs = AZS_BUFFS, effect = CurseEffectText(text),
+			duration = CurseDuration(text),
+		})
+	end
 	local now = AZS_GetRunTime and AZS_GetRunTime() or nil
 	table.insert(activeCurses, {
 		id = Field(banner, "id", 1), text = text,
@@ -2033,6 +2061,27 @@ function SurvivorUI_RebornSlash(argument)
 		for i = 1, table.getn(lines) do
 			Say(lines[i])
 		end
+		return
+	elseif arg == "record start" then
+		local id = SurvivorUI_RebornRecordStart and SurvivorUI_RebornRecordStart()
+		Say("Survivor UI (Reborn): diagnostic recording started, session " .. tostring(id) .. ". Play normally; stop with /sui reborn record stop.")
+		return
+	elseif arg == "record stop" then
+		local id = SurvivorUI_RebornRecordStop and SurvivorUI_RebornRecordStop()
+		Say("Survivor UI (Reborn): diagnostic recording stopped, session " .. tostring(id) .. ". Exit the game, then run Upload-Diagnostics.bat.")
+		return
+	elseif arg == "record status" then
+		local st = SurvivorUI_RebornRecordStatus and SurvivorUI_RebornRecordStatus() or {}
+		Say(string.format("Survivor UI (Reborn): recording=%s session=%s events=%s runs=%s truncated=%s stored=%s",
+			tostring(st.active), tostring(st.sessionId), tostring(st.events), tostring(st.runs), tostring(st.truncated), tostring(st.storedSessions)))
+		return
+	elseif arg == "record clear" then
+		if SurvivorUI_RebornRecordClear then SurvivorUI_RebornRecordClear() end
+		Say("Survivor UI (Reborn): diagnostic sessions cleared.")
+		return
+	elseif string.sub(arg, 1, 12) == "record mark " then
+		if SurvivorUI_RebornRecordMark then SurvivorUI_RebornRecordMark(string.sub(arg, 13)) end
+		Say("Survivor UI (Reborn): mark recorded.")
 		return
 	elseif arg == "curses" then
 		local curses = SurvivorUI_RebornCurses()

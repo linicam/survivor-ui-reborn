@@ -25,6 +25,10 @@ rm -rf "$STAGE" "$OUT"
 mkdir -p "$STAGE"
 cp -r SurvivorUI SurvivorPlates "$STAGE/"
 cp LICENSE "$STAGE/"
+# Stamp the build commit for diagnostic session traceability.
+COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
+printf '%s\n' "-- Stamped by scripts/package.sh with the source commit at build time." \
+	"SurvivorUI_RebornBuildCommit = \"$COMMIT\"" > "$STAGE/SurvivorUI/BuildInfo.lua"
 # Never ship development-only files, even if they were added under an addon dir.
 find "$STAGE" -name "*.pyc" -delete
 find "$STAGE" -name ".DS_Store" -delete
@@ -35,6 +39,17 @@ mkdir -p dist
 
 echo "== validating archive =="
 python3 scripts/validate_addon.py --zip "$OUT"
-unzip -l "$OUT" | head -n 20
+unzip -l "$OUT" | head -n 20 || true
 echo
 echo "Built: $OUT"
+
+echo "== building diagnostics helper =="
+HELPER_OUT="dist/SurvivorUI-Reborn-Diagnostics-Helper.zip"
+HELPER_STAGE="dist/helper-staging"
+rm -rf "$HELPER_STAGE" "$HELPER_OUT"
+mkdir -p "$HELPER_STAGE"
+cp tools/diagnostics-helper/Upload-Diagnostics.bat "$HELPER_STAGE/"
+cp tools/diagnostics-helper/Upload-Diagnostics.ps1 "$HELPER_STAGE/"
+cp tools/diagnostics-helper/README.md "$HELPER_STAGE/"
+( cd "$HELPER_STAGE" && zip -qr -X "../SurvivorUI-Reborn-Diagnostics-Helper.zip" . )
+echo "Built: $HELPER_OUT"

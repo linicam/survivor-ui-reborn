@@ -6,11 +6,13 @@
 ## Version: 3.0.68
 ## Notes: Flat, dark unit frames and a compact action bar (buttons 1 to 6 and the = button) for Azeroth Survivors.
 ## OptionalDeps: SurvivorUIClassic, SurvivorPlates
-## SavedVariables: SurvivorUIDB, SurvivorUIJewelryBook
+## SavedVariables: SurvivorUIDB, SurvivorUIJewelryBook, SurvivorUIRebornDiagnostics
 ## SavedVariablesPerCharacter: SurvivorUIJewelry
 Perf.lua
 SurvivorUI.lua
 RebornCompat.lua
+BuildInfo.lua
+RebornDiagnostics.lua
 LocaleData.lua
 Locale.lua
 Locale_zh.lua
