@@ -1047,6 +1047,22 @@ function SurvivorUI_RebornProbe()
 			Add("world anchors: (query failed)")
 		end
 	end
+	if type(AZS_BUFFS) == "table" then
+		for i = 1, table.getn(AZS_BUFFS) do
+			local b = AZS_BUFFS[i]
+			Add(string.format("  buff: spell=%s left=%s",
+				tostring(Field(b, "spell", 1)), tostring(Field(b, "left", 2))))
+		end
+	end
+	if type(AZS_DEBUFFS) == "table" then
+		for i = 1, table.getn(AZS_DEBUFFS) do
+			local d = AZS_DEBUFFS[i]
+			Add(string.format("  debuff: id=%s spell=%s stacks=%s secs=%s name=%s",
+				tostring(Field(d, "id", 1)), tostring(Field(d, "spell", 2)),
+				tostring(Field(d, "stacks", 3)), tostring(Field(d, "secs", 4)),
+				tostring(Field(d, "name", 5))))
+		end
+	end
 	Add("crystal candidates: AZS_CRYSTALS=" .. (type(AZS_CRYSTALS) == "table" and tostring(table.getn(AZS_CRYSTALS)) or "absent")
 		.. " AZS_ALTAR=" .. (type(AZS_ALTAR) == "table" and "present" or "absent")
 		.. " AZS_PORTAL=" .. (type(AZS_PORTAL) == "table" and "present" or "absent")
