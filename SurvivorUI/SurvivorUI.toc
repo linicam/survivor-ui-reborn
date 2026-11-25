@@ -10,6 +10,7 @@
 ## SavedVariablesPerCharacter: SurvivorUIJewelry
 Perf.lua
 SurvivorUI.lua
+RebornCompat.lua
 LocaleData.lua
 Locale.lua
 Locale_zh.lua

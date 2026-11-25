@@ -16,6 +16,29 @@ These are fan-made and not affiliated with the game or its author.
 
 Both are flat and dark, in the manner of EllesmereUI and Plater. They are written from scratch for the 1.12 addon API and share no code with those addons.
 
+## AZ Reborn version (this fork)
+
+This fork adapts SurvivorUI for [AZ Reborn](https://azreborn.com/) — see
+[`REBORN_COMPATIBILITY.md`](REBORN_COMPATIBILITY.md) for the full notes,
+root causes, and the in-game testing checklist. In short: boss progression
+follows the game's live Rift % / countdown instead of a fixed schedule,
+in-run jewelry is read from the game's meter loadout, and learned
+abilities (including passives such as the Warlock's Demonic Empowerment)
+come from the `AZS_ABILITIES` snapshot instead of the action bar alone.
+Per-ability upgrade choices and curses are **not** exposed by the
+documented Reborn API, so the addon tracks ability rank increases only
+and does not invent upgrade or curse data.
+
+**Install (no dev tools needed):** download `SurvivorUI-Reborn.zip`
+from this repository's latest Release, or from a GitHub Actions run's
+`SurvivorUI-Reborn` artifact. Close the game, back up your existing
+`SurvivorUI` and `SurvivorPlates` folders, delete them, and extract the
+ZIP into AZ Reborn's `Interface\AddOns\` folder. Start the game and
+check `/sui reborn` prints the Reborn summary. Diagnostics:
+`/sui reborn probe` (full report), `/sui reborn boss|abilities|jewelry|upgrades|curses`,
+`/sui reborn debug on|off`. Roll back by restoring your backed-up folders.
+
+
 ## Commands at a glance
 
 **Click the S button** by the minimap (or type `/sui opt`) for the options: every piece and every look on or off, the panels' size, and **Move UI**, a grid to line every piece up (right click the S button to go straight to it). While a tab is open its own pieces can be dragged, so you can play while setting them. **Hold Alt** any time to see everything that can be moved, outlined with its name, and drag it (another key, or none, in the Layout tab). Every piece keeps its place.
@@ -24,6 +47,7 @@ Both are flat and dark, in the manner of EllesmereUI and Plater. They are writte
 |---|---|
 | `/sui opt` | The options panel (a right click on the minimap button moves the whole UI) |
 | `/sui` | Lists every command in the chat |
+| `/sui reborn` | Reborn diagnostics: boss mode, abilities, jewelry, upgrades, curses (`/sui reborn probe` prints the full report) |
 | `/sui layout` | Puts every piece back in its first place |
 | `/sui hover` | The white outline around what the mouse is on: on or off |
 | `/sui loot` | Loot list, or the Default loot notices: on or off |

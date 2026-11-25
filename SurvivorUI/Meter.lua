@@ -1190,6 +1190,13 @@ local function FromSpellbook(name)
 	end
 end
 
+-- A spell's own icon (TalentIcons.lua, from the official spells.json): a
+-- meter line is a spell's damage, so this beats the talent map below.
+local function FromSpells(name)
+	local icon = SurvivorUI_SPELL_ICONS and SurvivorUI_SPELL_ICONS[name]
+	return icon and "Interface\\Icons\\"..icon or nil
+end
+
 -- A talent of the game's (TalentIcons.lua, written from its exe): a proc's
 -- own damage (Nightfall's, Daybreak's) shows its talent's icon, which the
 -- client's 1.12 talents have only now and then.
@@ -1280,7 +1287,7 @@ local function IconOf(name)
 		if missedAt[name] and GetTime() - missedAt[name] < 10 then
 			return nil
 		end
-		texture = FromGameTalents(name) or FromSpellbook(name) or FromTalents(name) or FromItems(name)
+		texture = FromSpells(name) or FromGameTalents(name) or FromSpellbook(name) or FromTalents(name) or FromItems(name)
 	end
 	if not texture and BORROWED[name] then
 		for _, source in pairs(BORROWED[name]) do
