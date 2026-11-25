@@ -559,13 +559,39 @@ local sess = db.sessions[sid]
 check("diag: events recorded", table.getn(sess.events) >= 2)
 local foundSanitized = false
 for i = 1, table.getn(sess.events) do
-	if sess.events[i].type == "test_event" and sess.events[i].data.ownerId == "<sanitized>" then
+	if sess.events[i].type == "test_event" and sess.events[i].data.ownerId == "player-1" then
 		foundSanitized = true
 	end
 end
 check("diag: owner identifiers sanitized", foundSanitized)
 eq("diag: stop completes session", SurvivorUI_RebornRecordStop(), sid)
 eq("diag: completed status", sess.status, "completed")
+-- Cooldown-only updates do not flood the recorder.
+SurvivorUI_RebornRecordStart()
+local db2 = SurvivorUIRebornDiagnostics
+local sess2 = db2.sessions[db2.order[table.getn(db2.order)]]
+AZS_ABILITIES = { { key = "fireball", spell = 133, rank = 3, passive = false, kind = "class", cd = 5, cdmax = 8, name = "Fireball" } }
+AZS_SPELLS = { { "fireball", 133, 3, 5, 8 } }
+AZS_ABILITIES_UPDATED = 500
+AZS_SPELLS_UPDATED = 500
+SurvivorUI_RebornAbilities()
+local afterFirst = table.getn(sess2.events)
+for i = 1, 20 do
+	AZS_SPELLS = { { "fireball", 133, 3, 5 - i * 0.1, 8 } }
+	AZS_SPELLS_UPDATED = 500 + i
+	SurvivorUI_RebornAbilities()
+end
+eq("diag: cooldown-only updates not recorded", table.getn(sess2.events), afterFirst)
+SurvivorUI_RebornRecordStop()
+-- Restarted banner IDs with different timestamps stay distinct.
+AZS_RUN = { id = "run-key-test" }
+SurvivorUI_RebornCheckRun()
+AZS_BANNERS = { { 7, "curse", nil, "Проклятие", "Проклятие тяготеет над тобой: орда накатывает волной (20 с)!", 20 } }
+eq("banner key: first curse", table.getn(SurvivorUI_RebornCurses().items), 1)
+AZS_RUN = { id = "run-key-test-2" }
+SurvivorUI_RebornCheckRun()
+AZS_BANNERS = { { 7, "curse", nil, "Проклятие", "Проклятие тяготеет над тобой: орда накатывает волной (20 с)!", 20 } }
+eq("banner key: reused id in new run still counts", table.getn(SurvivorUI_RebornCurses().items), 1)
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

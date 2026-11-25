@@ -3,6 +3,7 @@
 # the private linicam/survivor-ui-reborn-diagnostics repository using
 # the already-authenticated GitHub CLI. The SavedVariables file is
 # parsed as data only (no Lua execution, no Invoke-Expression).
+param([switch]$SelfTest)
 $ErrorActionPreference = "Stop"
 $Repo = "linicam/survivor-ui-reborn-diagnostics"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -60,16 +61,23 @@ function ParseValue {
     if ($rest -match '^false\b') { $script:Pos += 5; return $false }
     if ($rest -match '^nil\b') { $script:Pos += 3; return $null }
     if ($rest -match '^-?\d+(\.\d+)?([eE][-+]?\d+)?') {
-        $script:Pos += $Matches[0].Length
-        return [double]$Matches[0]
+        $numText = $Matches[0]
+        $script:Pos += $numText.Length
+        $longVal = 0L
+        if ($numText -match '^-?\d+$' -and [long]::TryParse($numText, [ref]$longVal)) { return $longVal }
+        return [double]$numText
     }
     Fail "Unexpected token at position $($script:Pos) in SavedVariables file."
 }
+$script:Depth = 0
 function ParseTable {
+    $script:Depth++
+    if ($script:Depth -gt 32) { Fail "SavedVariables nesting exceeds 32 levels; refusing to parse." }
     $script:Pos++ # {
     $arr = New-Object System.Collections.ArrayList
     $map = [ordered]@{}
-    $isMap = $false
+    $numericKeys = @{}
+    $hasStringKey = $false
     while ($true) {
         SkipWs
         if ($script:Pos -ge $script:Src.Length) { Fail "Unterminated table in SavedVariables file." }
@@ -88,12 +96,25 @@ function ParseTable {
             }
         }
         $val = ParseValue
-        if ($null -ne $key) { $isMap = $true; $map[[string]$key] = $val } else { [void]$arr.Add($val) }
+        if ($null -ne $key) {
+            if ($key -is [long] -or $key -is [int]) { $numericKeys[[int]$key] = $val }
+            else { $hasStringKey = $true; $map[[string]$key] = $val }
+        } else { [void]$arr.Add($val) }
         SkipWs
         if ($script:Pos -lt $script:Src.Length -and ($script:Src[$script:Pos] -eq ',' -or $script:Src[$script:Pos] -eq ';')) { $script:Pos++ }
     }
-    if ($isMap) { return $map }
-    return $arr.ToArray()
+    $script:Depth--
+    if (-not $hasStringKey) {
+        # Pure array: positional entries plus explicit numeric keys.
+        foreach ($k in ($numericKeys.Keys | Sort-Object)) {
+            while ($arr.Count -lt $k - 1) { [void]$arr.Add($null) }
+            if ($arr.Count -eq $k - 1) { [void]$arr.Add($numericKeys[$k]) } else { $arr[$k - 1] = $numericKeys[$k] }
+        }
+        return ,$arr.ToArray()
+    }
+    foreach ($k in $numericKeys.Keys) { $map[[string]$k] = $numericKeys[$k] }
+    for ($i = 0; $i -lt $arr.Count; $i++) { $map[[string]($i + 1)] = $arr[$i] }
+    return $map
 }
 function ParseDiagnostics($text) {
     $idx = $text.IndexOf("SurvivorUIRebornDiagnostics")
@@ -105,10 +126,17 @@ function ParseDiagnostics($text) {
 
 # ---------- Locate SavedVariables ----------
 function Find-SavedVariables {
-    $candidates = @()
+    # Remembered path first: no recursive scan when it still works.
     if (Test-Path $ConfigPath) {
-        try { $cfg = Get-Content $ConfigPath -Raw | ConvertFrom-Json; if ($cfg.SavedVariablesPath) { $candidates += $cfg.SavedVariablesPath } } catch {}
+        try {
+            $cfg = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+            if ($cfg.SavedVariablesPath -and (Test-Path $cfg.SavedVariablesPath) -and
+                (Select-String -Path $cfg.SavedVariablesPath -Pattern "SurvivorUIRebornDiagnostics" -Quiet)) {
+                return $cfg.SavedVariablesPath
+            }
+        } catch {}
     }
+    $candidates = @()
     $roots = @("$env:USERPROFILE", "C:\Games", "D:\Games", "C:\Program Files", "C:\Program Files (x86)")
     foreach ($root in $roots) {
         if (Test-Path $root) {
@@ -117,8 +145,15 @@ function Find-SavedVariables {
                 ForEach-Object { $candidates += $_.FullName }
         }
     }
-    foreach ($c in $candidates) {
-        if ((Test-Path $c) -and (Select-String -Path $c -Pattern "SurvivorUIRebornDiagnostics" -Quiet)) { return $c }
+    $valid = @($candidates | Where-Object { (Test-Path $_) -and (Select-String -Path $_ -Pattern "SurvivorUIRebornDiagnostics" -Quiet) })
+    if ($valid.Count -eq 1) { return $valid[0] }
+    if ($valid.Count -gt 1) {
+        Write-Host "Multiple diagnostic files found:"
+        for ($i = 0; $i -lt $valid.Count; $i++) { Write-Host "  [$i] $($valid[$i])" }
+        $choice = Read-Host "Enter the number to use"
+        $idx = 0
+        if ([int]::TryParse($choice, [ref]$idx) -and $idx -ge 0 -and $idx -lt $valid.Count) { return $valid[$idx] }
+        Fail "Invalid selection."
     }
     Write-Host "Could not find the diagnostic SavedVariables file automatically."
     $picked = Read-Host "Enter the full path to SurvivorUI.lua in your SavedVariables folder"
@@ -129,17 +164,35 @@ function Find-SavedVariables {
 # ---------- GitHub upload ----------
 function GhApi($method, $path, $bodyObj) {
     $args = @("api", "--method", $method, $path)
-    if ($null -ne $bodyObj) {
-        $tmp = [System.IO.Path]::GetTempFileName()
-        ($bodyObj | ConvertTo-Json -Depth 10 -Compress) | Set-Content -Path $tmp -Encoding UTF8
-        $args += @("--input", $tmp)
+    $tmp = $null
+    try {
+        if ($null -ne $bodyObj) {
+            $tmp = [System.IO.Path]::GetTempFileName()
+            ($bodyObj | ConvertTo-Json -Depth 10 -Compress) | Set-Content -Path $tmp -Encoding UTF8
+            $args += @("--input", $tmp)
+        }
+        $out = & gh @args 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        if ($out) { return ($out | ConvertFrom-Json) }
+        return $true
+    } finally {
+        if ($tmp -and (Test-Path $tmp)) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
     }
-    $out = & gh @args 2>$null
-    if ($LASTEXITCODE -ne 0) { return $null }
-    if ($out) { return ($out | ConvertFrom-Json) }
-    return $true
+}
+function Sha256Hex($text) {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+    return [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace("-", "").ToLower()
+}
+function GetRemoteText($path) {
+    $res = GhApi "GET" "repos/$Repo/contents/$path"
+    if ($null -eq $res -or -not $res.content) { return $null }
+    return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($res.content -replace '\s', '')))
 }
 function PutFile($path, $contentText, $message) {
+    $existingText = GetRemoteText $path
+    if ($null -ne $existingText -and (Sha256Hex $existingText) -eq (Sha256Hex $contentText)) {
+        return # identical: no unnecessary commit
+    }
     $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($contentText))
     $existing = GhApi "GET" "repos/$Repo/contents/$path"
     $body = @{ message = $message; content = $b64 }
@@ -149,6 +202,8 @@ function PutFile($path, $contentText, $message) {
 }
 
 # ---------- Main ----------
+$BaseDir = "sessions"
+if ($SelfTest) { $BaseDir = "test" }
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { Fail "GitHub CLI (gh) was not found. Install it and run: gh auth login" }
 & gh auth status 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) { Fail "GitHub CLI is not authenticated. Run: gh auth login" }
@@ -156,8 +211,33 @@ $repoInfo = GhApi "GET" "repos/$Repo"
 if ($null -eq $repoInfo) { Fail "Repository $Repo was not found or is not accessible." }
 if (-not $repoInfo.private) { Fail "Repository $Repo is public. Refusing to upload diagnostics to a public repository." }
 
-$svPath = Find-SavedVariables
-@{ SavedVariablesPath = $svPath } | ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8
+$svPath = $null
+if ($SelfTest) {
+    $svPath = Join-Path $ScriptDir "selftest-SavedVariables.lua"
+    $fixture = @'
+SurvivorUIRebornDiagnostics = {
+    ["schema"] = 1,
+    ["order"] = { [1] = "selftest-001" },
+    ["sessions"] = {
+        ["selftest-001"] = {
+            ["id"] = "selftest-001", ["schema"] = 1, ["status"] = "completed",
+            ["addonCommit"] = "selftest", ["startedAt"] = 1, ["endedAt"] = 2,
+            ["events"] = {
+                [1] = { ["seq"] = 1, ["type"] = "abilities_update", ["data"] = { ["name"] = "神圣战马", ["rank"] = 3 } },
+                [2] = { ["seq"] = 2, ["type"] = "curse_banner", ["data"] = { ["text"] = "Проклятие тяготеет над тобой: орда накатывает волной (20 с)!" } },
+                [3] = { ["seq"] = 3, ["type"] = "jewelry_update", ["data"] = { ["items"] = { [1] = { ["name"] = "埃库利亚指环", ["rank"] = 68 } } } },
+                [4] = { ["seq"] = 4, ["type"] = "tooltip", ["data"] = { ["lines"] = { [1] = "Upgrades: +10% damage" } } },
+            },
+        },
+    },
+}
+'@
+    Set-Content -Path $svPath -Value $fixture -Encoding UTF8
+} else {
+    $svPath = Find-SavedVariables
+    @{ SavedVariablesPath = $svPath } | ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8
+}
+if ((Get-Item $svPath).Length -gt 67108864) { Fail "SavedVariables file exceeds the 64 MB parser limit." }
 $text = Get-Content $svPath -Raw -Encoding UTF8
 $db = ParseDiagnostics $text
 if (-not $db.sessions -or -not $db.order -or $db.order.Count -eq 0) { Fail "No diagnostic sessions found. In game, run /sui reborn record start, play, then /sui reborn record stop." }
@@ -168,6 +248,7 @@ for ($i = $db.order.Count - 1; $i -ge 0; $i--) {
     if ($s.status -eq "completed" -or $s.status -eq "truncated" -or $s.status -eq "interrupted") { $sessionId = $db.order[$i]; break }
 }
 if (-not $sessionId) { Fail "No completed session found. Stop recording in game first (/sui reborn record stop)." }
+if ($sessionId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { Fail "Session ID '$sessionId' contains unsafe characters; refusing to use it in paths." }
 $session = $db.sessions[$sessionId]
 $events = @($session.events)
 $runs = @($events | ForEach-Object { $_.run } | Where-Object { $_ } | Select-Object -Unique).Count
@@ -189,7 +270,7 @@ $chunkIndex = 0
 for ($i = 0; $i -lt $events.Count; $i += $chunkSize) {
     $chunkIndex++
     $slice = $events[$i..([Math]::Min($i + $chunkSize - 1, $events.Count - 1))]
-    $files[("events-{0:D3}.json" -f $chunkIndex)] = @($slice) | ConvertTo-Json -Depth 20
+    $files[("events-{0:D3}.json" -f $chunkIndex)] = ConvertTo-Json -InputObject ([object[]]@($slice)) -Depth 20
 }
 $summary = "# Diagnostic session $sessionId`n`n- Status: $($session.status)`n- Addon commit: $($session.addonCommit)`n- Events: $($events.Count)`n- Runs: $runs`n- Truncated: $($session.truncated)`n"
 $files["summary.md"] = $summary
@@ -204,17 +285,47 @@ foreach ($name in $files.Keys) {
 $files["manifest.json"] = $manifest | ConvertTo-Json -Depth 10
 Set-Content -Path (Join-Path $exportDir "manifest.json") -Value $files["manifest.json"] -Encoding UTF8
 
-$base = "sessions/$sessionId"
+$base = "$BaseDir/$sessionId"
+# Identity collision: a completed remote session with different
+# contents must never be overwritten silently.
+$remoteManifestText = GetRemoteText "$base/manifest.json"
+if ($null -ne $remoteManifestText) {
+    $remoteManifest = $remoteManifestText | ConvertFrom-Json
+    $conflict = $false
+    foreach ($name in $manifest.files.Keys) {
+        if ($remoteManifest.files.$name -and $remoteManifest.files.$name -ne $manifest.files[$name]) { $conflict = $true }
+    }
+    if ($conflict) { Fail "Session $sessionId already exists remotely with different contents. Refusing to overwrite; investigate the collision." }
+}
 foreach ($name in $files.Keys) {
     if ($name -ne "manifest.json") { PutFile "$base/$name" $files[$name] "diagnostics: $sessionId $name" }
 }
 # Manifest last: its presence marks a complete upload.
 PutFile "$base/manifest.json" $files["manifest.json"] "diagnostics: $sessionId manifest"
-$verify = GhApi "GET" "repos/$Repo/contents/$base/manifest.json"
-if ($null -eq $verify) { Fail "Upload verification failed. Run the script again to retry." }
+# Verify every uploaded file's remote hash, not just manifest existence.
+foreach ($name in $manifest.files.Keys) {
+    $remoteText = GetRemoteText "$base/$name"
+    if ($null -eq $remoteText -or (Sha256Hex $remoteText) -ne $manifest.files[$name]) {
+        Fail "Verification failed for $base/$name. Run the script again to retry."
+    }
+}
 
-$latest = [ordered]@{ sessionId = $sessionId; path = $base; addonCommit = $session.addonCommit; eventCount = $events.Count; runCount = $runs }
-PutFile "latest.json" ($latest | ConvertTo-Json -Depth 10) "diagnostics: latest $sessionId"
+if (-not $SelfTest) {
+    $existingLatestText = GetRemoteText "latest.json"
+    $updateLatest = $true
+    if ($null -ne $existingLatestText) {
+        try {
+            $existingLatest = $existingLatestText | ConvertFrom-Json
+            if ($existingLatest.startedAt -and $session.startedAt -and [double]$existingLatest.startedAt -gt [double]$session.startedAt) {
+                $updateLatest = $false
+            }
+        } catch {}
+    }
+    if ($updateLatest) {
+        $latest = [ordered]@{ sessionId = $sessionId; path = $base; addonCommit = $session.addonCommit; eventCount = $events.Count; runCount = $runs; startedAt = $session.startedAt }
+        PutFile "latest.json" ($latest | ConvertTo-Json -Depth 10) "diagnostics: latest $sessionId"
+    }
+}
 
 Write-Host ""
 Write-Host "Diagnostic upload completed."

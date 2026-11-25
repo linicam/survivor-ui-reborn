@@ -126,6 +126,7 @@ local spellsStamp = nil        -- AZS_SPELLS_UPDATED last seen
 local abilitiesSeen = {}       -- [key] = true, keys already merged
 local lastAbilityRequest = 0
 local lastRequestSignature = nil
+local lastRecordedSignature = nil
 local lastRequestCardsStamp = nil
 local requestRunId = nil
 local abilitiesRequested = false
@@ -247,6 +248,9 @@ function SurvivorUI_RebornCheckRun()
 		if not first then
 			for _, fn in pairs(resetWatchers) do
 				pcall(fn)
+			end
+			if SurvivorUI_RebornRecord then
+				SurvivorUI_RebornRecord("reset_watchers", { count = table.getn(resetWatchers) })
 			end
 		end
 		return true
@@ -558,10 +562,20 @@ local function RefreshAbilitiesCache()
 	abilitiesSeen = byKey
 	abilitiesStamp = AZS_ABILITIES_UPDATED
 	spellsStamp = AZS_SPELLS_UPDATED
-	if SurvivorUI_RebornRecord then
-		SurvivorUI_RebornRecord("abilities_update", {
-			rawAbilities = AZS_ABILITIES, rawSpells = AZS_SPELLS, normalized = merged,
-		})
+	if SurvivorUI_RebornRecord and SurvivorUI_RebornRecording and SurvivorUI_RebornRecording() then
+		local parts = {}
+		for i = 1, table.getn(merged) do
+			local a = merged[i]
+			parts[i] = tostring(a.key) .. "|" .. tostring(a.spell) .. "|" .. tostring(a.rank) ..
+				"|" .. tostring(a.passive) .. "|" .. tostring(a.kind)
+		end
+		local signature = table.concat(parts, ";")
+		if signature ~= lastRecordedSignature then
+			lastRecordedSignature = signature
+			SurvivorUI_RebornRecord("abilities_update", {
+				rawAbilities = AZS_ABILITIES, rawSpells = AZS_SPELLS, normalized = merged,
+			})
+		end
 	end
 	TrackRanks(merged)
 	return merged
@@ -1091,6 +1105,8 @@ function SurvivorUI_RebornJewelry(force)
 	local items = {}
 	local source = "none"
 	local err = nil
+	local rawJewelry = nil
+	local preDedup = nil
 	-- 1. Meter loadout (documented entry point; shape probed, not assumed).
 	if AZS_GetMeterLoadout then
 		local runId, ownerId = LoadoutOwner()
@@ -1100,6 +1116,7 @@ function SurvivorUI_RebornJewelry(force)
 		local ok, loadout, loadoutErr = pcall(AZS_GetMeterLoadout, request)
 		if ok and type(loadout) == "table" then
 			local runJewelry = loadout.runJewelry
+			rawJewelry = { runJewelry = runJewelry, sources = loadout.sources }
 			if type(runJewelry) == "table" then
 				-- Authoritative even when empty: an empty in-run
 				-- list must not fall back to permanent equipment.
@@ -1138,6 +1155,7 @@ function SurvivorUI_RebornJewelry(force)
 	end
 	-- Dedup: one row per piece, repeats counted, never by name alone.
 	local duplicates = 0
+	preDedup = items
 	items, duplicates = DedupJewelryItems(items)
 	-- 3. Aggregate jewelry shares from AZS_STATS (never per-item).
 	local aggregate = nil
@@ -1155,7 +1173,8 @@ function SurvivorUI_RebornJewelry(force)
 	if CaptureAdd then
 		local parts = {}
 		for i = 1, table.getn(items) do
-			parts[i] = tostring(items[i].instanceKey or items[i].key) .. ":" .. tostring(items[i].rank)
+			parts[i] = tostring(items[i].instanceKey or items[i].key) .. ":" .. tostring(items[i].rank) ..
+				":" .. tostring(items[i].name) .. ":" .. tostring(items[i].rarity) .. ":" .. tostring(items[i].icon)
 		end
 		local signature = table.concat(parts, ";")
 		if signature ~= captureJewelrySignature then
@@ -1163,7 +1182,9 @@ function SurvivorUI_RebornJewelry(force)
 			CaptureAdd("jewelry now: " .. signature)
 			if SurvivorUI_RebornRecord then
 				SurvivorUI_RebornRecord("jewelry_update", {
-					source = source, items = items, aggregate = aggregate, duplicates = duplicates,
+					source = source, raw = rawJewelry, gear = AZSGEAR,
+					preDedup = preDedup, items = items,
+					aggregate = aggregate, duplicates = duplicates,
 				})
 			end
 		end
@@ -1259,11 +1280,10 @@ local function DumpBannerValue(value, depth)
 end
 
 BannerKey = function(banner)
-	local id = Field(banner, "id", 1)
-	if id ~= nil then
-		return "id:" .. tostring(id)
-	end
-	return "tx:" .. tostring(Field(banner, "time", 6)) .. "|" .. tostring(Field(banner, "text", 5))
+	-- IDs are not guaranteed unique across runs: identity is the
+	-- composite of id, kind, timestamp, and text.
+	return tostring(Field(banner, "id", 1)) .. "|" .. tostring(Field(banner, "kind", 2)) ..
+		"|" .. tostring(Field(banner, "time", 6)) .. "|" .. tostring(Field(banner, "text", 5))
 end
 
 local function LatchCurseBanner(banner, fromHistory)
@@ -1297,6 +1317,9 @@ local function LatchCurseBanner(banner, fromHistory)
 		end
 	end
 	if not isCurse then
+		if Field(banner, "kind", 2) == "curse" and SurvivorUI_RebornRecord then
+			SurvivorUI_RebornRecord("curse_banner", { raw = banner, decision = "announcement" })
+		end
 		return
 	end
 	seenCurseIds[key] = true
@@ -1378,6 +1401,9 @@ local captureActive = false
 local captureLines = {}
 
 CaptureAdd = function(text)
+	if SurvivorUI_RebornRecord then
+		SurvivorUI_RebornRecord("capture_note", { text = text })
+	end
 	if not captureActive then
 		return
 	end
@@ -1449,6 +1475,83 @@ local function ResolveActionSlot(key)
 		return 12, true
 	end
 	return nil
+end
+
+-- Structured native tooltip reader shared by the manual diagnostic
+-- command and the automated recorder. Returns complete snapshots;
+-- formatting for chat happens in SurvivorUI_RebornTooltipCapture.
+function SurvivorUI_RebornDedupJewelry(items)
+	return DedupJewelryItems(items)
+end
+
+function SurvivorUI_RebornTooltipRead(key)
+	local ability = SurvivorUI_RebornAbilityByKey(key)
+	if not ability then
+		return { key = key, ok = false, error = "unknown ability" }
+	end
+	local slot, overlay = ResolveActionSlot(key)
+	local out = {
+		key = ability.key, spell = ability.spell, rank = ability.rank,
+		slot = slot, overlay = overlay == true, ok = false,
+		run = SurvivorUI_RebornRunId(), lines = {},
+	}
+	if not CreateFrame then
+		out.error = "CreateFrame unavailable"
+		return out
+	end
+	if not tooltipScan then
+		tooltipScan = CreateFrame("GameTooltip", "SurvivorUIRebornTooltipScan", nil, "GameTooltipTemplate")
+	end
+	local scan = tooltipScan
+	local function ReadLines(source)
+		local name = scan:GetName()
+		local count = scan.NumLines and scan:NumLines() or 0
+		out.numLines = count
+		out.source = source
+		for i = 1, count do
+			local left = _G[name .. "TextLeft" .. i]
+			local right = _G[name .. "TextRight" .. i]
+			local lt = left and left:GetText()
+			local rt = right and right:GetText()
+			if (lt and lt ~= "") or (rt and rt ~= "") then
+				local entry = { left = lt, right = rt }
+				if left and left.GetTextColor then
+					local r, g, b = left:GetTextColor()
+					entry.color = { r, g, b }
+				end
+				table.insert(out.lines, entry)
+			end
+		end
+	end
+	if slot and not overlay and scan.SetAction then
+		local ok, err = pcall(function()
+			scan:SetOwner(UIParent, "ANCHOR_NONE")
+			scan:ClearLines()
+			scan:SetAction(slot)
+		end)
+		if ok then
+			ReadLines("action")
+			out.ok = true
+		else
+			out.error = tostring(err)
+		end
+	elseif ability.spell and ability.spell > 0 and scan.SetSpellByID then
+		local ok, err = pcall(function()
+			scan:SetOwner(UIParent, "ANCHOR_NONE")
+			scan:ClearLines()
+			scan:SetSpellByID(ability.spell)
+		end)
+		if ok then
+			ReadLines("spell")
+			out.ok = true
+		else
+			out.error = tostring(err)
+		end
+	else
+		out.error = overlay and "overlay button has no native action tooltip" or "no tooltip API available"
+	end
+	scan:Hide()
+	return out
 end
 
 function SurvivorUI_RebornTooltipCapture(target)
@@ -1897,6 +2000,7 @@ function SurvivorUI_RebornJewelryRawLines()
 		if ok and type(loadout) == "table" then
 			DumpTable("loadout", loadout)
 			local runJewelry = loadout.runJewelry
+			rawJewelry = { runJewelry = runJewelry, sources = loadout.sources }
 			if type(runJewelry) == "table" then
 				for i = 1, table.getn(runJewelry) do
 					DumpTable("runJewelry[" .. tostring(i) .. "]", runJewelry[i])
@@ -2074,6 +2178,14 @@ function SurvivorUI_RebornSlash(argument)
 		local st = SurvivorUI_RebornRecordStatus and SurvivorUI_RebornRecordStatus() or {}
 		Say(string.format("Survivor UI (Reborn): recording=%s session=%s events=%s runs=%s truncated=%s stored=%s",
 			tostring(st.active), tostring(st.sessionId), tostring(st.events), tostring(st.runs), tostring(st.truncated), tostring(st.storedSessions)))
+		return
+	elseif arg == "record auto on" then
+		if SurvivorUI_RebornRecordAuto then SurvivorUI_RebornRecordAuto(true) end
+		Say("Survivor UI (Reborn): automatic diagnostic recording on (starts every session).")
+		return
+	elseif arg == "record auto off" then
+		if SurvivorUI_RebornRecordAuto then SurvivorUI_RebornRecordAuto(false) end
+		Say("Survivor UI (Reborn): automatic diagnostic recording off.")
 		return
 	elseif arg == "record clear" then
 		if SurvivorUI_RebornRecordClear then SurvivorUI_RebornRecordClear() end

@@ -9,12 +9,21 @@
 
 local SCHEMA = 1
 local MAX_EVENTS = 3000
+local MAX_BYTES = 2097152
 local MAX_SESSIONS = 10
+local CRITICAL = {
+	session_start = true, session_stop = true, run_transition = true,
+	rank_change = true, tooltip = true, curse_banner = true,
+	jewelry_update = true, error = true, mark = true,
+}
 
 local recording = false
 local session = nil
 local sessionStart = 0
 local pendingTooltips = {}
+local tooltipBaselines = {}
+local pseudonyms = {}
+local pseudonymCount = 0
 
 local function Now()
 	return GetTime and GetTime() or 0
@@ -58,7 +67,12 @@ local function CopyValue(value, depth)
 			break
 		end
 		if SanitizeKey(k) then
-			out[k] = "<sanitized>"
+			local raw = tostring(v)
+			if not pseudonyms[raw] then
+				pseudonymCount = pseudonymCount + 1
+				pseudonyms[raw] = "player-" .. pseudonymCount
+			end
+			out[k] = pseudonyms[raw]
 		else
 			out[k] = CopyValue(v, depth + 1)
 		end
@@ -66,35 +80,66 @@ local function CopyValue(value, depth)
 	return out
 end
 
+local function EstimateSize(value, depth)
+	local t = type(value)
+	if t == "string" then return string.len(value) + 8 end
+	if t ~= "table" then return 16 end
+	if depth >= 4 then return 32 end
+	local total = 16
+	for k, v in pairs(value) do
+		total = total + EstimateSize(k, depth + 1) + EstimateSize(v, depth + 1)
+	end
+	return total
+end
+
 function SurvivorUI_RebornRecord(eventType, data)
 	if not recording or not session then
 		return
 	end
-	if table.getn(session.events) >= MAX_EVENTS then
+	local copied = CopyValue(data, 0)
+	local size = EstimateSize(copied, 0)
+	local critical = CRITICAL[eventType] == true
+	-- Reserve the last 10% of the budget for critical lifecycle
+	-- evidence; low-priority events drop first and are counted.
+	local byteLimit = critical and MAX_BYTES or math.floor(MAX_BYTES * 0.9)
+	local eventLimit = critical and MAX_EVENTS or math.floor(MAX_EVENTS * 0.9)
+	if session.bytes + size > byteLimit or table.getn(session.events) >= eventLimit then
 		session.truncated = true
+		session.dropped[eventType] = (session.dropped[eventType] or 0) + 1
 		return
 	end
+	session.bytes = session.bytes + size
 	session.seq = session.seq + 1
 	table.insert(session.events, {
 		seq = session.seq,
 		t = math.floor((Now() - sessionStart) * 1000) / 1000,
 		run = SurvivorUI_RebornRunId and SurvivorUI_RebornRunId() or nil,
 		type = eventType,
-		data = CopyValue(data, 0),
+		data = copied,
 	})
 end
 
-local function NewSessionId()
-	if date then
-		return date("%Y-%m-%d-%H%M%S")
-	end
-	return "session-" .. tostring(math.floor(Now()))
+function SurvivorUI_RebornRecording()
+	return recording
+end
+
+local function NewSessionId(db)
+	db.counter = (db.counter or 0) + 1
+	local stamp = date and date("%Y-%m-%d-%H%M%S") or ("t" .. tostring(math.floor(Now())))
+	return stamp .. "-" .. string.format("%03d", db.counter)
 end
 
 function SurvivorUI_RebornRecordStart()
+	if recording and session then
+		return session.id
+	end
 	local db = DB()
+	pendingTooltips = {}
+	tooltipBaselines = {}
+	pseudonyms = {}
+	pseudonymCount = 0
 	session = {
-		id = NewSessionId(),
+		id = NewSessionId(db),
 		schema = SCHEMA,
 		status = "active",
 		addonVersion = "3.0.68",
@@ -106,6 +151,8 @@ function SurvivorUI_RebornRecordStart()
 		seq = 0,
 		runs = {},
 		truncated = false,
+		bytes = 0,
+		dropped = {},
 		events = {},
 	}
 	sessionStart = Now()
@@ -115,6 +162,7 @@ function SurvivorUI_RebornRecordStart()
 	while table.getn(db.order) > MAX_SESSIONS do
 		local old = table.remove(db.order, 1)
 		db.sessions[old] = nil
+		db.droppedSessions = (db.droppedSessions or 0) + 1
 	end
 	SurvivorUI_RebornRecord("session_start", { run = SurvivorUI_RebornRunId and SurvivorUI_RebornRunId() or nil })
 	if SurvivorUI_RebornAbilities then
@@ -123,6 +171,13 @@ function SurvivorUI_RebornRecordStart()
 			rawAbilities = AZS_ABILITIES, rawSpells = AZS_SPELLS,
 			normalized = data.all, source = data.source,
 		})
+		if SurvivorUI_RebornTooltipRead then
+			for i = 1, table.getn(data.all) do
+				local read = SurvivorUI_RebornTooltipRead(data.all[i].key)
+				tooltipBaselines[data.all[i].key] = read
+				SurvivorUI_RebornRecord("tooltip", { phase = "baseline", read = read })
+			end
+		end
 	end
 	if SurvivorUI_RebornJewelry then
 		local jew = SurvivorUI_RebornJewelry(true)
@@ -136,6 +191,7 @@ function SurvivorUI_RebornRecordStop()
 		return nil
 	end
 	SurvivorUI_RebornRecord("session_stop", {})
+	pendingTooltips = {}
 	session.status = session.truncated and "truncated" or "completed"
 	session.endedAt = time and time() or nil
 	recording = false
@@ -182,25 +238,47 @@ end
 -- Bounded follow-up tooltip captures after an ability change: the
 -- native tooltip may update after the rank does.
 function SurvivorUI_RebornRecordTooltipSoon(key)
-	if not recording then
+	if not recording or not session then
 		return
 	end
-	table.insert(pendingTooltips, { key = key, at = Now() + 1, tries = 0 })
+	if tooltipBaselines[key] then
+		SurvivorUI_RebornRecord("tooltip", { phase = "pre", read = tooltipBaselines[key] })
+	end
+	for i = 1, table.getn(pendingTooltips) do
+		if pendingTooltips[i].key == key then
+			return
+		end
+	end
+	table.insert(pendingTooltips, {
+		key = key, at = Now() + 1, tries = 0,
+		sessionId = session.id,
+		run = SurvivorUI_RebornRunId and SurvivorUI_RebornRunId() or nil,
+	})
 end
 
 local timer = CreateFrame and CreateFrame("Frame") or nil
 if timer then
+	local observeAt = 0
+	local lastBossKey = nil
 	timer:SetScript("OnUpdate", function()
-		if not recording or table.getn(pendingTooltips) == 0 then
+		if not recording or not session then
 			return
 		end
 		local now = Now()
 		for i = table.getn(pendingTooltips), 1, -1 do
 			local p = pendingTooltips[i]
-			if now >= p.at then
-				if SurvivorUI_RebornTooltipCapture then
-					local ok, lines = pcall(SurvivorUI_RebornTooltipCapture, p.key)
-					SurvivorUI_RebornRecord("tooltip", { key = p.key, ok = ok, lines = lines })
+			local currentRun = SurvivorUI_RebornRunId and SurvivorUI_RebornRunId() or nil
+			if p.sessionId ~= session.id or p.run ~= currentRun then
+				table.remove(pendingTooltips, i)
+			elseif now >= p.at then
+				if SurvivorUI_RebornTooltipRead then
+					local ok, read = pcall(SurvivorUI_RebornTooltipRead, p.key)
+					if ok then
+						tooltipBaselines[p.key] = read
+						SurvivorUI_RebornRecord("tooltip", { phase = "post", read = read })
+					else
+						SurvivorUI_RebornRecord("tooltip", { phase = "post", key = p.key, ok = false, error = tostring(read) })
+					end
 				end
 				p.tries = p.tries + 1
 				if p.tries >= 2 then
@@ -210,7 +288,32 @@ if timer then
 				end
 			end
 		end
+		-- UI-independent observation: refresh shared caches and
+		-- boss transitions even when no panel is visible.
+		if now >= observeAt then
+			observeAt = now + 2
+			if SurvivorUI_RebornCheckRun then SurvivorUI_RebornCheckRun() end
+			if SurvivorUI_RebornAbilities then SurvivorUI_RebornAbilities() end
+			if SurvivorUI_RebornJewelry then SurvivorUI_RebornJewelry() end
+			if SurvivorUI_RebornNextBoss then
+				local nb = SurvivorUI_RebornNextBoss()
+				local key = nb and (tostring(nb.mode) .. "|" .. tostring(nb.state) .. "|" .. tostring(nb.number)) or "none"
+				if key ~= lastBossKey then
+					lastBossKey = key
+					SurvivorUI_RebornRecord("boss_transition", { nextBoss = nb, run = AZS_RUN, rift = AZS_RIFT })
+				end
+			end
+		end
 	end)
+end
+
+function SurvivorUI_RebornRecordAuto(enabled)
+	SurvivorUIDB = SurvivorUIDB or {}
+	SurvivorUIDB.rebornRecordAuto = enabled == true
+	if enabled and not recording then
+		SurvivorUI_RebornRecordStart()
+	end
+	return SurvivorUIDB.rebornRecordAuto
 end
 
 -- A session left "active" by a reload or crash is interrupted, not
@@ -220,4 +323,17 @@ for id, s in pairs(db.sessions) do
 	if type(s) == "table" and s.status == "active" then
 		s.status = "interrupted"
 	end
+end
+if SurvivorUIDB and SurvivorUIDB.rebornRecordAuto == true then
+	SurvivorUI_RebornRecordStart()
+end
+if timer and timer.RegisterEvent then
+	timer:RegisterEvent("PLAYER_LOGOUT")
+	local prior = timer.GetScript and timer:GetScript("OnEvent") or nil
+	timer:SetScript("OnEvent", function(self, event)
+		if event == "PLAYER_LOGOUT" and recording then
+			SurvivorUI_RebornRecordStop()
+		end
+		if prior then prior(self, event) end
+	end)
 end

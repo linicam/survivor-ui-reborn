@@ -38,6 +38,15 @@ check `/sui reborn` prints the Reborn summary. Diagnostics:
 `/sui reborn probe` (full report), `/sui reborn boss|abilities|jewelry|upgrades|curses`,
 `/sui reborn debug on|off`. Roll back by restoring your backed-up folders.
 
+**Diagnostic recording:** enable it once with
+`/sui reborn record auto on`, extract
+`SurvivorUI-Reborn-Diagnostics-Helper.zip`, and run
+`Test-Diagnostics.bat` once before playing. After that, play normally,
+exit the game completely, and double-click `Upload-Diagnostics.bat`;
+it uploads the newest verified session to the private diagnostics
+repository. See [`DIAGNOSTICS.md`](DIAGNOSTICS.md) for session
+lifecycle, privacy, upload, and replay details.
+
 
 ## Commands at a glance
 

@@ -1068,6 +1068,9 @@ function SurvivorUI_SetExtraButton(button, spell, icon)
 		if SurvivorUI_RebornCaptureNote then
 			SurvivorUI_RebornCaptureNote("extra button 12 cleared")
 		end
+		if SurvivorUI_RebornRecord then
+			SurvivorUI_RebornRecord("extra_button", { button = 12, spell = nil, visible = false })
+		end
 		return
 	end
 	frame:SetAttribute("spell", spell)
@@ -1077,6 +1080,9 @@ function SurvivorUI_SetExtraButton(button, spell, icon)
 	ClaimBinding(frame)
 	if SurvivorUI_RebornCaptureNote then
 		SurvivorUI_RebornCaptureNote("extra button 12 spell=" .. tostring(spell) .. " ownedBinding=" .. tostring(frame.ownedBinding))
+	end
+	if SurvivorUI_RebornRecord then
+		SurvivorUI_RebornRecord("extra_button", { button = 12, spell = spell, visible = true, ownedBinding = frame.ownedBinding })
 	end
 	if GetSpellCooldown and CooldownFrame_SetTimer then
 		local start, duration = GetSpellCooldown(spell)

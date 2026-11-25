@@ -50,6 +50,6 @@ rm -rf "$HELPER_STAGE" "$HELPER_OUT"
 mkdir -p "$HELPER_STAGE"
 cp tools/diagnostics-helper/Upload-Diagnostics.bat "$HELPER_STAGE/"
 cp tools/diagnostics-helper/Upload-Diagnostics.ps1 "$HELPER_STAGE/"
-cp tools/diagnostics-helper/README.md "$HELPER_STAGE/"
+cp tools/diagnostics-helper/Test-Diagnostics.bat "$HELPER_STAGE/"; cp tools/diagnostics-helper/README.md "$HELPER_STAGE/"
 ( cd "$HELPER_STAGE" && zip -qr -X "../SurvivorUI-Reborn-Diagnostics-Helper.zip" . )
 echo "Built: $HELPER_OUT"
