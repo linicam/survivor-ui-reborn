@@ -1342,11 +1342,19 @@ function SurvivorUI_RebornProbe()
 		while frame do
 			if frame.GetAttribute then
 				local spell = frame:GetAttribute("spell")
-				if spell then
-					Add(string.format("  spell frame: name=%s spell=%s", tostring(frame:GetName()), tostring(spell)))
+				local macro = frame:GetAttribute("macrotext")
+				if spell or macro then
+					Add(string.format("  spell frame: name=%s spell=%s macro=%s", tostring(frame:GetName()), tostring(spell), tostring(macro)))
 				end
 			end
 			frame = EnumerateFrames(frame)
+		end
+	end
+	if type(AZS_TIMERS) == "table" then
+		for i = 1, table.getn(AZS_TIMERS) do
+			local t = AZS_TIMERS[i]
+			Add(string.format("  timer: name=%s kind=%s ready=%s wait=%s icon=%s",
+				tostring(Field(t, "name", 1)), tostring(Field(t, "kind", 3)), tostring(Field(t, "ready", 4)), tostring(Field(t, "wait", 5)), tostring(Field(t, "icon", 2))))
 		end
 	end
 	if GetNumSpellTabs and GetSpellTabInfo and GetSpellName then
