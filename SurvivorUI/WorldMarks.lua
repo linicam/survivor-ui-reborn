@@ -29,7 +29,8 @@
 -- - Guardians' rings: where a sleeping guardian wakes, and how far from its
 --   lair an awake one lets you go before it gives up (the game's rule, read
 --   in its 0.139.2), with a warning in your last yards; on the minimap too
---   (MapPins.lua).
+--   (MapPins.lua). Original game only: in Reborn the rings are not drawn
+--   (the API publishes no wake/leash radii).
 --
 -- An enemy whose Survivor Plates plate shows (SurvivorPlates_PlateShows) is
 -- left to it: the plate names it and wears the mark drawn beside its bar.
@@ -125,7 +126,17 @@ local looks = 0                  -- counts the changes of look, for the dots to 
 local LINE_SHARE, PIECE_MOST, MOST_PIECES = 0.6, 14, 300
 local BAND_UV = 4 / 64
 
+local LEASH_KEYS = { leashWake = true, leashReset = true, leashWarn = true, leashMinimap = true }
+
 local function On(key)
+	-- Reborn: no guardians' rings, on the ground or the minimap. The
+	-- radii (WAKE 20, LEASH 97.5) are the original game's rule, read
+	-- from its 0.139.2; the Reborn API publishes no wake/leash radii,
+	-- so the circles would claim ranges the game never told. Lair
+	-- pins and marks (positions) stay.
+	if LEASH_KEYS[key] and SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+		return false
+	end
 	local value = SurvivorUIDB and SurvivorUIDB[key]
 	if value == nil then
 		return DEFAULTS[key]

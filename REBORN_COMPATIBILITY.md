@@ -243,7 +243,12 @@ unchanged in substance); the full audit is in the research notes
   guardian health while awake, and the respawn countdowns
   (`AZS_LAIRS.left`, seconds until an empty lair fills). The
   `/20:00` in the clock is `AZS_ZONE.len` ("run seconds to the
-  final boss"), a real Reborn field, and stays.
+  final boss"), a real Reborn field, and stays. The guardians'
+  wake/leash rings (the dotted circles on the ground and the
+  minimap) are likewise original-game constants (WAKE 20, LEASH
+  97.5, read from the original's 0.139.2) with no Reborn API
+  basis, and are no longer drawn in Reborn; lair pins and
+  position marks stay.
 - **Localization**: the zhCN translations were not missing — they
   were not delivered. Every load-time label (`This Run`, the 11 stat
   rows, `Biggest Crits`, `Reset`, `Stats`, `Build`, `Info`, `Rank`,
