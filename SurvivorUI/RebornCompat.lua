@@ -1323,8 +1323,10 @@ function SurvivorUI_RebornProbe()
 	Add("debug=" .. tostring(SurvivorUI_RebornDebugEnabled()))
 	if GetSpellInfo then
 		local name = GetSpellInfo(190784)
+		local known = IsPlayerSpell and IsPlayerSpell(190784) or false
+		local nameZh = GetSpellInfo("神圣战马")
 		Add(string.format("  steed candidate: id190784 name=%s known=%s nameZh=%s",
-			tostring(name), tostring(IsPlayerSpell and IsPlayerSpell(190784)), tostring(GetSpellInfo("神圣战马"))))
+			tostring(name), tostring(known), tostring(nameZh)))
 	end
 	if GetNumSpellTabs and GetSpellTabInfo and GetSpellName then
 		for tab = 1, GetNumSpellTabs() do
