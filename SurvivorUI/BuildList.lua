@@ -1614,7 +1614,7 @@ local function Draw()
 	-- Original game: highest rank first. Reborn actives can number
 	-- seven (the account-talent active ahead of the racial active).
 	local order = rebornActives and BarOrder(spells, slotted) or RankOrder(spells, slotted)
-	local activeSlots = rebornActives and math.max(SLOTS, math.min(count, 7)) or SLOTS
+	local activeSlots = rebornActives and math.max(SLOTS, math.min(count, 8)) or SLOTS
 	-- Rows from the highest rank down; each spell keeps its own action button
 	-- for its icon.
 	for place = 1, activeSlots do
@@ -2699,7 +2699,7 @@ function SurvivorUI_BuildRows()
 		end
 		table.insert(shown, row)
 	end
-	for place = 1, rebornActives and math.max(SLOTS, math.min(count, 7)) or SLOTS do
+	for place = 1, rebornActives and math.max(SLOTS, math.min(count, 8)) or SLOTS do
 		if order[place] then
 			if rebornActives then
 				Add(spells[order[place]], SpellSlotFor(Field(spells[order[place]], "key", 1)), false)
