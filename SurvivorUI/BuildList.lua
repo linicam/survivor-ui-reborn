@@ -1540,12 +1540,12 @@ local function SpellSlotFor(key)
 			return Slot(index, count)
 		end
 	end
-	-- Reborn: actives the bar layout does not carry sit on the extra
-	-- buttons (7 account-talent, 12 racial).
+	-- Reborn: the racial active the bar layout does not carry sits
+	-- on the extra button (12).
 	if SurvivorUI_RebornAbilityByKey then
 		local ability = SurvivorUI_RebornAbilityByKey(key)
-		if ability and not ability.passive then
-			return ability.kind == "racial" and 12 or 7
+		if ability and not ability.passive and ability.kind == "racial" then
+			return 12
 		end
 	end
 	return nil
@@ -2328,8 +2328,7 @@ local function DrawGear()
 	-- (a sixth piece is no longer dropped), and no "empty" rows are
 	-- shown for slots the loadout does not claim.
 	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry() or nil
-	if rebornJewelry and (rebornJewelry.source == "loadout" or rebornJewelry.source == "gear")
-		and table.getn(rebornJewelry.items) > 0 then
+	if rebornJewelry and (rebornJewelry.source == "loadout" or rebornJewelry.source == "gear") then
 		local count = table.getn(rebornJewelry.items)
 		for index = 1, count do
 			local line = GearLine(index)
@@ -2828,8 +2827,7 @@ function SurvivorUI_GearSnapshot()
 	-- name / rank / rarity / icon where the API gave them, and no
 	-- invented effect text.
 	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry() or nil
-	if rebornJewelry and (rebornJewelry.source == "loadout" or rebornJewelry.source == "gear")
-		and table.getn(rebornJewelry.items) > 0 then
+	if rebornJewelry and (rebornJewelry.source == "loadout" or rebornJewelry.source == "gear") then
 		local gear = {}
 		for index = 1, table.getn(rebornJewelry.items) do
 			local item = rebornJewelry.items[index]

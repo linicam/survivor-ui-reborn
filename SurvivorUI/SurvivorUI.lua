@@ -949,14 +949,15 @@ for position = 1, 8 do
 	AddBacking(slot)
 end
 
--- Reborn's extra actives (button 7 account-talent, button 12 racial)
--- are not placed by the game, and PickupSpell cannot pick up spells
--- the spellbook does not hold (selected racials, account talents).
--- Secure buttons over those two slots cast them directly; their
--- spell is set out of combat by SurvivorUI_SetExtraButton.
+-- Reborn's racial active (button 12) is not placed by the game, and
+-- PickupSpell cannot pick up spells the spellbook does not hold
+-- (selected racials). A secure button over that slot casts it
+-- directly; its spell is set out of combat by
+-- SurvivorUI_SetExtraButton. (The former button-7 overlay for the
+-- account-talent active was removed: no supported trigger exists.)
 do
 	row.extraButtons = {}
-	for _, spec in pairs({ { button = 7, position = 7, key = "7" }, { button = 12, position = 8, key = "=" } }) do
+	for _, spec in pairs({ { button = 12, position = 8, key = "=" } }) do
 		local frame = CreateFrame("Button", "SurvivorUIExtra" .. spec.button, row, "SecureActionButtonTemplate")
 		frame:SetWidth(BUTTON_SIZE)
 		frame:SetHeight(BUTTON_SIZE)
@@ -982,24 +983,55 @@ do
 			end
 		end)
 		frame:Hide()
-		-- Never silently overwrite an existing binding: claim the
-		-- key only when it is unbound or already clicks this button.
-		if SetBindingClick and GetBindingAction then
-			local action = GetBindingAction(spec.key)
-			if not action or action == "" or action == "CLICK SurvivorUIExtra" .. spec.button .. ":LeftButton" then
-				SetBindingClick(spec.key, "SurvivorUIExtra" .. spec.button)
-			end
-		end
+		frame.key = spec.key
+		frame.ownedBinding = false
 		row.extraButtons[spec.button] = frame
 	end
+end
+
+-- Binding claim/release and the reset watcher are deferred to the
+-- first SetExtraButton call: SurvivorUI.lua loads before
+-- RebornCompat.lua, so neither SurvivorUI_RebornActive nor
+-- SurvivorUI_RebornRegisterReset exists at file scope here.
+-- Scoped in a do-block: this file is at Lua's 200-local limit.
+do
+local extraButtonsReady = false
+local function ExtraButtonsReady()
+	if extraButtonsReady then
+		return
+	end
+	extraButtonsReady = true
 	if SurvivorUI_RebornRegisterReset then
 		SurvivorUI_RebornRegisterReset(function()
-			for _, frame in pairs(row.extraButtons) do
-				frame.spell = nil
-				frame.icon:SetTexture(nil)
-				frame:Hide()
-			end
+			SurvivorUI_SetExtraButton(12, nil)
 		end)
+	end
+end
+
+local function ClaimBinding(frame)
+	-- Never silently overwrite an existing binding, and only in
+	-- Reborn: claim the key when it is unbound or already clicks
+	-- this button.
+	if not (SurvivorUI_RebornActive and SurvivorUI_RebornActive()) then
+		return
+	end
+	if SetBindingClick and GetBindingAction and frame.key then
+		local action = GetBindingAction(frame.key)
+		if not action or action == "" or action == "CLICK SurvivorUIExtra12:LeftButton" then
+			SetBindingClick(frame.key, "SurvivorUIExtra12")
+			frame.ownedBinding = true
+		end
+	end
+end
+
+local function ReleaseBinding(frame)
+	-- Release only a binding this addon owns; never touch a
+	-- binding the user set themselves.
+	if frame.ownedBinding and SetBinding and GetBindingAction and frame.key then
+		if GetBindingAction(frame.key) == "CLICK SurvivorUIExtra12:LeftButton" then
+			SetBinding(frame.key, nil)
+		end
+		frame.ownedBinding = false
 	end
 end
 
@@ -1008,25 +1040,51 @@ function SurvivorUI_SetExtraButton(button, spell, icon)
 	if not frame then
 		return
 	end
-	if not spell then
-		frame.spell = nil
-		frame.icon:SetTexture(nil)
-		frame:Hide()
+	ExtraButtonsReady()
+	if InCombatLockdown and InCombatLockdown() then
+		-- Protected changes defer to the next out-of-combat call
+		-- (PlaceRacialButton runs on every build draw).
+		frame.pendingSpell = spell
+		frame.pendingIcon = icon
+		frame.hasPending = true
 		return
 	end
-	if InCombatLockdown and InCombatLockdown() then
+	if frame.hasPending then
+		frame.hasPending = false
+		if spell == nil and frame.pendingSpell ~= nil then
+			spell, icon = frame.pendingSpell, frame.pendingIcon
+		end
+		frame.pendingSpell, frame.pendingIcon = nil, nil
+	end
+	if not spell then
+		frame.spell = nil
+		frame:SetAttribute("spell", nil)
+		frame.icon:SetTexture(nil)
+		if CooldownFrame_SetTimer then
+			CooldownFrame_SetTimer(frame.cooldown, 0, 0, 0)
+		end
+		frame:Hide()
+		ReleaseBinding(frame)
+		if SurvivorUI_RebornCaptureNote then
+			SurvivorUI_RebornCaptureNote("extra button 12 cleared")
+		end
 		return
 	end
 	frame:SetAttribute("spell", spell)
 	frame.spell = spell
 	frame.icon:SetTexture(icon)
 	frame:Show()
+	ClaimBinding(frame)
+	if SurvivorUI_RebornCaptureNote then
+		SurvivorUI_RebornCaptureNote("extra button 12 spell=" .. tostring(spell) .. " ownedBinding=" .. tostring(frame.ownedBinding))
+	end
 	if GetSpellCooldown and CooldownFrame_SetTimer then
 		local start, duration = GetSpellCooldown(spell)
 		if start and duration then
 			CooldownFrame_SetTimer(frame.cooldown, start, duration, 1)
 		end
 	end
+end
 end
 
 ------------------------------------------------------------------------------

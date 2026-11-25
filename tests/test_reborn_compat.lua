@@ -232,7 +232,12 @@ eq("abilities throttle: throttled repeats send nothing", requestCount, 1)
 fakeTime = 2006
 SurvivorUI_RebornRequestAbilities(false)
 eq("abilities throttle: no repeat request without a build change", requestCount, 1)
+-- Cooldown-only line: stamp moves, signature does not.
 AZS_SPELLS_UPDATED = 9999
+SurvivorUI_RebornRequestAbilities(false)
+eq("abilities throttle: cooldown-only update sends nothing", requestCount, 1)
+-- Rank increase: signature changes.
+AZS_SPELLS = { { "fireball", 133, 4, 0, 8 } }
 SurvivorUI_RebornRequestAbilities(false)
 eq("abilities throttle: build change re-requests", requestCount, 2)
 
@@ -348,7 +353,7 @@ AZS_GetRunTime = function() return 110 end
 curses = SurvivorUI_RebornCurses()
 eq("curses: one active item", table.getn(curses.items), 1)
 eq("curses: effect translated", curses.items[1].text, "Horde surges ")
-eq("curses: countdown from buff", curses.items[1].left, 10)
+eq("curses: countdown from banner duration", curses.items[1].left, 10)
 
 -- ===========================================================================
 -- Run reset (VERIFIED run id)
@@ -444,15 +449,16 @@ AZS_GetMeterLoadout = function(req)
 	}
 end
 local jew = SurvivorUI_RebornJewelry(true)
-eq("round2 jewelry: deduped to 3 items", table.getn(jew.items), 3)
-eq("round2 jewelry: duplicate merged count", jew.duplicates, 1)
-eq("round2 jewelry: repeat count shown", jew.items[1].count, 2)
+-- Distinct itemInstanceKeys are distinct owned pieces: no merge.
+eq("round2 jewelry: distinct instances stay distinct", table.getn(jew.items), 4)
+eq("round2 jewelry: no duplicates merged", jew.duplicates, 0)
 eq("round2 jewelry: slot from sourceKey (ring)", jew.items[1].slot, "Ring")
-eq("round2 jewelry: slot from sourceKey (trinket)", jew.items[2].slot, "Trinket")
-eq("round2 jewelry: slot from sourceKey (neck)", jew.items[3].slot, "Neck")
-check("round2 jewelry: two 55s are distinct pieces", jew.items[1].name ~= jew.items[2].name)
+eq("round2 jewelry: slot from sourceKey (ring 2)", jew.items[2].slot, "Ring")
+eq("round2 jewelry: slot from sourceKey (trinket)", jew.items[3].slot, "Trinket")
+eq("round2 jewelry: slot from sourceKey (neck)", jew.items[4].slot, "Neck")
+check("round2 jewelry: two 55s are distinct pieces", jew.items[1].name ~= jew.items[3].name)
 eq("round2 jewelry: icon kept", jew.items[1].icon, "INV_Jewelry_Ring_01")
-eq("round2 jewelry: rarity kept, not invented", jew.items[3].rarity, "epic")
+eq("round2 jewelry: rarity kept, not invented", jew.items[4].rarity, "epic")
 check("round2 jewelry: rank-55 ring has no rarity", jew.items[1].rarity == nil)
 local raw = SurvivorUI_RebornJewelryRawLines()
 local rawJoined = table.concat(raw, "\n")
@@ -501,6 +507,43 @@ end
 local jew2 = SurvivorUI_RebornJewelry(true)
 eq("audit jewelry: duplicate records merge", table.getn(jew2.items), 1)
 eq("audit jewelry: no instance key, no acquisition count", jew2.items[1].count, 1)
+
+-- PR4 follow-up regressions.
+resetGame()
+AZS_ZONE = { run = "azs:r55555555" }
+AZS_ABILITIES = { { key = "fireball", spell = 133, rank = 3, passive = false, kind = "class", cd = 0, cdmax = 8, name = "Fireball", icon = "i", text = "t" } }
+AZS_ABILITIES_UPDATED = 20
+AZS_SPELLS = { { key = "fireball", spell = 133 } }
+AZS_SPELLS_UPDATED = 20
+data = SurvivorUI_RebornAbilities()
+eq("pr4 merge: missing spells rank keeps snapshot rank", data.all[1].rank, 3)
+eq("pr4 merge: missing spells cdmax keeps snapshot cdmax", data.all[1].cdmax, 8)
+local goodRequest = function() requestCount = requestCount + 1 end
+requestCount = 0
+AZS_RequestAbilities = function() error("boom") end
+fakeTime = 5000
+check("pr4 request: failure reported", SurvivorUI_RebornRequestAbilities(true) == false)
+AZS_RequestAbilities = goodRequest
+check("pr4 request: retry after failure allowed", SurvivorUI_RebornRequestAbilities(true) == true)
+resetGame()
+AZS_ZONE = { run = "azs:r66666666" }
+AZS_GetMeterContext = function() return { runId = "azs:r66666666", localOwnerId = "hero:me" } end
+AZS_GetMeterLoadout = function() return { runJewelry = {}, sources = {} } end
+local jew3 = SurvivorUI_RebornJewelry(true)
+eq("pr4 jewelry: empty loadout is authoritative", jew3.source, "loadout")
+eq("pr4 jewelry: empty loadout has no items", table.getn(jew3.items), 0)
+resetGame()
+AZS_ZONE = { run = "azs:r77777777" }
+AZS_RequestAbilities = function() end
+AZS_RUN = { ph = "playing" }
+AZS_GetRunTime = function() return 25 end
+AZS_BANNERS = {
+	{ id = 1, kind = "curse", text = "Проклятие тяготеет над тобой: что-то странное (20 с)!", time = 10 },
+	{ id = 2, kind = "curse", text = "Проклятие тяготеет над тобой: орда накатывает волной (20 с)!", time = 900 },
+}
+local curses2 = SurvivorUI_RebornCurses()
+eq("pr4 curse: stale future banner ignored", table.getn(curses2.items), 1)
+check("pr4 curse: unknown effect keeps raw text", string.find(curses2.items[1].text, "странное", 1, true) ~= nil)
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end
