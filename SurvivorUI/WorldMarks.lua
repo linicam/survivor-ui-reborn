@@ -431,14 +431,17 @@ local function ReadAll()
 	local lairs = {}
 	spots.lairs = lairs
 	-- When each empty lair is claimed again (AZS_LAIRS' "left", seconds from
-	-- its line, as Guardians.lua reads it).
+	-- its line, as Guardians.lua reads it). Not in Reborn: guardians do not
+	-- respawn at the fixed lair point there, so no countdown is shown.
 	local refill = {}
 	local since = AZS_LAIRS_UPDATED and (GetTime() - AZS_LAIRS_UPDATED) or 0
-	for index = 1, table.getn(AZS_LAIRS or {}) do
-		local lair = AZS_LAIRS[index]
-		local left = tonumber(Field(lair, "left", 5))
-		if left then
-			refill[tonumber(Field(lair, "index", 1)) or index] = GetTime() + left - since
+	if not (SurvivorUI_RebornActive and SurvivorUI_RebornActive()) then
+		for index = 1, table.getn(AZS_LAIRS or {}) do
+			local lair = AZS_LAIRS[index]
+			local left = tonumber(Field(lair, "left", 5))
+			if left then
+				refill[tonumber(Field(lair, "index", 1)) or index] = GetTime() + left - since
+			end
 		end
 	end
 	-- The enemies first, each by its unit, so a lair's guardian is found.
@@ -753,13 +756,17 @@ local function Paint(mark, spot, x, y, yards)
 		if spot.empty then
 			icon:SetVertexColor(0.6, 0.6, 0.6, 0.6)
 			name:SetTextColor(0.55, 0.55, 0.55)
-			local left = spot.refill and spot.refill - GetTime()
-			mark.yards:SetText(left and left > 0 and Clock(left) or (SurvivorUI_T and SurvivorUI_T("soon") or "soon"))
-			mark.yards:SetTextColor(RESPAWN[1], RESPAWN[2], RESPAWN[3])
-			mark.yards:ClearAllPoints()
-			mark.yards:SetPoint("TOP", mark, "CENTER", 0, -12)
-			mark.yards:Show()
-			yards = nil
+			-- In Reborn there is no refill countdown (see ReadAll):
+			-- the distance below shows instead.
+			if spot.refill then
+				local left = spot.refill - GetTime()
+				mark.yards:SetText(left and left > 0 and Clock(left) or (SurvivorUI_T and SurvivorUI_T("soon") or "soon"))
+				mark.yards:SetTextColor(RESPAWN[1], RESPAWN[2], RESPAWN[3])
+				mark.yards:ClearAllPoints()
+				mark.yards:SetPoint("TOP", mark, "CENTER", 0, -12)
+				mark.yards:Show()
+				yards = nil
+			end
 		end
 	elseif look == "downed" then
 		local pulse = 1 + 0.12 * math.sin(GetTime() * 5)

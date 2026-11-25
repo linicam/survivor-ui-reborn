@@ -239,9 +239,12 @@ unchanged in substance); the full audit is in the research notes
   `GOAL=4, GOAL_TIME=480`). The Reborn API documents no such goal
   (no field carries it; `AZS_RUN` has only guardians slain/awake
   and the lair count), so the line is no longer drawn in Reborn.
-  What stays is all Reborn data: lair positions (arrows/distance),
-  guardian health while awake, and the respawn countdowns
-  (`AZS_LAIRS.left`, seconds until an empty lair fills). The
+  What stays is all Reborn data: lair positions (arrows/distance)
+  and guardian health while awake. The respawn countdowns at the
+  fixed lair point are removed in Reborn: guardians do not come
+  back at that point there (in-game report, 2026-11-26), so a
+  countdown pinned to it misleads, even though `AZS_LAIRS.left`
+  is documented. The
   `/20:00` in the clock is `AZS_ZONE.len` ("run seconds to the
   final boss"), a real Reborn field, and stays. The guardians'
   wake/leash rings (the dotted circles on the ground and the

@@ -431,7 +431,15 @@ local function Draw()
 		local entry = { place = place, state = state, alive = state ~= "empty", name = Field(lair, "name", 3) or "?",
 			id = tonumber(Field(lair, "id", 4)) or 0 }
 		if state == "empty" then
-			entry.left = (tonumber(Field(lair, "left", 5)) or -1) - since
+			-- Reborn: no respawn countdown. Guardians do not come
+			-- back at the fixed lair point there, so a countdown
+			-- pinned to it misleads; the lair's place and distance
+			-- still show. (AZS_LAIRS.left is documented, but the
+			-- fixed-point respawn it describes is the original
+			-- game's behaviour.)
+			if not (SurvivorUI_RebornActive and SurvivorUI_RebornActive()) then
+				entry.left = (tonumber(Field(lair, "left", 5)) or -1) - since
+			end
 		elseif state == "awake" then
 			entry.share = healths[entry.id]
 		elseif healths[entry.id] and healths[entry.id] < 1 then
@@ -480,7 +488,9 @@ local function Draw()
 		end
 		if entry.state == "empty" then
 			row.name:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
-			if entry.left and entry.left > 0 then
+			if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+				row.state:SetText("")
+			elseif entry.left and entry.left > 0 then
 				row.state:SetText(Clock(entry.left))
 			else
 				row.state:SetText(SurvivorUI_T("soon"))

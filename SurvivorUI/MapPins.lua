@@ -653,7 +653,11 @@ local function Update()
 					end
 					pin.title = SurvivorUI_T("Lair")
 					pin.flagged = tonumber(lair.flag) == 1 or nil
-					local left = settings.pinTimers and not lair.active and (tonumber(lair.left) or -1) - since
+					-- No respawn timer in Reborn (guardians do not
+					-- come back at the fixed lair point there).
+					local left = settings.pinTimers and not lair.active
+						and not (SurvivorUI_RebornActive and SurvivorUI_RebornActive())
+						and (tonumber(lair.left) or -1) - since
 					if left and left > 0 then
 						pin.timer:SetText(Clock(left))
 						pin.timer:Show()
