@@ -646,22 +646,20 @@ function SurvivorUI_RebornPlaceRacialButton()
 		end
 	end
 	local function Place(ability, button)
-		if not ability or GetActionInfo(button) then
+		if not ability then
 			return
 		end
 		local spellId, bookIndex = ability.spell, ability.bookIndex
 		if not (spellId and spellId > 0) and not bookIndex then
 			spellId, bookIndex = SpellbookSpell(ability.name)
 		end
-		if spellId and spellId > 0 then
-			PickupSpell(spellId)
-		elseif bookIndex and PickupSpellBookItem then
-			PickupSpellBookItem(bookIndex, "spell")
-		else
-			return
+		local icon = ability.icon
+		if not icon and bookIndex and GetSpellTexture then
+			icon = GetSpellTexture(bookIndex, "spell")
 		end
-		PlaceAction(button)
-		ClearCursor()
+		if SurvivorUI_SetExtraButton then
+			SurvivorUI_SetExtraButton(button, (spellId and spellId > 0) and spellId or ability.name, icon)
+		end
 	end
 	Place(extra, 7)
 	Place(racial, 12)
@@ -1308,6 +1306,19 @@ function SurvivorUI_RebornProbe()
 		.. " AZS_DEBUFFS=" .. (type(AZS_DEBUFFS) == "table" and tostring(table.getn(AZS_DEBUFFS)) or "absent")
 		.. " AZS_CURSES=" .. (type(AZS_CURSES) == "table" and "present" or "absent"))
 	Add("debug=" .. tostring(SurvivorUI_RebornDebugEnabled()))
+	if GetNumSpellTabs and GetSpellTabInfo and GetSpellName then
+		for tab = 1, GetNumSpellTabs() do
+			local _, _, offset, numSpells = GetSpellTabInfo(tab)
+			for i = 1, numSpells or 0 do
+				local index = offset + i
+				local name = GetSpellName(index, "spell")
+				if name and (string.find(name, "马", 1, true) or string.find(name, "Steed", 1, true)) then
+					local link = GetSpellLink and GetSpellLink(index, "spell")
+					Add(string.format("  spellbook: name=%s link=%s", tostring(name), tostring(link)))
+				end
+			end
+		end
+	end
 	return lines
 end
 
