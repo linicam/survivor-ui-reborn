@@ -1604,6 +1604,33 @@ end)
 ------------------------------------------------------------------------------
 -- More on hover: the time to the final boss, the run's settings.
 
+-- The stock zone-transition text ("Netherstorm") uses the client's
+-- map name, English on Reborn even in a zhCN client, while the run
+-- itself names the zone localized (AZS_ZONE.zname/zsub). Show the
+-- run's names there instead, in Reborn only.
+do
+	local frame = getglobal("ZoneTextFrame")
+	local zoneText = getglobal("ZoneTextString")
+	local subText = getglobal("SubZoneTextString")
+	if frame and zoneText then
+		local stockOnShow = frame:GetScript("OnShow")
+		frame:SetScript("OnShow", function()
+			if stockOnShow then
+				stockOnShow()
+			end
+			if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+				local zone = AZS_ZONE or {}
+				if zone.zname and zone.zname ~= "" then
+					zoneText:SetText(zone.zname)
+				end
+				if subText and zone.zsub and zone.zsub ~= "" then
+					subText:SetText(zone.zsub)
+				end
+			end
+		end)
+	end
+end
+
 local MOD_NAMES = { "Enemy density", "Enemy health", "Enemy damage", "Enemy speed" }
 head:SetScript("OnEnter", function()
 	local game = Game()
