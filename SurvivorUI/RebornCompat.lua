@@ -1067,6 +1067,35 @@ function SurvivorUI_RebornProbe()
 		.. " AZS_ALTAR=" .. (type(AZS_ALTAR) == "table" and "present" or "absent")
 		.. " AZS_PORTAL=" .. (type(AZS_PORTAL) == "table" and "present" or "absent")
 		.. " AZS_RIFT=" .. (type(AZS_RIFT) == "table" and "present" or "absent"))
+	if type(AZS_RIFT) == "table" then
+		local keys = {}
+		for k in pairs(AZS_RIFT) do table.insert(keys, k) end
+		table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+		for i = 1, table.getn(keys) do
+			local k = keys[i]
+			local v = AZS_RIFT[k]
+			if type(v) == "table" then
+				Add("  rift." .. tostring(k) .. " = {" .. tostring(table.getn(v)) .. " rows}")
+				for j = 1, math.min(table.getn(v), 8) do
+					local row = v[j]
+					if type(row) == "table" then
+						local parts = {}
+						for rk, rv in pairs(row) do
+							if type(rv) ~= "table" then
+								table.insert(parts, tostring(rk) .. "=" .. tostring(rv))
+							end
+						end
+						table.sort(parts)
+						Add("    rift." .. tostring(k) .. "[" .. tostring(j) .. "]: " .. table.concat(parts, " "))
+					else
+						Add("    rift." .. tostring(k) .. "[" .. tostring(j) .. "] = " .. tostring(row))
+					end
+				end
+			else
+				Add("  rift." .. tostring(k) .. " = " .. tostring(v))
+			end
+		end
+	end
 	local curses = SurvivorUI_RebornCurses()
 	Add("curses: supported=" .. tostring(curses.supported) .. " - " .. curses.reason)
 	Add("candidate globals: AZS_CHESTS=" .. (type(AZS_CHESTS) == "table" and tostring(table.getn(AZS_CHESTS)) or "absent")
