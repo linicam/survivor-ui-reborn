@@ -1440,28 +1440,34 @@ end
 
 -- Reborn: the build list in skill-bar order (the game's AZS_SPELLS
 -- order), so the list reads as the bar does. Actives on no button
--- keep their snapshot order after the slotted ones.
+-- follow the slotted ones (the account-talent active on button 7),
+-- racial actives last (button 12).
 local function BarOrder(spells, slotted)
 	local barIndex = {}
 	local bar = AZS_SPELLS or {}
 	for index = 1, table.getn(bar) do
 		barIndex[Field(bar[index], "key", 1)] = index
 	end
+	local function Group(index)
+		if barIndex[Field(spells[index], "key", 1)] then
+			return 0
+		end
+		if Field(spells[index], "kind", 5) == "racial" then
+			return 2
+		end
+		return 1
+	end
 	local order = {}
 	for index = 1, slotted do
 		table.insert(order, index)
 	end
 	table.sort(order, function(a, b)
-		local ba = barIndex[Field(spells[a], "key", 1)]
-		local bb = barIndex[Field(spells[b], "key", 1)]
-		if ba and bb then
-			return ba < bb
+		local ga, gb = Group(a), Group(b)
+		if ga ~= gb then
+			return ga < gb
 		end
-		if ba then
-			return true
-		end
-		if bb then
-			return false
+		if ga == 0 then
+			return barIndex[Field(spells[a], "key", 1)] < barIndex[Field(spells[b], "key", 1)]
 		end
 		return a < b
 	end)
@@ -1534,6 +1540,14 @@ local function SpellSlotFor(key)
 			return Slot(index, count)
 		end
 	end
+	-- Reborn: actives the bar layout does not carry sit on the extra
+	-- buttons (7 account-talent, 12 racial).
+	if SurvivorUI_RebornAbilityByKey then
+		local ability = SurvivorUI_RebornAbilityByKey(key)
+		if ability and not ability.passive then
+			return ability.kind == "racial" and 12 or 7
+		end
+	end
 	return nil
 end
 
@@ -1597,11 +1611,13 @@ local function Draw()
 		passiveEntries = {}
 	end
 	-- Reborn: skill-bar order, so the list reads as the bar does.
-	-- Original game: highest rank first.
+	-- Original game: highest rank first. Reborn actives can number
+	-- seven (the account-talent active ahead of the racial active).
 	local order = rebornActives and BarOrder(spells, slotted) or RankOrder(spells, slotted)
+	local activeSlots = rebornActives and math.max(SLOTS, math.min(count, 7)) or SLOTS
 	-- Rows from the highest rank down; each spell keeps its own action button
 	-- for its icon.
-	for place = 1, SLOTS do
+	for place = 1, activeSlots do
 		local row = Row(place)
 		row.icon:SetVertexColor(1, 1, 1)
 		local index = order[place]
@@ -1616,7 +1632,7 @@ local function Draw()
 		end
 	end
 	-- Every spell the same border in its color; the order says the rest.
-	for slot = 1, SLOTS do
+	for slot = 1, activeSlots do
 		local row = rows[slot]
 		if order[slot] then
 			Border(row, row.color, 0.6)
@@ -1641,7 +1657,7 @@ local function Draw()
 	-- Passives (Reborn only): one row each, snapshot order with
 	-- racial passives last, directly under the actives.
 	local passiveCount = table.getn(passiveEntries)
-	local passiveBase = rebornActives and SLOTS or SLOTS + 1
+	local passiveBase = rebornActives and activeSlots or SLOTS + 1
 	local passiveOrder = PassiveOrder(passiveEntries)
 	for place = 1, passiveCount do
 		local row = Row(passiveBase + place)
@@ -1657,11 +1673,11 @@ local function Draw()
 	if passiveCount > 0 then
 		list:SetHeight(TITLE_HEIGHT + HEAD_HEIGHT + (passiveBase + passiveCount) * ROW_HEIGHT + 6)
 	elseif rebornActives then
-		list:SetHeight(TITLE_HEIGHT + HEAD_HEIGHT + SLOTS * ROW_HEIGHT + 6)
+		list:SetHeight(TITLE_HEIGHT + HEAD_HEIGHT + activeSlots * ROW_HEIGHT + 6)
 	else
 		list:SetHeight(LIST_HEIGHT)
 	end
-	list.count:SetText((slotted >= SLOTS and "|cffff8080" or "|cffd0d0d0")..math.min(slotted, SLOTS).." / "..SLOTS.."|r")
+	list.count:SetText((slotted >= activeSlots and "|cffff8080" or "|cffd0d0d0")..math.min(slotted, activeSlots).." / "..activeSlots.."|r")
 	rankWidth = RankRoom()
 end
 
@@ -2683,7 +2699,7 @@ function SurvivorUI_BuildRows()
 		end
 		table.insert(shown, row)
 	end
-	for place = 1, SLOTS do
+	for place = 1, rebornActives and math.max(SLOTS, math.min(count, 7)) or SLOTS do
 		if order[place] then
 			if rebornActives then
 				Add(spells[order[place]], SpellSlotFor(Field(spells[order[place]], "key", 1)), false)

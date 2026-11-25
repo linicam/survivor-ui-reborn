@@ -161,6 +161,14 @@ SurvivorUI_LANGUAGE_FONTS = {
 }
 
 local BAR_BUTTONS = { 1, 2, 3, 4, 5, 6, 12 }     -- 12 is the = key
+-- Reborn adds button 7 before the racial: an account-talent active
+-- (Divine Steed) sits there, ahead of the racial active on 12.
+local function BarButtons()
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+		return { 1, 2, 3, 4, 5, 6, 7, 12 }
+	end
+	return BAR_BUTTONS
+end
 local BUTTON_SIZE = 36
 local BUTTON_GAP = 2
 local ROW_BELOW_CENTER = 150                    -- the row sits this far under the hero, who stands mid-screen
@@ -931,7 +939,7 @@ row:SetFrameStrata("LOW")
 -- slot. These are frames of the row, not textures of the buttons: a texture
 -- added to a button's own background layer draws over its icon.
 row.slots = {}
-for position = 1, table.getn(BAR_BUTTONS) do
+for position = 1, 8 do
 	local slot = CreateFrame("Frame", nil, row)
 	row.slots[position] = slot
 	slot:SetWidth(BUTTON_SIZE)
@@ -1372,9 +1380,18 @@ local function LayoutBar()
 		end
 	end
 
+	local buttons = BarButtons()
+	row:SetWidth(table.getn(buttons) * (BUTTON_SIZE + BUTTON_GAP) - BUTTON_GAP)
+	for position = 1, table.getn(row.slots) do
+		if position <= table.getn(buttons) then
+			row.slots[position]:Show()
+		else
+			row.slots[position]:Hide()
+		end
+	end
 	local positions = {}
-	for position = 1, table.getn(BAR_BUTTONS) do
-		positions[BAR_BUTTONS[position]] = position
+	for position = 1, table.getn(buttons) do
+		positions[buttons[position]] = position
 	end
 
 	-- A stance bar's buttons, when a class has one, sit where the main bar's do.

@@ -518,11 +518,12 @@ function SurvivorUI_RebornAbilities()
 	}
 end
 
--- The racial active on the bar's last button (12, the "=" key), as
--- the original game places it. Reborn's AZS_SPELLS layout leaves
--- that button empty even when a racial active is selected, so put
--- the snapshot's racial active there — only while the button is
--- empty and out of combat, never over the player's own placement.
+-- The bar's extra buttons in Reborn: button 7 carries an
+-- account-talent active (Divine Steed) and button 12 (the "=" key)
+-- the racial active, as the original game places its racial.
+-- Reborn's AZS_SPELLS layout leaves both empty, so put the
+-- snapshot's extra actives there — only while a button is empty
+-- and out of combat, never over the player's own placement.
 local lastPlaceAt = 0
 function SurvivorUI_RebornPlaceRacialButton()
 	if not SurvivorUI_RebornActive() then
@@ -539,21 +540,34 @@ function SurvivorUI_RebornPlaceRacialButton()
 		return
 	end
 	lastPlaceAt = now
-	if GetActionInfo(12) then
-		return
-	end
 	local data = SurvivorUI_RebornAbilities()
 	if not data.complete then
 		return
 	end
+	local onBar = {}
+	for i = 1, table.getn(AZS_SPELLS or {}) do
+		onBar[Field(AZS_SPELLS[i], "key", 1)] = true
+	end
+	local extra, racial
 	for i = 1, table.getn(data.actives) do
 		local a = data.actives[i]
-		if a.kind == "racial" and a.spell and a.spell > 0 then
-			PickupSpell(a.spell)
-			PlaceAction(12)
-			ClearCursor()
-			return
+		if a.spell and a.spell > 0 and not onBar[a.key] then
+			if a.kind == "racial" then
+				racial = racial or a
+			else
+				extra = extra or a
+			end
 		end
+	end
+	if extra and not GetActionInfo(7) then
+		PickupSpell(extra.spell)
+		PlaceAction(7)
+		ClearCursor()
+	end
+	if racial and not GetActionInfo(12) then
+		PickupSpell(racial.spell)
+		PlaceAction(12)
+		ClearCursor()
 	end
 end
 
