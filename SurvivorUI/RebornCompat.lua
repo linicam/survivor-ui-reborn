@@ -598,7 +598,7 @@ function SurvivorUI_RebornPlaceRacialButton()
 		return
 	end
 	local now = GetTime and GetTime() or 0
-	if now - lastPlaceAt < 2 then
+	if now - lastPlaceAt < 0.25 then
 		return
 	end
 	lastPlaceAt = now
