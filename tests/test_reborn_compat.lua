@@ -61,7 +61,10 @@ DEFAULT_CHAT_FRAME = { AddMessage = function(self, msg) end }
 SurvivorUIDB = {}
 SurvivorUI_Standby = nil
 function SurvivorUI_T(s) return s end
-function SurvivorUI_TF(s, ...) return s end
+function SurvivorUI_TF(s, ...)
+	local values = { ... }
+	return (string.gsub(s, "{(%d)}", function(i) local v = values[tonumber(i)] return v ~= nil and tostring(v) or "" end))
+end
 
 -- Load RebornCompat.lua from the repo root (tests/..).
 local scriptDir = arg and arg[0] or "tests/test_reborn_compat.lua"
@@ -185,7 +188,9 @@ check("abilities delayed: not complete", data.complete == false)
 eq("abilities delayed: actives from spells", table.getn(data.actives), 3)
 
 -- Snapshot arrives: active + passive Demonic Empowerment + racial, with
--- the passive NOT masquerading as the racial.
+-- the passive NOT masquerading as the racial. Round 2: the racial section
+-- is removed in Reborn, so Berserking (kind="racial", cdmax 60) is
+-- re-homed into actives by its cooldown, never dropped.
 AZS_ABILITIES = {
 	{ key = "fireball", spell = 133, rank = 3, passive = false, kind = "class", cd = 0, cdmax = 2.5, name = "Fireball", icon = "Spell_Fire_Fireball", text = "Hurls a fiery ball." },
 	{ key = "frostbolt", spell = 116, rank = 2, passive = false, kind = "class", cd = 0, cdmax = 3, name = "Frostbolt", icon = "Spell_Frost_FrostBolt02", text = "Chills." },
@@ -196,11 +201,11 @@ AZS_ABILITIES_UPDATED = 2
 data = SurvivorUI_RebornAbilities()
 eq("abilities snapshot: source", data.source, "abilities")
 check("abilities snapshot: complete", data.complete == true)
-eq("abilities snapshot: actives", table.getn(data.actives), 2)
+eq("abilities snapshot: actives", table.getn(data.actives), 3)
 eq("abilities snapshot: passives", table.getn(data.passives), 1)
-eq("abilities snapshot: racials", table.getn(data.racials), 1)
+eq("abilities snapshot: racials", table.getn(data.racials), 0)
 eq("abilities snapshot: demonic empowerment is passive", data.passives[1] and data.passives[1].key, "demonic_empowerment")
-eq("abilities snapshot: racial is berserking", data.racials[1] and data.racials[1].key, "berserking")
+eq("abilities snapshot: racial is re-homed to actives", data.actives[3] and data.actives[3].key, "berserking")
 eq("abilities snapshot: total deduped", table.getn(data.all), 4)
 local de = SurvivorUI_RebornAbilityByKey("demonic_empowerment")
 check("abilities: Demonic Empowerment found by key", de ~= nil and de.passive == true)
@@ -353,6 +358,93 @@ AZS_ZONE = { run = "azs:rAAAA0002" }
 check("run reset: new run id detected", SurvivorUI_RebornCheckRun() == true)
 eq("run reset: rank events cleared", table.getn(SurvivorUI_RebornRankEvents()), 0)
 eq("run reset: increases cleared", SurvivorUI_RebornRankIncreases("fireball"), 0)
+
+-- ===========================================================================
+-- Round 2: racial re-homing, rank-history tooltips, jewelry dedup
+-- ===========================================================================
+resetGame()
+AZS_ZONE = { run = "azs:r22222222" }
+AZS_RUN = { t = 0 }
+AZS_GetRunTime = function() return AZS_RUN.t end
+AZS_ABILITIES = {
+	{ key = "fireball", spell = 133, rank = 3, passive = false, kind = "class", cd = 0, cdmax = 2.5, name = "Fireball", icon = "Spell_Fire_Fireball", text = "Hurls a fiery ball." },
+	{ key = "demonic_empowerment", spell = 47193, rank = 1, passive = false, kind = "class", cd = 0, cdmax = 30, name = "Demonic Empowerment", icon = "Ability_Warlock_DemonicEmpowerment", text = "Empowers your demon." },
+	{ key = "demonic_knowledge", spell = 35691, rank = 11, passive = true, kind = "class", cd = 0, cdmax = 0, name = "Demonic Knowledge", icon = "Spell_Shadow_ImprovedVampiricEmbrace", text = "Your demons hit harder." },
+	{ key = "berserking", spell = 26297, rank = 1, passive = false, kind = "racial", cd = 0, cdmax = 60, name = "Berserking", icon = "Racial_Troll_Berserk", text = "Attack speed up." },
+	{ key = "human_spirit", spell = 20599, rank = 1, passive = false, kind = "racial", cd = 0, cdmax = 0, name = "Human Spirit", icon = "Spell_Holy_MindVision", text = "Spirit up." },
+}
+AZS_ABILITIES_UPDATED = 1
+AZS_SPELLS = {}
+data = SurvivorUI_RebornAbilities()
+eq("round2 racial: racials list empty", table.getn(data.racials), 0)
+eq("round2 racial: actives (fireball, empowerment, berserking)", table.getn(data.actives), 3)
+eq("round2 racial: passives (knowledge, human spirit)", table.getn(data.passives), 2)
+local keys = {}
+for i = 1, table.getn(data.passives) do keys[data.passives[i].key] = true end
+check("round2 racial: demonic knowledge is passive", keys["demonic_knowledge"] == true)
+check("round2 racial: cdmax-0 racial is passive", keys["human_spirit"] == true)
+keys = {}
+for i = 1, table.getn(data.actives) do keys[data.actives[i].key] = true end
+check("round2 racial: berserking (cdmax 60, cd 0) is active", keys["berserking"] == true)
+check("round2 racial: demonic empowerment is active", keys["demonic_empowerment"] == true)
+
+-- Rank rises observed this run reach the tooltip; rank 11 is shown as a
+-- rank, never as a pick count.
+AZS_RUN.t = 72
+AZS_ABILITIES[2].rank = 2 -- empowerment 1 -> 2 at 1:12
+AZS_ABILITIES_UPDATED = 2
+data = SurvivorUI_RebornAbilities()
+local de = SurvivorUI_RebornAbilityByKey("demonic_empowerment")
+local lines = SurvivorUI_RebornAbilityTooltipLines(de)
+local joined = ""
+for i = 1, table.getn(lines) do joined = joined .. "|" .. lines[i].text end
+check("round2 tooltip: base text", string.find(joined, "Empowers your demon.", 1, true) ~= nil)
+check("round2 tooltip: rank line", string.find(joined, "Rank 2", 1, true) ~= nil)
+check("round2 tooltip: history line with timestamp", string.find(joined, "Rank 1", 1, true) ~= nil and string.find(joined, "1:12", 1, true) ~= nil)
+check("round2 tooltip: honest note", string.find(joined, "Individual upgrade choices are not exposed", 1, true) ~= nil)
+check("round2 tooltip: no passive line for active", string.find(joined, "Passive", 1, true) == nil)
+local dk = SurvivorUI_RebornAbilityByKey("demonic_knowledge")
+local lines2 = SurvivorUI_RebornAbilityTooltipLines(dk)
+local joined2 = ""
+for i = 1, table.getn(lines2) do joined2 = joined2 .. "|" .. lines2[i].text end
+check("round2 tooltip: passive line present", string.find(joined2, "Passive", 1, true) ~= nil)
+check("round2 tooltip: rank 11 shown, not a pick count", string.find(joined2, "Rank 11", 1, true) ~= nil)
+local evs = SurvivorUI_RebornRankEventsFor("demonic_empowerment")
+eq("round2 tooltip: one rank event", table.getn(evs), 1)
+eq("round2 tooltip: event timestamp", evs[1] and evs[1].at, 72)
+
+-- Jewelry: same sourceKey twice merges (count 2); two different pieces
+-- both ranked 55 stay distinct; slots come from sourceKey.
+AZS_GetMeterLoadout = function(req)
+	return {
+		runJewelry = {
+			{ sourceKey = "jewel:ring:1" },
+			{ sourceKey = "jewel:ring:1" },
+			{ sourceKey = "jewel:trinket:2" },
+			{ sourceKey = "jewel:neck:3" },
+		},
+		sources = {
+			["jewel:ring:1"] = { name = "Tribal Mark", rank = 55, icon = "INV_Jewelry_Ring_01" },
+			["jewel:trinket:2"] = { name = "Horde Mark", rank = 55, icon = "INV_Jewelry_TrinketPVP_02" },
+			["jewel:neck:3"] = { name = "Prestor Ring", rank = 63, rarity = "epic", icon = "INV_Jewelry_Necklace_01" },
+		},
+	}
+end
+local jew = SurvivorUI_RebornJewelry(true)
+eq("round2 jewelry: deduped to 3 items", table.getn(jew.items), 3)
+eq("round2 jewelry: duplicate merged count", jew.duplicates, 1)
+eq("round2 jewelry: repeat count shown", jew.items[1].count, 2)
+eq("round2 jewelry: slot from sourceKey (ring)", jew.items[1].slot, "Ring")
+eq("round2 jewelry: slot from sourceKey (trinket)", jew.items[2].slot, "Trinket")
+eq("round2 jewelry: slot from sourceKey (neck)", jew.items[3].slot, "Neck")
+check("round2 jewelry: two 55s are distinct pieces", jew.items[1].name ~= jew.items[2].name)
+eq("round2 jewelry: icon kept", jew.items[1].icon, "INV_Jewelry_Ring_01")
+eq("round2 jewelry: rarity kept, not invented", jew.items[3].rarity, "epic")
+check("round2 jewelry: rank-55 ring has no rarity", jew.items[1].rarity == nil)
+local raw = SurvivorUI_RebornJewelryRawLines()
+local rawJoined = table.concat(raw, "\n")
+check("round2 jewelry raw: dumps source fields", string.find(rawJoined, "jewel:ring:1", 1, true) ~= nil and string.find(rawJoined, "Tribal Mark", 1, true) ~= nil)
+check("round2 jewelry raw: dumps rank field", string.find(rawJoined, "rank = 55", 1, true) ~= nil)
 
 -- Probe runs without crashing and reports the boss/ability state.
 resetGame()

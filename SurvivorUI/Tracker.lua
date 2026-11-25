@@ -249,6 +249,13 @@ head.now:SetTexture(FLAT)
 head.now:SetWidth(2)
 head.now:SetHeight(10)
 head.now:SetVertexColor(1, 1, 1, 0.95)
+-- Reborn: the next boss's progress, written on the timeline itself
+-- ("Rift NN%", "in M:SS", "Boss up"). Hidden in the original game,
+-- where the timeline stays run elapsed.
+head.bossProgress = head.timeline:CreateFontString(nil, "OVERLAY")
+head.bossProgress:SetFont(SurvivorUI_FONT, 9 + FONT_BUMP, "OUTLINE")
+head.bossProgress:SetPoint("CENTER", head.timeline, "CENTER", 0, 0)
+head.bossProgress:Hide()
 head.ticks = {}
 head.bosses = {}
 
@@ -668,11 +675,13 @@ local function FillBossLine(line, entry, index, seconds, isNext, frozen)
 	if state == "dead" then
 		local color = STATE_COLORS.dead
 		line.name:SetTextColor(color[1], color[2], color[3])
-		-- The second it came, and the second it fell when that was seen.
+		-- Only the second it fell, when that was seen. The schedule
+		-- second it came is not shown: for a Rift boss `at` is a latest
+		-- bound, not a spawn time.
 		if bossKilled[key] then
-			line.time:SetText("|cff8a8a8a"..Clock(at).."  /|r  "..Clock(bossKilled[key]))
+			line.time:SetText(Clock(bossKilled[key]))
 		else
-			line.time:SetText(Clock(at))
+			line.time:SetText("")
 		end
 		line.time:SetTextColor(color[1], color[2], color[3])
 	elseif state == "up" then
@@ -686,7 +695,9 @@ local function FillBossLine(line, entry, index, seconds, isNext, frozen)
 				share = math.floor(Num(Field(unit, "hp", 4)) / hpm * 100 + 0.5).."%   "
 			end
 		end
-		line.time:SetText("|cffff8c40"..share.."|r"..Clock(at))
+		-- Health % only: the spawn second adds nothing to a boss that
+		-- is already up (and its health fill below is the live state).
+		line.time:SetText(share ~= "" and "|cffff8c40"..share.."|r" or "")
 		line.time:SetTextColor(1, 1, 1)
 		-- In place of its boss bar: its health filling the line, the line a
 		-- button that targets it.
@@ -720,12 +731,11 @@ local function FillBossLine(line, entry, index, seconds, isNext, frozen)
 			line.time:SetText("|cffffd24d"..(text or "Rift").."|r")
 		elseif isNext and rebornNext and rebornNext.mode == "time" and rebornNext.countdown ~= nil then
 			line.time:SetText("|cffffd24d"..SurvivorUI_TF("in {1}", Clock(rebornNext.countdown)).."|r")
-		elseif isNext then
-			line.time:SetText("|cffffd24d"..SurvivorUI_TF("in {1}", Clock(at - seconds)).."|r   "..Clock(at))
-		elseif at > 0 then
-			line.time:SetText(Clock(at))
 		else
-			-- No spawn second known (e.g. a Rift boss): no invented time.
+			-- No live timing: the name only. A schedule `at` is not a
+			-- spawn time for a Rift boss (latest bound), and for later
+			-- rows it is not classified at all, so no schedule-derived
+			-- countdown or time is printed here either.
 			line.time:SetText("")
 		end
 		line.time:SetTextColor(color[1], color[2], color[3])
@@ -1197,24 +1207,65 @@ local function Draw(game, phase)
 		coin.pays = nil
 		coin:Hide()
 	end
-	-- Room over the timeline for the next boss's countdown.
-	y = y - 12
-
-	-- The timeline: green up to now (purple in endless mode), a white cap
-	-- where now is, each boss's pip in its own color.
-	local gone = length > 0 and math.min(1, seconds / length) or 1
-	head.timeline:SetValue(gone)
-	if endless then
-		head.timeline:SetStatusBarColor(0.70, 0.40, 1.00, 1)
-	else
-		head.timeline:SetStatusBarColor(0.30, 0.80, 0.35, 1)
-	end
-	if endless or gone >= 1 then
+	-- Reborn: the timeline is progress toward the next boss, from
+	-- SurvivorUI_RebornNextBoss() only — never from the run clock.
+	-- Rift mode fills by rift / 100; time mode fills nothing (a
+	-- countdown has no denominator); a boss up fills it full in the
+	-- boss-alive orange. Without Reborn fields (the original game)
+	-- it stays run elapsed, green up to now with a white cap.
+	local rebornNext = SurvivorUI_RebornNextBoss and SurvivorUI_RebornNextBoss() or nil
+	if rebornNext then
+		-- No room over the timeline: the pip countdown is gone.
+		local text, color = nil, { 1, 0.82, 0.30 }
+		if rebornNext.mode == "rift" and rebornNext.rift ~= nil then
+			head.timeline:SetValue(math.min(1, math.max(0, rebornNext.rift / 100)))
+			head.timeline:SetStatusBarColor(0.30, 0.80, 0.35, 1)
+			text = SurvivorUI_RebornNextBossText and SurvivorUI_RebornNextBossText(rebornNext) or "Rift"
+		elseif rebornNext.mode == "time" and rebornNext.countdown ~= nil then
+			head.timeline:SetValue(0)
+			if endless then
+				head.timeline:SetStatusBarColor(0.70, 0.40, 1.00, 1)
+			else
+				head.timeline:SetStatusBarColor(0.30, 0.80, 0.35, 1)
+			end
+			text = SurvivorUI_RebornNextBossText and SurvivorUI_RebornNextBossText(rebornNext) or nil
+		elseif rebornNext.mode == "up" then
+			head.timeline:SetValue(1)
+			head.timeline:SetStatusBarColor(1.00, 0.55, 0.15, 1)
+			text = SurvivorUI_RebornNextBossText and SurvivorUI_RebornNextBossText(rebornNext) or "Boss up"
+			color = { 1, 1, 1 }
+		else
+			head.timeline:SetValue(0)
+			head.timeline:SetStatusBarColor(0.30, 0.80, 0.35, 1)
+		end
+		if text then
+			head.bossProgress:SetText(text)
+			head.bossProgress:SetTextColor(color[1], color[2], color[3])
+			head.bossProgress:Show()
+		else
+			head.bossProgress:Hide()
+		end
+		-- The white "where now is" cap marks run elapsed, not boss
+		-- progress: hidden once the bar is boss progress.
 		head.now:Hide()
 	else
-		head.now:ClearAllPoints()
-		head.now:SetPoint("CENTER", head.timeline, "LEFT", WIDTH * gone, 0)
-		head.now:Show()
+		-- Room over the timeline for the next boss's countdown.
+		y = y - 12
+		head.bossProgress:Hide()
+		local gone = length > 0 and math.min(1, seconds / length) or 1
+		head.timeline:SetValue(gone)
+		if endless then
+			head.timeline:SetStatusBarColor(0.70, 0.40, 1.00, 1)
+		else
+			head.timeline:SetStatusBarColor(0.30, 0.80, 0.35, 1)
+		end
+		if endless or gone >= 1 then
+			head.now:Hide()
+		else
+			head.now:ClearAllPoints()
+			head.now:SetPoint("CENTER", head.timeline, "LEFT", WIDTH * gone, 0)
+			head.now:Show()
+		end
 	end
 	-- Room under it for the pips' lower half.
 	y = Put(head.timeline, y, 13)
@@ -1243,8 +1294,15 @@ local function Draw(game, phase)
 			pip = SurvivorUI_NewPip(head.timeline)
 			head.ticks[index] = pip
 		end
-		-- A Rift boss has no spawn second: its pip has no honest place.
-		if at > 0 then
+		-- Reborn: no pips at all. A pip's place on the timeline is a
+		-- spawn-time claim, and the schedule `at` is not one (Rift: a
+		-- latest bound; later rows: unclassified). The pip countdown
+		-- goes with them: it was schedule-derived (`at - seconds`),
+		-- not the server's `nb`.
+		if rebornNext then
+			pip:Hide()
+			SurvivorUI_PipCountdown(pip, nil, WIDTH, WIDTH)
+		elseif at > 0 then
 			local spot = length > 0 and WIDTH * math.min(1, at / length) or WIDTH
 			SurvivorUI_PaintPip(pip, isNext and "next" or state, final)
 			pip:ClearAllPoints()
@@ -1285,8 +1343,8 @@ local function Draw(game, phase)
 	local nextIn = tonumber(game.nb) or -1
 	-- Reborn, normal run, schedule spent / no due row: the game may still
 	-- know the next boss (Rift % or a countdown, or an unnamed Endless
-	-- boss). Show that live line instead of nothing.
-	local rebornNext = SurvivorUI_RebornNextBoss and SurvivorUI_RebornNextBoss() or nil
+	-- boss). Show that live line instead of nothing. (rebornNext was
+	-- fetched once, above the timeline, and is reused here.)
 	if endless and nextIn >= 0 then
 		nextLine.name:SetText(SurvivorUI_T("Next boss"))
 		nextLine.name:SetTextColor(1, 1, 1)

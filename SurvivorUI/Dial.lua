@@ -895,20 +895,25 @@ local function Rings()
 	-- The time left to the next boss, of the stretch since the last one came
 	-- (in endless mode, of the longest wait seen since one came).
 	local share
-	if M.endless and M.nb >= 0 then
+	if M.rebornNext then
+		-- Reborn: the thin ring is boss progress only. Rift % is
+		-- progress toward the boss: the ring shows what is left. A
+		-- countdown has no denominator, so the ring hides instead of
+		-- drawing full (full reads as "boss imminent" at all times).
+		-- A boss up fills it full in orange. No schedule-derived
+		-- share: a percent from the run clock is not server data.
+		if M.rebornNext.mode == "rift" and M.rebornNext.rift ~= nil then
+			share = 1 - M.rebornNext.rift / 100
+		elseif M.rebornNext.mode == "up" then
+			share = 1
+		end
+	elseif M.endless and M.nb >= 0 then
 		if M.nb > (S.nbLast or -1) + 1 then
 			S.nbMost = M.nb
 		end
 		S.nbLast = M.nb
 		S.nbMost = math.max(S.nbMost, M.nb)
 		share = S.nbMost > 0 and M.nb / S.nbMost or 0
-	elseif M.rebornNext and M.rebornNext.mode == "rift" and M.rebornNext.rift ~= nil then
-		-- Rift % is progress toward the boss: the ring shows what is left.
-		share = 1 - M.rebornNext.rift / 100
-	elseif M.rebornNext and M.rebornNext.mode == "time" and M.rebornNext.countdown ~= nil then
-		-- No span is known for a countdown boss; show the thin ring full
-		-- rather than inventing a share from the clock.
-		share = 1
 	elseif M.next then
 		local at = Num(Field(M.schedule[M.next], "at", 2))
 		local span = at - M.prevAt
@@ -926,6 +931,15 @@ end
 local function Marks()
 	local count = table.getn(M.schedule)
 	S.label:Hide()
+	if M.rebornNext then
+		-- Reborn: no schedule marks. A mark's place on the dial is a
+		-- spawn-time claim, and the schedule `at` is not one (Rift: a
+		-- latest bound; later rows: unclassified).
+		for index = 1, table.getn(S.marks) do
+			HideMark(S.marks[index])
+		end
+		return
+	end
 	for index = 1, count do
 		local entry = M.schedule[index]
 		local mark = Mark(index)
@@ -1021,13 +1035,17 @@ local function Middle()
 	elseif M.next then
 		local entry = M.schedule[M.next]
 		name = Field(entry, "name", 3) or "?"
-		local at = Num(Field(entry, "at", 2))
-		if at > 0 then
-			line, color2 = SurvivorUI_TF("in {1}", Clock(at - M.seconds)), C.orange
-		elseif M.rebornNext and (M.rebornNext.mode == "rift" or M.rebornNext.mode == "time") then
+		if M.rebornNext and (M.rebornNext.mode == "rift" or M.rebornNext.mode == "time") then
+			-- Reborn: live Rift % / countdown, never the schedule's
+			-- `at - seconds` (a Rift boss's `at` is a latest bound).
 			local text = SurvivorUI_RebornNextBossText and SurvivorUI_RebornNextBossText(M.rebornNext) or nil
 			name = M.rebornNext.name or name
 			line, color2 = text, C.orange
+		elseif not M.rebornNext then
+			local at = Num(Field(entry, "at", 2))
+			if at > 0 then
+				line, color2 = SurvivorUI_TF("in {1}", Clock(at - M.seconds)), C.orange
+			end
 		end
 	elseif M.rebornNext and (M.rebornNext.mode == "rift" or M.rebornNext.mode == "time") then
 		local text = SurvivorUI_RebornNextBossText and SurvivorUI_RebornNextBossText(M.rebornNext) or nil

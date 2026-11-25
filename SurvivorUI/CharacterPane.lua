@@ -1059,6 +1059,13 @@ local function MakeView(alone)
 	end
 
 	UpdateStats = function()
+		-- The Stats title is set once at load, in English until the words
+		-- arrive, and the Retell pass may never run in Reborn; re-set it
+		-- on every update, as RunPanel does for its titles. (title exists
+		-- only for the panel on its own; the in-pane view has none.)
+		if title then
+			title:SetText(SurvivorUI_T("Stats"))
+		end
 		local s = Stats()
 		local arranging = Arranging()
 
