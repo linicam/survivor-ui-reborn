@@ -999,6 +999,58 @@ function SurvivorUI_RebornProbe()
 	else
 		Add("jewelry aggregate: (none / AZS_STATS absent or all zero)")
 	end
+	-- Rift crystals / altar hunt: the API documents no crystal or
+	-- altar table, kind, or field, so probe the plausible carriers —
+	-- chests (boss flag), banners (kind/text), world-anchor kinds,
+	-- and candidate globals — before claiming either feature.
+	if type(AZS_CHESTS) == "table" then
+		for i = 1, table.getn(AZS_CHESTS) do
+			local c = AZS_CHESTS[i]
+			Add(string.format("  chest: id=%s boss=%s x=%s y=%s mx=%s my=%s",
+				tostring(Field(c, "id", 1)), tostring(Field(c, "boss", 7)),
+				tostring(Field(c, "x", 2)), tostring(Field(c, "y", 3)),
+				tostring(Field(c, "mx", 5)), tostring(Field(c, "my", 6))))
+		end
+	end
+	if type(AZS_BANNERS) == "table" then
+		for i = 1, table.getn(AZS_BANNERS) do
+			local b = AZS_BANNERS[i]
+			Add(string.format("  banner: kind=%s boss=%s name=%s time=%s text=%s",
+				tostring(Field(b, "kind", 2)), tostring(Field(b, "boss", 3)),
+				tostring(Field(b, "name", 4)), tostring(Field(b, "time", 6)),
+				tostring(Field(b, "text", 5))))
+		end
+	end
+	if AZS_GetWorldAnchors then
+		local kinds = { "cache", "guardianLair", "guardian", "elite", "boss", "finalBoss", "enemy", "ping" }
+		local ok, answer = pcall(AZS_GetWorldAnchors, { kinds = kinds }, nil, 256)
+		if ok and type(answer) == "table" and type(answer.entries) == "table" then
+			local census = {}
+			for i = 1, table.getn(answer.entries) do
+				local kind = tostring(answer.entries[i].kind)
+				census[kind] = (census[kind] or 0) + 1
+			end
+			local parts = {}
+			for kind, n in pairs(census) do
+				table.insert(parts, kind .. "=" .. tostring(n))
+			end
+			table.sort(parts)
+			Add("world anchors: " .. table.concat(parts, " "))
+			for i = 1, table.getn(answer.entries) do
+				local e = answer.entries[i]
+				if e.kind == "cache" then
+					Add(string.format("  anchor cache: name=%s state=%s x=%s y=%s",
+						tostring(e.name), tostring(e.state), tostring(e.x), tostring(e.y)))
+				end
+			end
+		else
+			Add("world anchors: (query failed)")
+		end
+	end
+	Add("crystal candidates: AZS_CRYSTALS=" .. (type(AZS_CRYSTALS) == "table" and tostring(table.getn(AZS_CRYSTALS)) or "absent")
+		.. " AZS_ALTAR=" .. (type(AZS_ALTAR) == "table" and "present" or "absent")
+		.. " AZS_PORTAL=" .. (type(AZS_PORTAL) == "table" and "present" or "absent")
+		.. " AZS_RIFT=" .. (type(AZS_RIFT) == "table" and "present" or "absent"))
 	local curses = SurvivorUI_RebornCurses()
 	Add("curses: supported=" .. tostring(curses.supported) .. " - " .. curses.reason)
 	Add("candidate globals: AZS_CHESTS=" .. (type(AZS_CHESTS) == "table" and tostring(table.getn(AZS_CHESTS)) or "absent")
