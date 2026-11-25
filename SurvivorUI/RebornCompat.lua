@@ -1112,7 +1112,10 @@ function SurvivorUI_RebornCurses()
 			for i = 1, table.getn(AZS_BUFFS or {}) do
 				local buffLeft = tonumber(Field(AZS_BUFFS[i], "left", 2))
 				if buffLeft and buffLeft > 0 and buffLeft <= left + 2 then
-					left = buffLeft
+					-- A buff alone does not prove the curse (47241
+					-- appears without one); it only lends its spell
+					-- for the name fallback. The countdown stays the
+					-- banner's.
 					spell = tonumber(Field(AZS_BUFFS[i], "spell", 1))
 				end
 			end
@@ -1263,8 +1266,9 @@ function SurvivorUI_RebornProbe()
 	if type(AZS_BUFFS) == "table" then
 		for i = 1, table.getn(AZS_BUFFS) do
 			local b = AZS_BUFFS[i]
-			Add(string.format("  buff: spell=%s left=%s",
-				tostring(Field(b, "spell", 1)), tostring(Field(b, "left", 2))))
+			local spell = tonumber(Field(b, "spell", 1))
+			Add(string.format("  buff: spell=%s name=%s left=%s",
+				tostring(spell), tostring(spell and GetSpellInfo and GetSpellInfo(spell)), tostring(Field(b, "left", 2))))
 		end
 	end
 	if type(AZS_DEBUFFS) == "table" then
