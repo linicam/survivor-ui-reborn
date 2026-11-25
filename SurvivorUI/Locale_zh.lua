@@ -412,6 +412,7 @@ SurvivorUI_WORDS.zh = {
 	["next {1}"] = "下次 {1}",
 	["FIGHT"] = "战斗",
 	["Curse"] = "诅咒",
+	["Rift crystals"] = "裂隙水晶",
 	-- The run tracker's Tracker Ring (Dial.lua).
 	["of {1}"] = "共{1}",
 

@@ -1397,6 +1397,25 @@ local function Draw(game, phase)
 			head.curseLine:Hide()
 		end
 	end
+	-- Rift crystals (Reborn): AZS_RIFT carries the count only
+	-- (got/need/st, verified in game 2026-11-26); positions are
+	-- not in it, so this is a counter, not guidance.
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() and type(AZS_RIFT) == "table" then
+		local got, need = tonumber(AZS_RIFT.got), tonumber(AZS_RIFT.need)
+		if got and need and need > 0 then
+			if not head.riftLine then
+				head.riftLine = BossLine(table.getn(head.bosses) + 1)
+				head.bosses[table.getn(head.bosses)] = nil
+			end
+			head.riftLine.name:SetText(SurvivorUI_T("Rift crystals"))
+			head.riftLine.name:SetTextColor(0.75, 0.55, 1.00)
+			head.riftLine.time:SetText(got .. " / " .. need)
+			head.riftLine.time:SetTextColor(1, 1, 1)
+			y = Put(head.riftLine, y, 13)
+		elseif head.riftLine then
+			head.riftLine:Hide()
+		end
+	end
 	-- The guardians' bar, when it stands here (Guardians.lua).
 	local above = y
 	if SurvivorUI_GuardianBar then
