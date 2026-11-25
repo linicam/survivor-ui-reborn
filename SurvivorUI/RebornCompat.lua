@@ -1328,6 +1328,15 @@ function SurvivorUI_RebornProbe()
 		Add(string.format("  steed candidate: id190784 name=%s known=%s nameZh=%s",
 			tostring(name), tostring(known), tostring(nameZh)))
 	end
+	if UnitBuff then
+		for i = 1, 40 do
+			local name, _, _, _, _, _, _, _, _, _, spellId = UnitBuff("player", i)
+			if not name then
+				break
+			end
+			Add(string.format("  player buff: name=%s spell=%s", tostring(name), tostring(spellId)))
+		end
+	end
 	if GetNumSpellTabs and GetSpellTabInfo and GetSpellName then
 		for tab = 1, GetNumSpellTabs() do
 			local _, _, offset, numSpells = GetSpellTabInfo(tab)
