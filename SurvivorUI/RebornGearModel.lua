@@ -7,6 +7,11 @@ Gear.version = 1
 local BASE = { "common", "uncommon", "rare", "epic", "legendary", "pvp" }
 local ORDER = { common = 1, uncommon = 2, rare = 3, epic = 4, pvp = 5, legendary = 6 }
 local EPS = 0.000000001
+-- From the November 16, 2026 armor price chart. The numbers already include
+-- the price reduction. Integer tenths of each factor avoid floating-point rounding.
+local STAR_BASE_GOLD = { 408, 816, 1496, 2720, 4080 }
+local STAR_FACTORS = { common = 10, uncommon = 17, rare = 25, epic = 35, pvp = 40, legendary = 46,
+	exotic = 58, mythic = 72, elementium = 76 }
 
 local function Integer(value, maximum)
 	local n = tonumber(value)
@@ -27,7 +32,7 @@ function Gear.Catalog(gen)
 	end
 	for index, raw in ipairs(gen.gearTiers or {}) do
 		tiers[raw.key] = { id = index + 5, rank = raw.rank, slot = raw.slot_scale, profile = raw.profile_scale,
-			step = raw.star_step, last = raw.star_last }
+			step = raw.star_step, last = raw.star_last, starFactor = tonumber(raw.star_factor) }
 	end
 	local slots = {}
 	for i = 0, 10 do
@@ -36,6 +41,15 @@ function Gear.Catalog(gen)
 		slots[slot.key] = { data = slot, index = i }
 	end
 	return { native = gen, pieces = p, tiers = tiers, slots = slots }
+end
+
+function Gear.StarQuote(catalog, slot, tier, targetStar)
+	local s, t = catalog.slots[slot], catalog.tiers[tier]
+	local base, factor = STAR_BASE_GOLD[targetStar], STAR_FACTORS[tier]
+	if not s or not t or not base or not factor then return end
+	if t.starFactor and math.abs(t.starFactor * 10 - factor) > EPS then return end
+	local estimated = tier == "exotic" or tier == "elementium" or (tier == "legendary" and targetStar == 5)
+	return math.floor((base * factor + 5) / 10), estimated and "estimated" or (s.index < 8 and "table" or "weapon")
 end
 
 function Gear.Piece(catalog, class, slot, tier, stars)
@@ -49,6 +63,48 @@ function Gear.Piece(catalog, class, slot, tier, stars)
 	for _, stat in ipairs(s.data.stats) do result[stat[1]] = stat[2] * t.slot * gain end
 	for _, stat in ipairs(profile or {}) do result[stat[1]] = (result[stat[1]] or 0) + stat[2] * t.profile * gain end
 	return result
+end
+
+-- AZSARMOR sends numeric slot and rarity IDs. Record the entire worn list or
+-- leave the previous observation intact if a row cannot be mapped.
+function Gear.Worn(catalog, class, rows)
+	if not catalog or not catalog.pieces.classProfiles[class] or type(rows) ~= "table" then return end
+	local byId, used, pieces = {}, {}, {}
+	for key, tier in pairs(catalog.tiers) do byId[tier.id] = key end
+	for _, row in ipairs(rows) do
+		if type(row) ~= "table" then return end
+		if row.rarity ~= nil and row.rarity ~= "" then
+			local index = Integer(row.slot, 10)
+			local slot = index and catalog.pieces.slots[index].key
+			local tier = byId[Integer(row.rarity, 9)]
+			local stars = Integer(row.stars, 5)
+			if not slot or not tier or not stars or used[slot] then return end
+			used[slot] = true
+			table.insert(pieces, { slot = slot, tier = tier, stars = stars })
+		end
+	end
+	if not pieces[1] then return end
+	table.sort(pieces, function(a, b) return catalog.slots[a.slot].index < catalog.slots[b.slot].index end)
+	return pieces
+end
+
+function Gear.NextStars(catalog, class, pieces)
+	local rows = {}
+	for _, piece in ipairs(pieces) do
+		local stars = Integer(piece.stars, 5)
+		if stars and stars < 5 then
+			local before = Gear.Piece(catalog, class, piece.slot, piece.tier, stars)
+			local after = Gear.Piece(catalog, class, piece.slot, piece.tier, stars + 1)
+			if not before or not after then return end
+			local gain = (after.damage or 0) - (before.damage or 0)
+			table.insert(rows, { piece = piece, before = before, after = after, damage = gain })
+		end
+	end
+	table.sort(rows, function(a, b)
+		if a.damage == b.damage then return catalog.slots[a.piece.slot].index < catalog.slots[b.piece.slot].index end
+		return a.damage > b.damage
+	end)
+	return rows
 end
 
 function Gear.Totals(catalog, class, pieces)
@@ -128,10 +184,10 @@ end
 
 -- These are declared states. A farm row means the player verified that specific piece can drop.
 -- Prices are consecutive incremental costs starting at the next star.
-function Gear.Parse(catalog, class, text)
+function Gear.Parse(catalog, class, text, usePriceTable)
 	if not catalog or not catalog.pieces.classProfiles[class] or type(text) ~= "string"
 		or string.len(text) > 8192 then return nil, 0 end
-	local slots, seen, lineNumber = {}, {}, 0
+	local slots, seen, lineNumber, usesPriceTable = {}, {}, 0, false
 	for line in string.gmatch(text .. "\n", "([^\n]*)\n") do
 		lineNumber = lineNumber + 1
 		if not string.match(line, "^%s*$") then
@@ -158,12 +214,27 @@ function Gear.Parse(catalog, class, text)
 				end
 			end
 			if star + table.getn(steps) > 5 then return nil, lineNumber end
+			local manualSteps = table.getn(steps)
+			local mayFill = usePriceTable
+			for i, amount in ipairs(steps) do
+				local listed = Gear.StarQuote(catalog, slot, tier, star + i)
+				if listed and listed ~= amount then mayFill = false; break end
+			end
+			if mayFill then
+				for target = star + manualSteps + 1, 5 do
+					local amount, source = Gear.StarQuote(catalog, slot, tier, target)
+					if source ~= "table" and source ~= "weapon" then break end
+					table.insert(steps, amount)
+					usesPriceTable = true
+				end
+			end
 			local cost = 0
 			for i = 0, table.getn(steps) do
 				cost = cost + (steps[i] or 0)
 				local stats = Gear.Piece(catalog, class, slot, tier, star + i)
 				table.insert(entry.choices, { slot = slot, tier = tier, stars = star + i, cost = cost,
-					kind = kind, stats = stats, power = stats.damage or 0, armor = catalog.slots[slot].index < 8 })
+					kind = kind, stats = stats, power = stats.damage or 0, armor = catalog.slots[slot].index < 8,
+					tablePrice = i > manualSteps or nil })
 			end
 		end
 	end
@@ -182,7 +253,7 @@ function Gear.Parse(catalog, class, text)
 		if group.worn then table.insert(current, group.worn.choices[1]) end
 	end
 	if table.getn(current) == 0 then return nil, 0 end
-	return { groups = ordered, current = current, incomplete = incomplete }
+	return { groups = ordered, current = current, incomplete = incomplete, usesPriceTable = usesPriceTable }
 end
 
 function Gear.Pressure(reference, zone, tier)

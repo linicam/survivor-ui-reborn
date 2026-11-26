@@ -16,10 +16,14 @@ AZS_GEN = {
 		scale = { top = 5, steps = 4, factor = 0.7, slot = { 1, 1.7, 2.5, 3.5, 4.6, 4 },
 			profile = { 0, 1, 1.6, 2.4, 3.4, 2.9 }, starStep = { 0.64, 0.4, 0.28, 0.17, 0.12, 0.15 },
 			starLast = { 3.73, 1.85, 0.85, 0.42, 0.12, 0.22 } },
-		slots = {}, classProfiles = { warlock = { 0, 0, 0, 0, 0, 0, 0, 0 } },
+		slots = {}, classProfiles = { warlock = { 0, 0, 0, 0, 0, 0, 0, 0 }, paladin = { 0, 0, 0, 0, 0, 0, 0, 0 } },
 		profiles = { [0] = { { "crit", 0.01 } } },
 	},
-	gearTiers = { { key = "exotic", rank = 7, slot_scale = 5.6, profile_scale = 4.2, star_step = 0.1, star_last = 0.1 } },
+	gearTiers = {
+		{ key = "exotic", rank = 7, slot_scale = 5.6, profile_scale = 4.2, star_step = 0.1, star_last = 0.1, star_factor = 5.8 },
+		{ key = "mythic", rank = 8, slot_scale = 6.4, profile_scale = 4.8, star_step = 0.1, star_last = 0.1, star_factor = 7.2 },
+		{ key = "elementium", rank = 9, slot_scale = 7.4, profile_scale = 5.4, star_step = 0.1, star_last = 0.1, star_factor = 7.6 },
+	},
 	setRules = { pieces = { 4, 8 }, stars = { 1, 3 }, empowerStars = 5 },
 	setBonuses = {
 		{ class = "", rarity = 0, pieces = 4, text = "Pickup +{v}", v = { 12, 18 } },
@@ -31,6 +35,42 @@ for i, key in ipairs(keys) do
 end
 local cat = assert(G.Catalog(AZS_GEN))
 local function near(a, b) assert(math.abs(a - b) < 0.0000001, tostring(a) .. " ~= " .. tostring(b)) end
+local priceTable = {
+	common = { 408, 816, 1496, 2720, 4080 }, uncommon = { 694, 1387, 2543, 4624, 6936 },
+	rare = { 1020, 2040, 3740, 6800, 10200 }, epic = { 1428, 2856, 5236, 9520, 14280 },
+	pvp = { 1632, 3264, 5984, 10880, 16320 }, legendary = { 1877, 3754, 6882, 12512, 18768 },
+	exotic = { 2366, 4733, 8677, 15776, 23664 }, mythic = { 2938, 5875, 10771, 19584, 29376 },
+	elementium = { 3101, 6202, 11370, 20672, 31008 },
+}
+local markedTotal, listedTotal = 0, 0
+for tier, prices in pairs(priceTable) do
+	for star, price in ipairs(prices) do
+		local amount, source = G.StarQuote(cat, "head", tier, star)
+		local weapon, weaponSource = G.StarQuote(cat, "main_hand", tier, star)
+		local estimated = tier == "exotic" or tier == "elementium" or (tier == "legendary" and star == 5)
+		assert(amount == price and weapon == price)
+		assert(source == (estimated and "estimated" or "table"))
+		assert(weaponSource == (estimated and "estimated" or "weapon"))
+		if not estimated then markedTotal = markedTotal + amount end
+		if tier ~= "elementium" then listedTotal = listedTotal + amount end
+	end
+end
+assert(markedTotal * 8 == 1715784 and listedTotal * 8 == 2307656)
+assert(not G.StarQuote(cat, "head", "rare", 0) and not G.StarQuote(cat, "head", "rare", 6))
+cat.tiers.elementium.starFactor = 7.7
+assert(not G.StarQuote(cat, "head", "elementium", 1), "a changed live multiplier invalidates the pinned price")
+cat.tiers.elementium.starFactor = 7.6
+local priced = assert(G.Parse(cat, "warlock", "head legendary 3 worn\nmain_hand common 2 worn", true))
+assert(priced.incomplete and priced.usesPriceTable)
+assert(#priced.groups[1].worn.choices == 2 and priced.groups[1].worn.choices[2].cost == 12512)
+assert(priced.groups[2].worn.choices[4].cost == 8296)
+local overridden = assert(G.Parse(cat, "warlock", "head common 0 worn 400", true))
+assert(not overridden.usesPriceTable and #overridden.groups[1].worn.choices == 2, "a conflicting quote suppresses automatic continuation")
+local worn = assert(G.Worn(cat, "warlock", { { slot = "8", rarity = "7", stars = "2" },
+	{ slot = 1, rarity = "" }, { slot = 0, rarity = 4, stars = 0 } }))
+assert(#worn == 2 and worn[1].tier == "legendary" and worn[2].slot == "main_hand" and worn[2].tier == "mythic")
+assert(not G.Worn(cat, "warlock", { { slot = 0, rarity = 0, stars = 0 }, { slot = 0, rarity = 1, stars = 1 } }))
+assert(not G.Worn(cat, "warlock", {}) and not G.Worn(cat, "warlock", { { slot = 0, rarity = 2 } }))
 near(G.Piece(cat, "warlock", "main_hand", "common", 0).damage, 0.084)
 near(G.Piece(cat, "warlock", "main_hand", "common", 5).damage, 0.61236)
 near(G.Piece(cat, "warlock", "main_hand", "exotic", 0).damage, 0.4704)
@@ -168,14 +208,22 @@ function SurvivorUI_TF(text, value) return (string.gsub(text, "{1}", value)) end
 local reborn, phase = false, "playing"
 function SurvivorUI_RebornActive() return reborn end
 function AZS_GetPhase() return phase end
+local handlers = {}
+AZS = { On = function(event, callback) handlers[event] = callback end }
+time = function() return 100 end
+date = function() return "2026-11-26 12:00" end
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, text) table.insert(logs, text) end }
 dofile("SurvivorUI/RebornGear.lua")
 assert(count == 0)
 SurvivorUI_RebornGearOpen()
 assert(count == 0)
 reborn = true
-AZS_ZONE = { zone = "naxx", dt = 1, zname = "Naxxramas" }
+AZS_ZONE = { zone = "naxx", dt = 1, zname = "Naxxramas", class = "warlock" }
 phase = "ready"
+AZS_ARMOR = { { slot = 0, rarity = 8, stars = 0 }, { slot = 8, rarity = 4, stars = 1 } }
+handlers.AZSARMOR()
+local snapshot = assert(SurvivorUIDB.rebornGear.wornSnapshots.warlock)
+assert(count == 0 and snapshot.at == 100 and #snapshot.pieces == 2, "wear is recorded without creating the UI")
 assert(SurvivorUI_RebornGearOpen("show"))
 local input, items, output, gearPanel, gearView
 for _, w in ipairs(widgets) do
@@ -212,8 +260,11 @@ assert(MapShows(string.format("%.1f%%", expected)) and MapShows("Current map: El
 saveMap()
 mapRef = SurvivorUIDB.rebornGear.mapReference
 assert(mapRef.zone == "elwynn" and mapRef.tier == 2 and MapShows("100.0%"), "map can be saved during a run")
-AZS_ZONE = { zone = "naxx", dt = 0, hub = 1 }
+AZS_ZONE = { zone = "naxx", dt = 0, hub = 1, class = "warlock" }
 phase = nil -- The native API returns nil in the Hub.
+AZS_ARMOR = { { slot = 8, rarity = 2, stars = 5 } }
+handlers.AZSARMOR()
+assert(SurvivorUIDB.rebornGear.wornSnapshots.warlock == snapshot, "the Hub does not overwrite a combat snapshot")
 assert(Pick("World", 2) and not Pick("Zone", "elwynn") and not Pick("Zone", "unmodeled"))
 assert(Pick("Zone", "shadowmoon") and MapShows("Preview map: Shadowmoon Valley · Normal"))
 assert(Pick("Tier", 5) and MapShows("Preview map: Shadowmoon Valley · Heroic V"))
@@ -238,13 +289,30 @@ mapRef = SurvivorUIDB.rebornGear.mapReference
 assert(mapRef.zone == "naxx" and mapRef.tier == 0 and MapShows("Current map: Naxxramas · Normal") and not MapShows("Preview map:"), "save takes the actual map even with a preview selected")
 phase = "playing"
 buttons["Gear planner"].scripts.OnClick()
+buttons["Edit gear and prices"].scripts.OnClick()
 assert(gearView:IsShown())
 buttons["Gear preview"].scripts.OnClick()
 assert(logs[#logs] == "Open gear analysis from the hub or outside active combat.")
 phase = nil
+AZS_ZONE = { hub = 1, class = "paladin" }
+assert(SurvivorUI_RebornGearOpen("show"))
+buttons["Gear planner"].scripts.OnClick()
+local function WornShows(text)
+	for _, w in ipairs(widgets) do
+		if w.kind == "FontString" and w.parent == buttons["Load recorded gear"].parent
+			and string.find(w:GetText(), text, 1, true) then return true end
+	end
+	return false
+end
+assert(WornShows("Enter a Campaign map"), "the Hub never borrows another class's gear")
+AZS_ZONE = { hub = 1, class = "warlock" }
 assert(SurvivorUI_RebornGearOpen("show"))
 assert(not gearView:IsShown())
 buttons["Gear planner"].scripts.OnClick()
+assert(WornShows("Last recorded gear: Warlock · 2 pieces") and WornShows("3101 gold (estimate)"))
+assert(WornShows("3754 gold (same as armor)"))
+buttons["Load recorded gear"].scripts.OnClick()
+assert(gearView:IsShown() and items:GetText() == "head elementium 0 worn\nmain_hand legendary 1 worn")
 items:SetText("main_hand common 4 worn 100")
 buttons["Save gear setup"].scripts.OnClick()
 assert(SurvivorUIDB.rebornGear.references.warlock.gear[1].stars == 4)
@@ -261,8 +329,8 @@ input:SetText("warlock naxx 1 0 main_hand")
 items:SetText("main_hand common 0 worn\nmain_hand rare 0 farm")
 buttons["Gear preview"].scripts.OnClick()
 local previews = table.concat(output.messages, "\n")
-assert(string.find(previews, "rare ★3 · price unknown", 1, true))
-assert(string.find(previews, "common ★5 · price unknown", 1, true))
+assert(string.find(previews, "rare ★3 · farm · 6800 extra gold", 1, true))
+assert(string.find(previews, "common ★5 · worn · 9520 extra gold", 1, true))
 SurvivorUI_RebornGearOpen("toggle planner")
 buttons["Farm & Upgrade"].scripts.OnClick()
 assert(logs[#logs] == "This gear analysis feature is disabled.")
