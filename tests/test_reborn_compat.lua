@@ -776,5 +776,37 @@ for i = 1, table.getn(afterEvent.items) do
 end
 eq("curse: event notification expires", eventStillShown, false)
 
+-- Reborn caps and native run values use whole percentages.
+AZS_ZONE = { hub = 0 }
+AZS_RUN = { ph = "playing" }
+AZS_RUNSTATS = { cdr = "65", crit = 80, red = 0 }
+AZS_CAPS = { cdr = 80, crit = 80, red = 60, echo = 100 }
+AZS_GetStatCaps = function() return { cdr = 75, crit = 80 } end
+local cap, room = SurvivorUI_RebornStatCap("cdr")
+eq("stats: getter cap preferred", cap, 75)
+eq("stats: headroom in percentage points", room, 10)
+cap, room = SurvivorUI_RebornStatCap("crit")
+eq("stats: exact cap", cap, 80)
+eq("stats: capped has zero headroom", room, 0)
+cap, room = SurvivorUI_RebornStatCap("red")
+eq("stats: partial getter falls back per key", cap, 60)
+eq("stats: zero is a known current value", room, 60)
+cap, room = SurvivorUI_RebornStatCap("echo")
+eq("stats: cap before current snapshot", cap, 100)
+eq("stats: missing current has unknown headroom", room, nil)
+AZS_GetStatCaps = function() error("unavailable") end
+AZS_CAPS = { cdr = 60 }
+cap, room = SurvivorUI_RebornStatCap("cdr")
+eq("stats: replacement snapshot after getter error", cap, 60)
+eq("stats: no inferred overflow", room, 0)
+AZS_CAPS = {}
+eq("stats: missing cap stays unknown", SurvivorUI_RebornStatCap("cdr"), nil)
+AZS_CAPS = { cdr = 80 }
+AZS_ZONE.hub = "1"
+eq("stats: hub does not show run caps", SurvivorUI_RebornStatCap("cdr"), nil)
+AZS_ZONE.hub = 0
+AZS_RequestAbilities = nil
+eq("stats: original client ignored", SurvivorUI_RebornStatCap("cdr"), nil)
+
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

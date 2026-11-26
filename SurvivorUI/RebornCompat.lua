@@ -158,6 +158,28 @@ function SurvivorUI_RebornActive()
 	return false
 end
 
+-- The native run sheet and caps both use whole percentages.
+function SurvivorUI_RebornStatCap(key)
+	if not SurvivorUI_RebornActive() or type(AZS_RUN) ~= "table" or not AZS_RUN.ph
+		or (type(AZS_ZONE) == "table" and tonumber(AZS_ZONE.hub) == 1) then
+		return nil
+	end
+	local cap
+	if type(AZS_GetStatCaps) == "function" then
+		local ok, caps = pcall(AZS_GetStatCaps)
+		if ok and type(caps) == "table" then cap = tonumber(caps[key]) end
+	end
+	if not (cap and cap >= 0 and cap < math.huge) and type(AZS_CAPS) == "table" then
+		cap = tonumber(AZS_CAPS[key])
+	end
+	if not (cap and cap >= 0 and cap < math.huge) then return nil end
+	local value = type(AZS_RUNSTATS) == "table" and tonumber(AZS_RUNSTATS[key])
+	if value and value >= 0 and value < math.huge then
+		return cap, math.max(0, cap - value)
+	end
+	return cap
+end
+
 -- The run id, or nil when the game has not told it yet. Older servers
 -- saying run=1 are handled by the clock-rewind fallback in callers; here
 -- we only report what the game actually says.

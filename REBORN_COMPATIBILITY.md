@@ -339,6 +339,31 @@ unchanged in substance); the full audit is in the research notes
 
 ## Known limitations and unsupported features
 
+### Native snapshots and Stats tooltip
+
+- **Stat caps.** In a Reborn run, the Stats tooltip for Crit, Haste, Echo
+  and Dmg Reduction reads the matching `crit`, `cdr`, `echo` or `red`
+  cap through `AZS_GetStatCaps()` with a per-field `AZS_CAPS` fallback.
+  Haste is the panel's label for cooldown reduction. Both caps and
+  `AZS_RUNSTATS` use whole percentages. The remaining increase uses
+  percentage points and is omitted if the current field is missing.
+  The run sheet values are already capped. The original-client tooltips
+  retain their descriptions. [Reborn Addon API](https://azreborn.com/guides/addon-api#5-the-azs-line-azs_stats)
+- **Run jewelry.** The installed Reborn client's `AzerothSurvivors/Units.lua`
+  handles the `AZSGEAR` message and assigns `AZS_GEAR` rows with
+  `slot`, `rarity`, `bonus`, `amount`, `icon`, `name` and `text`.
+  The existing production fallback refers to `AZSGEAR`, a distinct
+  global, and the raw jewelry probe targets that legacy name. The
+  production panel still prioritizes the verified meter loadout.
+  Native text is a candidate for enrichment once same-run receipt and
+  stable row correspondence are verified across reload and replacement.
+- **Other native observations.** `AzerothSurvivors/Spells.lua` stores
+  current tooltip text by spell key, `Cards.lua` handles `AZSCARDTIP`,
+  and `Units.lua` builds `AZS_HEXES` from `AZSHEX`. Establish the
+  lifecycle and identity of each feed before incorporating it into
+  tooltips or history. Static spell and amulet values describe base
+  data. [Reborn Data files](https://azreborn.com/guides/data-api)
+
 - **In-game verification is still required** for: the exact `AZSGEAR` /
   loadout source fields (rarity? rank? effect text?), which campaign
   bosses are Rift- vs time-triggered, the campaign→Endless transition

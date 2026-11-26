@@ -232,6 +232,12 @@ end
 -- rows are saved by it): Armor shows as what it is, Dmg Reduction (asked on
 -- Discord where it was), though the game's own pane calls it Armor.
 local SHOWN_AS = { Armor = "Dmg Reduction" }
+local REBORN_CAP_KEY = { Crit = "crit", Haste = "cdr", Echo = "echo", Armor = "red" }
+local REBORN_STAT_TEXT = {
+	Crit = "The chance a spell strikes critically.",
+	Echo = "The chance a spell casts again.",
+	Armor = "Damage you take is reduced by this much.",
+}
 
 function SurvivorUI_StatName(label, english)
 	if english then
@@ -836,7 +842,21 @@ local function MakeView(alone)
 		end
 		GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
 		GameTooltip:SetText(this.title, 1, 1, 1)
-		GameTooltip:AddLine(SurvivorUI_T(this.text), 1, 0.82, 0, 1)
+		local reborn = SurvivorUI_RebornActive and SurvivorUI_RebornActive()
+		local description = reborn and REBORN_STAT_TEXT[this.key] or this.text
+		GameTooltip:AddLine(SurvivorUI_T(description), 1, 0.82, 0, 1)
+		local capKey = REBORN_CAP_KEY[this.key]
+		if reborn and capKey then
+			local cap, remaining = SurvivorUI_RebornStatCap(capKey)
+			if cap then
+				GameTooltip:AddDoubleLine(SurvivorUI_T("Stat cap"), string.format("%g%%", cap), 1, 1, 1, 1, 1, 1)
+				if remaining == 0 then
+					GameTooltip:AddLine(SurvivorUI_T("At cap"), 0.60, 0.80, 1.00)
+				elseif remaining then
+					GameTooltip:AddLine(SurvivorUI_TF("{1} percentage points to cap", string.format("%g", remaining)), 0.60, 0.80, 1.00)
+				end
+			end
+		end
 		-- Stormguard's line under Armor, in the game's own words (its 0.137;
 		-- Earthen Bulwark's before).
 		local guard = AZS_Stormguard or AZS_Bulwark
