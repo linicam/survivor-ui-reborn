@@ -177,6 +177,7 @@ end
 
 local lastRunId = nil
 local activeCurses = {}
+local racialCooldownSample = nil
 local seenCurseIds = {}
 local curseBoundary = {}
 local historyScanStamp = nil
@@ -218,6 +219,7 @@ local function ResetOwnCaches()
 	jewelryError = nil
 	lastLoadoutAt = 0
 	activeCurses = {}
+	racialCooldownSample = nil
 	seenCurseIds = {}
 	historyScanStamp = nil
 	-- Run boundary: banner IDs are not guaranteed monotonic across
@@ -587,6 +589,15 @@ local function RefreshAbilitiesCache()
 		end
 	end
 	TrackRanks(merged)
+	for i = 1, table.getn(merged) do
+		local a = merged[i]
+		if a.kind == "racial" and not a.passive and a.spell and a.spell > 0 then
+			racialCooldownSample = {
+				spell = a.spell, cd = a.cd or 0, cdmax = a.cdmax or 0,
+				atRun = AZS_GetRunTime and AZS_GetRunTime() or 0,
+			}
+		end
+	end
 	return merged
 end
 
@@ -1225,61 +1236,80 @@ end)
 -- announcement shares kind="curse" but carries no effect. Track the
 -- latest effect banner, translate its effect, and count down from
 -- the buff when one is present.
-local CURSE_EFFECTS = {
-	{ "орда накатывает волной", "Horde surges " },
-}
-
-local function CurseEffectText(text)
-	for i = 1, table.getn(CURSE_EFFECTS) do
-		if string.find(text, CURSE_EFFECTS[i][1], 1, true) then
-			return T(CURSE_EFFECTS[i][2])
-		end
-	end
-	-- The documented curse categories (runs-and-zones guide): faster
-	-- enemies, a faster and thicker horde, more damage taken, healing
-	-- cut. Match Russian stems and carry the banner's own percent.
-	-- Display text goes through the locale system.
+-- Stable internal effect identifiers: acquisitions and endings are
+-- matched by ID, never by localized display text.
+local function CurseEffectId(text)
 	local pct = string.match(text, "(%d+)%%")
-	local suffix = pct and (pct .. "%") or ""
-	if string.find(text, "исцеление", 1, true) or string.find(text, "лечение", 1, true) then
-		return T("Healing reduced ") .. suffix
+	if string.find(text, "精英正在伏击", 1, true) then
+		return "elite_ambush", nil, true
+	end
+	if string.find(text, "ты получаешь на", 1, true) and string.find(text, "больше урона", 1, true) then
+		return "damage_taken", pct, false
 	end
 	if string.find(text, "получаемый урон", 1, true) or string.find(text, "урон по вам", 1, true) then
-		return T("Damage taken increased ") .. suffix
+		return "damage_taken", pct, false
+	end
+	if string.find(text, "исцеление", 1, true) or string.find(text, "лечение", 1, true) then
+		return "healing_reduced", pct, false
 	end
 	if string.find(text, "скорость врагов", 1, true) or string.find(text, "враги быстрее", 1, true) then
-		return T("Enemy speed increased ") .. suffix
+		return "enemy_speed", pct, false
 	end
 	if string.find(text, "орда", 1, true) then
-		return T("Horde surges ") .. suffix
+		return "horde_surge", pct, false
 	end
 	pct = string.match(text, "урон снижен на (%d+)%%")
 	if pct then
-		return T("Damage reduced ") .. pct .. "%"
+		return "damage_reduced", pct, false
 	end
 	pct = string.match(text, "скорость снижена на (%d+)%%")
 	if pct then
-		return T("Movement speed reduced ") .. pct .. "%"
+		return "movement_reduced", pct, false
 	end
 	pct = string.match(text, "перезарядка увеличена на (%d+)%%")
 	if pct then
-		return T("Cooldowns increased ") .. pct .. "%"
+		return "cooldown_increased", pct, false
 	end
-	return nil
+	return nil, nil, false
 end
 
--- Explicit ending banners observed in game (2026-11-26 session):
--- "涌动平息了。" ends the horde-surge curse. Endings clear the
--- matching tracked curse immediately; the duration estimate is
--- only a fallback when no ending banner is observed.
-local CURSE_ENDINGS = {
-	{ "涌动平息", "Horde surges " },
+local CURSE_DISPLAY = {
+	horde_surge = "Horde surges ",
+	damage_taken = "Damage taken increased ",
+	healing_reduced = "Healing reduced ",
+	enemy_speed = "Enemy speed increased ",
+	damage_reduced = "Damage reduced ",
+	movement_reduced = "Movement speed reduced ",
+	cooldown_increased = "Cooldowns increased ",
+	elite_ambush = "Elite ambush",
 }
 
-local function CurseEndingEffect(text)
+local function CurseEffectDisplay(id, pct)
+	local key = id and CURSE_DISPLAY[id] or nil
+	if not key then
+		return nil
+	end
+	return T(key) .. (pct and (pct .. "%") or "")
+end
+
+local function CurseEffectText(text)
+	local id, pct = CurseEffectId(text)
+	return CurseEffectDisplay(id, pct)
+end
+
+-- Explicit ending banners observed in game: "涌动平息了。" ends the
+-- horde surge; "你的脆弱消退了。" ends damage taken. Endings clear
+-- the matching tracked curse immediately; the duration estimate is
+-- only a fallback when no ending banner is observed.
+local CURSE_ENDINGS = {
+	{ "涌动平息", "horde_surge" },
+	{ "脆弱消退", "damage_taken" },
+}
+
+local function CurseEndingId(text)
 	for i = 1, table.getn(CURSE_ENDINGS) do
 		if string.find(text, CURSE_ENDINGS[i][1], 1, true) then
-			return T(CURSE_ENDINGS[i][2])
+			return CURSE_ENDINGS[i][2]
 		end
 	end
 	return nil
@@ -1320,45 +1350,42 @@ local function LatchCurseBanner(banner, fromHistory)
 		return
 	end
 	local key = BannerKey(banner)
-	if fromHistory then
-		if curseBoundary[key] then
-			return
-		end
-		-- A retained previous-run banner is timestamped on the old
-		-- run's clock: ahead of the new run's clock means stale.
-		local at = tonumber(Field(banner, "time", 6))
-		local now = AZS_GetRunTime and AZS_GetRunTime() or nil
-		if at and now and at > now + 2 then
-			return
-		end
-	end
-	local text = Field(banner, "text", 5) or ""
-	local isCurse = Field(banner, "kind", 2) == "curse" and string.find(text, "Проклятие", 1, true)
-	-- Dedup before any serialization: history scans revisit the same
-	-- banners every call.
-	if isCurse and seenCurseIds[key] then
+	if fromHistory and curseBoundary[key] then
 		return
 	end
-	if isCurse or SurvivorUI_RebornDebugEnabled() then
+	local isCurseKind = Field(banner, "kind", 2) == "curse"
+	-- Dedup every curse-kind banner identity (acquisitions, endings,
+	-- announcements) before recording or processing it again.
+	if isCurseKind and seenCurseIds[key] then
+		return
+	end
+	local text = Field(banner, "text", 5) or ""
+	local effectId, pct, eventBased = CurseEffectId(text)
+	local isAcquisition = isCurseKind and (string.find(text, "Проклятие", 1, true)
+		or string.find(text, "诅咒降临", 1, true))
+	if isAcquisition or SurvivorUI_RebornDebugEnabled() then
 		table.insert(capturedBanners, DumpBannerValue(banner, 0))
 		if table.getn(capturedBanners) > 20 then
 			table.remove(capturedBanners, 1)
 		end
 	end
-	if not isCurse then
-		if Field(banner, "kind", 2) == "curse" then
-			local ending = CurseEndingEffect(text)
-			if ending and not seenCurseIds[key] then
-				seenCurseIds[key] = true
+	if not isAcquisition then
+		if isCurseKind then
+			seenCurseIds[key] = true
+			local endingId = CurseEndingId(text)
+			if endingId then
+				local endingAt = tonumber(Field(banner, "time", 6))
 				local remaining = {}
 				for i = 1, table.getn(activeCurses) do
-					if CurseEffectText(activeCurses[i].text) ~= ending then
-						table.insert(remaining, activeCurses[i])
+					local curse = activeCurses[i]
+					local beforeEnding = not endingAt or not curse.atBanner or curse.atBanner <= endingAt
+					if curse.effectId ~= endingId or not beforeEnding then
+						table.insert(remaining, curse)
 					end
 				end
 				activeCurses = remaining
 				if SurvivorUI_RebornRecord then
-					SurvivorUI_RebornRecord("curse_banner", { raw = banner, decision = "ending", effect = ending })
+					SurvivorUI_RebornRecord("curse_banner", { raw = banner, decision = "ending", effect = CurseEffectDisplay(endingId), effectId = endingId })
 				end
 				return
 			end
@@ -1370,17 +1397,26 @@ local function LatchCurseBanner(banner, fromHistory)
 	end
 	seenCurseIds[key] = true
 	if CaptureAdd then CaptureAdd("curse banner: " .. DumpBannerValue(banner, 0)) end
+	local duration = CurseDuration(text)
+	if eventBased then
+		duration = nil
+	end
 	if SurvivorUI_RebornRecord then
 		SurvivorUI_RebornRecord("curse_banner", {
-			raw = banner, buffs = AZS_BUFFS, effect = CurseEffectText(text),
-			duration = CurseDuration(text),
+			raw = banner, buffs = AZS_BUFFS, effect = CurseEffectDisplay(effectId, pct),
+			effectId = effectId, duration = duration,
 		})
 	end
-	local now = AZS_GetRunTime and AZS_GetRunTime() or nil
+	-- Banner timestamps live on the session (GetTime) clock, while
+	-- AZS_GetRunTime is the run clock excluding pauses; never
+	-- subtract across domains. Countdowns measure run time from
+	-- the moment the banner is latched.
+	local runNow = AZS_GetRunTime and AZS_GetRunTime() or nil
 	table.insert(activeCurses, {
-		id = Field(banner, "id", 1), text = text,
-		at = tonumber(Field(banner, "time", 6)) or now or 0,
-		duration = CurseDuration(text),
+		id = Field(banner, "id", 1), text = text, effectId = effectId, pct = pct,
+		atRun = runNow or 0,
+		atBanner = tonumber(Field(banner, "time", 6)),
+		duration = duration,
 	})
 end
 
@@ -1418,12 +1454,22 @@ function SurvivorUI_RebornCurses()
 			local alive = {}
 			for i = 1, table.getn(activeCurses) do
 				local curse = activeCurses[i]
-				local left = curse.duration - (now - curse.at)
-				if left > 0 then
+				local left = nil
+				local expired = false
+				if curse.duration and curse.duration > 0 then
+					left = curse.duration - (now - (curse.atRun or now))
+					if left > curse.duration then
+						left = curse.duration
+					end
+					if left <= 0 then
+						expired = true
+					end
+				end
+				if not expired then
 					table.insert(alive, curse)
-					-- Unknown effects keep their original Russian
-					-- text rather than a generic label.
-					table.insert(items, { text = CurseEffectText(curse.text) or curse.text, left = left, raw = curse.text })
+					-- Unknown effects keep their original text
+					-- rather than a generic label.
+					table.insert(items, { text = CurseEffectDisplay(curse.effectId, curse.pct) or curse.text, left = left, raw = curse.text, effectId = curse.effectId })
 				end
 			end
 			activeCurses = alive
@@ -1434,6 +1480,31 @@ function SurvivorUI_RebornCurses()
 		items = items,
 		reason = "Curse effects arrive as kind=\"curse\" banners (AZS_RegisterBannerHandler, verified in game 2026-11-26). Banners are not retold after a reload, so curses taken before a reload cannot be reconstructed.",
 	}
+end
+
+-- Racial active cooldown from verified Reborn snapshot data
+-- (cd/cdmax in AZS_ABILITIES; sessions 002/003 show cd as the
+-- remaining cooldown at sample time). GetSpellCooldown does not
+-- cover the auto-cast racial (it is not a spellbook spell), so the
+-- overlay interpolates locally from the latest sample on the run
+-- clock. Activation between snapshots resyncs at the next snapshot.
+function SurvivorUI_RebornRacialCooldown(spell)
+	local sample = racialCooldownSample
+	if not sample or (spell and sample.spell ~= spell) then
+		return nil, nil
+	end
+	if not sample.cdmax or sample.cdmax <= 0 then
+		return nil, nil
+	end
+	local now = AZS_GetRunTime and AZS_GetRunTime() or sample.atRun
+	local remaining = sample.cd - (now - sample.atRun)
+	if remaining < 0 then
+		remaining = 0
+	end
+	if remaining > sample.cdmax then
+		remaining = sample.cdmax
+	end
+	return remaining, sample.cdmax
 end
 
 ------------------------------------------------------------------------------

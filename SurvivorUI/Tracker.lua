@@ -1397,7 +1397,11 @@ local function Draw(game, phase)
 			end
 			local parts = {}
 			for i = 1, table.getn(curseItems) do
-				table.insert(parts, curseItems[i].text .. " " .. string.format("%ds", math.ceil(curseItems[i].left)))
+				if curseItems[i].left then
+					table.insert(parts, curseItems[i].text .. " " .. string.format("%ds", math.ceil(curseItems[i].left)))
+				else
+					table.insert(parts, curseItems[i].text)
+				end
 			end
 			head.curseLine.name:SetText(SurvivorUI_T("Curse") .. "：" .. table.concat(parts, " · "))
 			head.curseLine.name:SetTextColor(1, 0.45, 0.45)

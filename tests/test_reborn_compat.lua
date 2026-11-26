@@ -353,7 +353,9 @@ AZS_GetRunTime = function() return 110 end
 curses = SurvivorUI_RebornCurses()
 eq("curses: one active item", table.getn(curses.items), 1)
 eq("curses: effect translated", curses.items[1].text, "Horde surges ")
-eq("curses: countdown from banner duration", curses.items[1].left, 10)
+eq("curses: countdown starts at declared duration", curses.items[1].left, 20)
+AZS_GetRunTime = function() return 120 end
+eq("curses: countdown measures run time from latch", SurvivorUI_RebornCurses().items[1].left, 10)
 
 -- ===========================================================================
 -- Run reset (VERIFIED run id)
@@ -542,7 +544,7 @@ AZS_BANNERS = {
 	{ id = 2, kind = "curse", text = "Проклятие тяготеет над тобой: орда накатывает волной (20 с)!", time = 900 },
 }
 local curses2 = SurvivorUI_RebornCurses()
-eq("pr4 curse: stale future banner ignored", table.getn(curses2.items), 1)
+eq("pr4 curse: banner clock domain does not reject banners", table.getn(curses2.items), 2)
 check("pr4 curse: unknown effect keeps raw text", string.find(curses2.items[1].text, "странное", 1, true) ~= nil)
 
 -- Diagnostic recorder: disabled by default, bounded, sanitized.
@@ -641,6 +643,47 @@ AZS_BANNERS = { { 7, "curse", nil, "Проклятие", "Проклятие т�
 eq("banner key: reused id in new run still counts", table.getn(SurvivorUI_RebornCurses().items), 1)
 AZS_BANNERS = { { 23, "curse", nil, "", "涌动平息了。", 24 } }
 eq("curse ending banner clears tracked curse", table.getn(SurvivorUI_RebornCurses().items), 0)
+-- Real session 002: damage-taken curse and its ending.
+AZS_GetRunTime = function() return 30 end
+AZS_BANNERS = { { 18, "curse", nil, "", "Проклятие тяготеет над тобой: ты получаешь на 40% больше урона (20 с)!", 220 } }
+local dmgCurses = SurvivorUI_RebornCurses()
+eq("curse: damage taken recognized", table.getn(dmgCurses.items), 1)
+eq("curse: damage taken id", dmgCurses.items[1].effectId, "damage_taken")
+eq("curse: damage taken percent", dmgCurses.items[1].text, "Damage taken increased 40%")
+AZS_BANNERS = { { 21, "curse", nil, "", "你的脆弱消退了。", 249 } }
+eq("curse: vulnerability ending clears damage taken", table.getn(SurvivorUI_RebornCurses().items), 0)
+-- An old ending must not clear a later acquisition.
+AZS_BANNERS = { { 71, "curse", nil, "", "Проклятие тяготеет над тобой: ты получаешь на 40% больше урона (20 с)!", 635 } }
+eq("curse: later acquisition active", table.getn(SurvivorUI_RebornCurses().items), 1)
+AZS_BANNERS = { { 21, "curse", nil, "", "你的脆弱消退了。", 249 } }
+eq("curse: old ending does not clear later acquisition", table.getn(SurvivorUI_RebornCurses().items), 1)
+-- Real session 003: elite ambush is an event curse with no countdown.
+AZS_BANNERS = { { 57, "curse", nil, "", "诅咒降临：精英正在伏击你！", 1239 } }
+local ambush = SurvivorUI_RebornCurses()
+eq("curse: elite ambush recognized", ambush.items[table.getn(ambush.items)].effectId, "elite_ambush")
+eq("curse: elite ambush has no invented countdown", ambush.items[table.getn(ambush.items)].left, nil)
+-- Racial cooldown interpolates from the Reborn cd sample.
+AZS_GetRunTime = function() return 100 end
+AZS_ABILITIES = { { key = "war_stomp", spell = 20549, rank = 1, passive = false, kind = "racial", cd = 10, cdmax = 15, name = "War Stomp", icon = "i", text = "t" } }
+AZS_SPELLS = {}
+AZS_ABILITIES_UPDATED = (AZS_ABILITIES_UPDATED or 0) + 1
+AZS_SPELLS_UPDATED = (AZS_SPELLS_UPDATED or 0) + 1
+SurvivorUI_RebornAbilities()
+local remaining, cdmax = SurvivorUI_RebornRacialCooldown(20549)
+eq("racial cd: sampled remaining", remaining, 10)
+eq("racial cd: cdmax", cdmax, 15)
+AZS_GetRunTime = function() return 104 end
+eq("racial cd: interpolates on run clock", (SurvivorUI_RebornRacialCooldown(20549)), 6)
+AZS_ZONE = { run = "azs:racialreset" }
+SurvivorUI_RebornCheckRun()
+eq("racial cd: reset between runs", (SurvivorUI_RebornRacialCooldown(20549)), nil)
+-- Build tooltip lines: passive abilities carry their Reborn text.
+local dkLines = SurvivorUI_RebornAbilityTooltipLines({ key = "demonic_knowledge", rank = 31, passive = true, text = "始终生效。你的恶魔随该法术的卡牌成长" })
+eq("tooltip lines: passive description first", dkLines[1].text, "始终生效。你的恶魔随该法术的卡牌成长")
+eq("tooltip lines: passive label", dkLines[2].kind, "passive")
+eq("tooltip lines: rank line", dkLines[3].kind, "rank")
+local racialPassiveLines = SurvivorUI_RebornAbilityTooltipLines({ key = "the_human_spirit", rank = 1, passive = true, text = "经验值+20%" })
+eq("tooltip lines: racial passive description", racialPassiveLines[1].text, "经验值+20%")
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

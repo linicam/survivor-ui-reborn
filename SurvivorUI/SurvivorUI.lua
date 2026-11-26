@@ -975,10 +975,22 @@ do
 				return
 			end
 			self.cdElapsed = 0
-			if GetSpellCooldown and CooldownFrame_SetTimer then
-				local start, duration = GetSpellCooldown(self.spell)
-				if start and duration then
-					CooldownFrame_SetTimer(self.cooldown, start, duration, 1)
+			if CooldownFrame_SetTimer then
+				local remaining, cdmax
+				if SurvivorUI_RebornRacialCooldown then
+					remaining, cdmax = SurvivorUI_RebornRacialCooldown(self.spell)
+				end
+				if remaining and cdmax and cdmax > 0 then
+					if remaining > 0 and GetTime then
+						CooldownFrame_SetTimer(self.cooldown, GetTime() - (cdmax - remaining), cdmax, 1)
+					else
+						CooldownFrame_SetTimer(self.cooldown, 0, 0, 0)
+					end
+				elseif GetSpellCooldown then
+					local start, duration = GetSpellCooldown(self.spell)
+					if start and duration then
+						CooldownFrame_SetTimer(self.cooldown, start, duration, 1)
+					end
 				end
 			end
 		end)
@@ -1090,10 +1102,18 @@ function SurvivorUI_SetExtraButton(button, spell, icon)
 	RecordExtraButton("spell:" .. tostring(spell) .. "|owned:" .. tostring(frame.ownedBinding), {
 		button = 12, spell = spell, visible = true, ownedBinding = frame.ownedBinding,
 	})
-	if GetSpellCooldown and CooldownFrame_SetTimer then
-		local start, duration = GetSpellCooldown(spell)
-		if start and duration then
-			CooldownFrame_SetTimer(frame.cooldown, start, duration, 1)
+	if CooldownFrame_SetTimer then
+		local remaining, cdmax
+		if SurvivorUI_RebornRacialCooldown then
+			remaining, cdmax = SurvivorUI_RebornRacialCooldown(spell)
+		end
+		if remaining and cdmax and cdmax > 0 and remaining > 0 and GetTime then
+			CooldownFrame_SetTimer(frame.cooldown, GetTime() - (cdmax - remaining), cdmax, 1)
+		elseif GetSpellCooldown then
+			local start, duration = GetSpellCooldown(spell)
+			if start and duration then
+				CooldownFrame_SetTimer(frame.cooldown, start, duration, 1)
+			end
 		end
 	end
 end

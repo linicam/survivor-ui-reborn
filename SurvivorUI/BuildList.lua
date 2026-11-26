@@ -473,12 +473,17 @@ local function Row(index)
 		else
 			GameTooltip:SetPoint("TOPRIGHT", this, "TOPLEFT", -((this:GetLeft() or 0) - (list:GetLeft() or 0)) - 6, 0)
 		end
-		GameTooltip:SetAction(this.actionSlot)
-		-- Reborn: the client's button tooltip already carries the base
-		-- description, so only rank, rank history and the honest note
-		-- are appended (the base line is skipped, not repeated).
-		if reborn then
-			AddRebornLines(true)
+		-- Reborn: the native action tooltip is a legacy WoW spell
+		-- tooltip (verified in real sessions: English Rank 1 text at
+		-- Reborn rank 31), not Reborn skill data. Build the tooltip
+		-- from the verified localized AZS_ABILITIES text instead;
+		-- fall back to the native tooltip only without Reborn lines.
+		if reborn and RebornLines() then
+			GameTooltip:ClearLines()
+			GameTooltip:SetText(this.ability, 1, 0.82, 0)
+			AddRebornLines(false)
+		else
+			GameTooltip:SetAction(this.actionSlot)
 		end
 		GameTooltip:Show()
 	end)
