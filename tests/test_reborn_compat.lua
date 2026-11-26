@@ -808,5 +808,29 @@ AZS_ZONE.hub = 0
 AZS_RequestAbilities = nil
 eq("stats: original client ignored", SurvivorUI_RebornStatCap("cdr"), nil)
 
+-- A shared trinket source forces the fallback name for the other instance.
+dofile("SurvivorUI/LocaleData.lua")
+dofile("SurvivorUI/Locale.lua")
+dofile("SurvivorUI/Locale_zh.lua")
+AZS_ZONE.rname = "Human"
+local locale = "en"
+AZS_GetMeterCapabilities = function() return { languageCode = locale } end
+local localeTime = 1000
+GetTime = function() return localeTime end
+AZS_GetMeterLoadout = function()
+	return {
+		runJewelry = {
+			{ sourceKey = "jewel:trinket", itemInstanceKey = "gear:trinket:tep" },
+		},
+		sources = { ["jewel:trinket"] = { itemKey = "insignia", name = "Insignia", rank = 25 } },
+	}
+end
+eq("jewelry locale: English fallback", SurvivorUI_RebornJewelry(true).items[1].name, "Talisman of Ephemeral Power")
+locale, localeTime = "zh", 1002
+local zhJewelry = SurvivorUI_RebornJewelry(true).items[1]
+eq("jewelry locale: Chinese fallback", zhJewelry.name, "短暂能量护符")
+eq("jewelry locale: instance unchanged", zhJewelry.instanceKey, "gear:trinket:tep")
+eq("jewelry locale: shared source rank ignored", zhJewelry.rank, nil)
+
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

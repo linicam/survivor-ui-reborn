@@ -1221,7 +1221,7 @@ local function NormaliseJewelryEntry(entry, source)
 	else
 		local static = itemKey and JEWELRY_STATIC[itemKey] or nil
 		if static then
-			name = static[1]
+			name = SurvivorUI_Native and SurvivorUI_Native(static[1]) or static[1]
 			icon = static[2] ~= "" and ("Interface\\Icons\\" .. static[2]) or nil
 		end
 		if not itemKey then
