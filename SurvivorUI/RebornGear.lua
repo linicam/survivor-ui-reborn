@@ -2,10 +2,13 @@
 if SurvivorUI_Standby or not SurvivorUI_RebornGearModel then return end
 
 local Gear = SurvivorUI_RebornGearModel
-local WIDTH, MAP_HEIGHT, WORN_HEIGHT, GEAR_HEIGHT = 590, 315, 420, 510
-local panel, mapView, wornView, advanced, viewButton, context, entries, results
+local WIDTH, MAP_HEIGHT, WORN_HEIGHT, GEAR_HEIGHT = 590, 345, 420, 510
+local panel, mapView, wornView, wornScroll, wornContent, advanced, viewButton, context, entries, results
+local resetMapButton
 local mapLines, wornLines = {}, {}
 local blockedZone, previewKey, previewTier, clearPreview, previewAvailable
+local liveWorn, pendingReference
+local lastLiveMap, lastLiveTier
 local ROMAN = { "I", "II", "III", "IV", "V" }
 local WORLDS = { "Classic", "The Burning Crusade", "Lich King", "Cataclysm" }
 local STAT_NAMES = {
@@ -38,25 +41,63 @@ local function InHub(zone)
 	return type(zone) == "table" and tonumber(zone.hub) == 1
 end
 
+local function CampaignPressure(zone)
+	if type(zone) ~= "table" or zone == blockedZone or InHub(zone) or (AZS_PG and AZS_PG.active) then return end
+	return Gear.Pressure(SurvivorUI_RebornMapReference, zone.zone, tonumber(zone.dt))
+end
+
+local function RunIdentity(zone)
+	if SurvivorUI_RebornStableRunId then
+		local id = SurvivorUI_RebornStableRunId(zone.run)
+		if id then return id end
+	end
+	return zone
+end
+
+local function SameMap(reference, key, tier)
+	return type(reference) == "table" and reference.zone == key and reference.tier == tier
+end
+
+local function LiveSnapshot(zone, class)
+	return liveWorn and liveWorn.identity == RunIdentity(zone) and liveWorn.class == class
+		and SameMap(liveWorn.snapshot, zone.zone, tonumber(zone.dt)) and liveWorn.snapshot or nil
+end
+
+local function SaveWornReference(reference, class, pieces)
+	if type(reference.worn) ~= "table" then reference.worn = {} end
+	local copy = {}
+	for i, piece in ipairs(pieces) do copy[i] = { slot = piece.slot, tier = piece.tier, stars = piece.stars } end
+	reference.worn[class] = copy
+end
+
 local function StoreWorn()
 	local zone = AZS_ZONE
-	if not SurvivorUI_RebornActive() or type(zone) ~= "table" or zone == blockedZone or (AZS_PG and AZS_PG.active) then return end
-	local hub = InHub(zone)
-	if not hub and not (SurvivorUI_RebornMapReference and SurvivorUI_RebornMapReference[zone.zone]) then return end
+	if not SurvivorUI_RebornActive() or not CampaignPressure(zone) then return end
 	local settings = Settings()
 	if settings.worn == false or (settings.preview == false and settings.planner == false) then return end
 	local class = ClassKey()
+	if not class or LiveSnapshot(zone, class) then return end
 	local pieces = Gear.Worn(Gear.Catalog(AZS_GEN), class, AZS_ARMOR)
 	if not pieces then return end
 	if type(settings.wornSnapshots) ~= "table" then settings.wornSnapshots = {} end
-	settings.wornSnapshots[class] = { pieces = pieces, at = time and time(), source = hub and "hub" or "campaign" }
+	local snapshot = { pieces = pieces, at = time and time(), source = "campaign", zone = zone.zone, tier = tonumber(zone.dt) }
+	settings.wornSnapshots[class] = snapshot
+	liveWorn = { identity = RunIdentity(zone), class = class, snapshot = snapshot }
+	local reference = settings.mapReference
+	if SameMap(reference, snapshot.zone, snapshot.tier) then
+		local pending = pendingReference and pendingReference.reference == reference and pendingReference.identity == liveWorn.identity
+		if pending or type(reference.worn) ~= "table" or not reference.worn[class] then SaveWornReference(reference, class, pieces) end
+	end
+	pendingReference = nil
 	return true
 end
 
 local function WornSnapshot()
 	local settings, class = Settings(), ClassKey()
 	local snapshots = settings.wornSnapshots
-	local snapshot = type(snapshots) == "table" and snapshots[class]
+	local snapshot
+	if CampaignPressure(AZS_ZONE) then snapshot = LiveSnapshot(AZS_ZONE, class)
+	elseif type(snapshots) == "table" then snapshot = snapshots[class] end
 	if type(snapshot) == "table" and type(snapshot.pieces) == "table" then return snapshot, class end
 end
 
@@ -120,11 +161,20 @@ end
 
 local function CurrentMap()
 	local zone = AZS_ZONE
-	if type(zone) ~= "table" or zone == blockedZone or tonumber(zone.hub) == 1
-		or (AZS_PG and AZS_PG.active) or not (AZS_GetPhase and AZS_GetPhase()) then return end
-	local tier = tonumber(zone.dt)
-	local pressure = Gear.Pressure(SurvivorUI_RebornMapReference, zone.zone, tier)
-	if pressure then return zone.zone, tier, pressure, zone.zname end
+	local pressure = CampaignPressure(zone)
+	if pressure then return zone.zone, tonumber(zone.dt), pressure, zone.zname end
+end
+
+local function TargetMap()
+	local pressure = previewKey and Gear.Pressure(SurvivorUI_RebornMapReference, previewKey, previewTier)
+	if pressure then return previewKey, previewTier, pressure, nil, true end
+	local key, tier, live, name = CurrentMap()
+	if live then return key, tier, live, name end
+	if InHub(AZS_ZONE) then
+		local snapshot = WornSnapshot()
+		local recent = snapshot and Gear.Pressure(SurvivorUI_RebornMapReference, snapshot.zone, snapshot.tier)
+		if recent then return snapshot.zone, snapshot.tier, recent, nil, false, true end
+	end
 end
 
 local function DisplayLines(labels, lines)
@@ -136,11 +186,16 @@ local function ShowMap(save)
 	local key, tier, pressure, name = CurrentMap()
 	local saved = save and pressure
 	if saved then
-		settings.mapReference = { zone = key, tier = tier }
+		if not SameMap(settings.mapReference, key, tier) then settings.mapReference = { zone = key, tier = tier } end
+		local ref, class = settings.mapReference, ClassKey()
+		local snapshot = LiveSnapshot(AZS_ZONE, class)
+		if snapshot then SaveWornReference(ref, class, snapshot.pieces); pendingReference = nil
+		else pendingReference = { reference = ref, identity = RunIdentity(AZS_ZONE) } end
 		clearPreview()
 	end
-	local preview = previewKey and Gear.Pressure(SurvivorUI_RebornMapReference, previewKey, previewTier)
-	if preview then key, tier, pressure, name = previewKey, previewTier, preview, nil end
+	local preview, recent
+	key, tier, pressure, name, preview, recent = TargetMap()
+	if preview then resetMapButton:Show() else resetMapButton:Hide() end
 	local ref = settings.mapReference
 	local refKey, refTier, base = "naxx", 0, nil
 	if type(ref) == "table" then
@@ -150,9 +205,10 @@ local function ShowMap(save)
 	base = base or Gear.Pressure(SurvivorUI_RebornMapReference, refKey, refTier)
 	local lines = { string.format(T("100%% reference: %s"), MapTitle(refKey, refTier, key == refKey and name or nil)) }
 	if pressure then
-		table.insert(lines, string.format(T(preview and "Preview map: %s" or "Current map: %s"), MapTitle(key, tier, name)))
+		local caption = preview and "Preview map: %s" or recent and "Last Campaign map: %s" or "Current map: %s"
+		table.insert(lines, string.format(T(caption), MapTitle(key, tier, name)))
 		table.insert(lines, string.format(T("Map health scaling vs reference %.1f%%"), 100 * pressure / base))
-		table.insert(lines, T("This comparison uses standard Campaign enemy health scaling."))
+		table.insert(lines, T("Open Gear plan for the upgrades needed to reach your reference."))
 		if tier >= 3 or refTier >= 3 then table.insert(lines, T("Heroic affixes can change the actual workload.")) end
 	else
 		table.insert(lines, T(previewAvailable and "Choose a map above to preview its difficulty."
@@ -201,10 +257,9 @@ local function Delta(old, new)
 end
 
 local function PriceText(catalog, slot, tier, star)
-	local amount, source = Gear.StarQuote(catalog, slot, tier, star)
+	local amount = Gear.StarQuote(catalog, slot, tier, star)
 	if not amount then return T("Price unknown") end
-	local labels = { table = "%d gold (table)", weapon = "%d gold (same as armor)", estimated = "%d gold (estimate)" }
-	return string.format(T(labels[source]), amount)
+	return string.format(T("%d gold"), amount)
 end
 
 local function AddInspectGearPreview(owner)
@@ -280,18 +335,86 @@ end
 
 local function MissingWornMessage(settings)
 	if settings.worn == false then return T("Worn gear recording is disabled.") end
-	if InHub(AZS_ZONE) then return T("No worn gear received in the Hub yet. Try Refresh worn gear.") end
-	return T("Waiting for the game to send your worn gear.")
+	if InHub(AZS_ZONE) then return T("No Campaign gear recorded for this class yet.") end
+	return T("Waiting for the game's Campaign gear snapshot.")
+end
+
+local function DisplayWorn(lines)
+	local y = 0
+	for i, text in ipairs(lines) do
+		local label = wornLines[i]
+		if not label then
+			label = wornContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+			label:SetWidth(WIDTH - 54)
+			label:SetJustifyH("LEFT")
+			label:SetTextColor(0.92, 0.94, 0.98)
+			wornLines[i] = label
+		end
+		label:SetText(text)
+		label:ClearAllPoints()
+		label:SetPoint("TOPLEFT", wornContent, "TOPLEFT", 0, -y)
+		label:Show()
+		local height = label.GetStringHeight and label:GetStringHeight()
+		y = y + math.max(14, height or 0) + 5
+	end
+	for i = table.getn(lines) + 1, table.getn(wornLines) do wornLines[i]:Hide() end
+	wornContent:SetHeight(math.max(1, y))
+	wornScroll:SetVerticalScroll(0)
+end
+
+local function AddUpgradePlan(lines, settings, catalog, class, snapshot)
+	if settings.planner == false then return end
+	local key, tier, pressure, name = TargetMap()
+	if not pressure then
+		table.insert(lines, T("Choose a target under Map difficulty to preview an upgrade plan."))
+		return
+	end
+	table.insert(lines, string.format(T("Upgrade plan for %s · target below 100%%"), MapTitle(key, tier, name)))
+	local ref = settings.mapReference
+	local refPressure = type(ref) == "table" and Gear.Pressure(SurvivorUI_RebornMapReference, ref.zone, ref.tier)
+	local recorded = refPressure and type(ref.worn) == "table" and Gear.WornPlan(catalog, class, ref.worn[class])
+	if not recorded then
+		table.insert(lines, T("Enter the reference map at its saved difficulty to record baseline gear for this class."))
+		return
+	end
+	local baseline = Gear.Totals(catalog, class, recorded.current)
+	local pieces = Gear.WornPlan(catalog, class, snapshot.pieces)
+	local plan = pieces and Gear.UnderBaseline(pieces, pressure, { pressure = refPressure, damage = baseline.damage or 0 })
+	if not plan then
+		table.insert(lines, T("The upgrade plan could not be calculated for this gear."))
+		return
+	end
+	table.insert(lines, string.format(T("Estimated output pressure %.2f%% → %.2f%% · %d gold"), plan.current * 100, plan.after * 100, plan.cost))
+	if plan.current < 1 then table.insert(lines, T("Already below 100%. No upgrades needed."))
+	elseif plan.reached then table.insert(lines, T("Lowest estimated cost among upgrades to these pieces."))
+	else table.insert(lines, T("Best modeled result from these pieces. The target is still out of reach.")) end
+	for i, piece in ipairs(plan.pieces) do
+		local old = pieces.current[i]
+		if piece.stars > old.stars then
+			table.insert(lines, string.format("%s · %s · ★%d → ★%d · %s", GearName(piece.slot), GearName(piece.tier), old.stars,
+				piece.stars, string.format(T("%d gold"), piece.cost)))
+		end
+	end
+	if plan.cost > 0 then
+		local _, before = Gear.Totals(catalog, class, pieces.current)
+		local _, after = Gear.Totals(catalog, class, plan.pieces)
+		local known = {}
+		for _, text in ipairs(ActiveSets(before)) do known[text] = true end
+		for _, text in ipairs(ActiveSets(after)) do
+			if not known[text] then table.insert(lines, T("Set gained") .. " · " .. text) end
+		end
+	end
+	if pieces.incomplete then table.insert(lines, T("Unpriced stars are excluded from the search.")) end
+	table.insert(lines, T("Uses enemy health and listed gear damage. Check star unlocks in Gear."))
 end
 
 local function ShowWorn()
 	local settings = Settings()
-	if settings.preview == false then DisplayLines(wornLines, { T("This gear analysis feature is disabled.") }); return end
+	if settings.preview == false and settings.planner == false then DisplayWorn({ T("This gear analysis feature is disabled.") }); return end
 	local snapshot, class = WornSnapshot()
 	local catalog = Gear.Catalog(AZS_GEN)
-	local rows = snapshot and catalog and Gear.NextStars(catalog, class, snapshot.pieces)
-	if not rows then
-		DisplayLines(wornLines, { MissingWornMessage(settings) })
+	if not snapshot or not catalog then
+		DisplayWorn({ MissingWornMessage(settings) })
 		return
 	end
 	local native = AZS_ZONE and AZS_ZONE.cname
@@ -304,6 +427,9 @@ local function ShowWorn()
 	if source and recorded then source = source .. " · " .. recorded end
 	if source then table.insert(lines, source)
 	elseif recorded then table.insert(lines, recorded) end
+	AddUpgradePlan(lines, settings, catalog, class, snapshot)
+	local rows = settings.preview ~= false and Gear.NextStars(catalog, class, snapshot.pieces)
+	if not rows then DisplayWorn(lines); return end
 	table.insert(lines, T(rows[1] and "Top next-star gains, ordered by added piece damage" or "All recorded pieces are at five stars."))
 	for i = 1, math.min(table.getn(rows), 6) do
 		local row = rows[i]
@@ -312,8 +438,7 @@ local function ShowWorn()
 			piece.stars + 1, PriceText(catalog, piece.slot, piece.tier, piece.stars + 1)))
 		table.insert(lines, "    " .. Delta(row.before, row.after))
 	end
-	table.insert(lines, T("Armor price table: 2026-11-16. Check upgrade eligibility in Gear."))
-	DisplayLines(wornLines, lines)
+	DisplayWorn(lines)
 end
 
 local function CompareSets(before, after)
@@ -540,47 +665,11 @@ local function ShowView(view)
 	if view == "worn" then wornView:Show() else wornView:Hide() end
 	if equipment then advanced:Show() else advanced:Hide() end
 	panel:SetHeight(equipment and GEAR_HEIGHT or (view == "worn" and WORN_HEIGHT or MAP_HEIGHT))
-	viewButton:SetText(T(view == "map" and "Gear planner" or "Map difficulty"))
+	viewButton:SetText(T(view == "map" and "Gear plan" or "Map difficulty"))
 	results:Clear()
 	if equipment then results:Show() else results:Hide() end
 	if view == "map" then RunAction("map") end
 	if view == "worn" then ShowWorn() end
-end
-
-local function UseRecordedGear()
-	local snapshot, class = WornSnapshot()
-	if not snapshot then
-		DisplayLines(wornLines, { MissingWornMessage(Settings()) })
-		return
-	end
-	ShowView("manual")
-	if string.find(entries:GetText(), "%S") then
-		Add(T("The planner already contains entries. Clear it before loading recorded gear."))
-		return
-	end
-	local key, tier = previewKey, previewTier
-	if not key then key, tier = CurrentMap() end
-	if not key then
-		local ref = Settings().mapReference
-		if type(ref) == "table" and Gear.Pressure(SurvivorUI_RebornMapReference, ref.zone, ref.tier) then key, tier = ref.zone, ref.tier end
-	end
-	local lines = {}
-	for _, piece in ipairs(snapshot.pieces) do
-		table.insert(lines, string.format("%s %s %d worn", piece.slot, piece.tier, piece.stars))
-	end
-	context:SetText(string.format("%s %s %d 0", class, key or "naxx", tier or 0))
-	entries:SetText(table.concat(lines, "\n"))
-	RunAction("gear")
-end
-
-local function RefreshWorn()
-	local settings = Settings()
-	if settings.worn == false or settings.preview == false then
-		ShowWorn()
-	elseif InHub(AZS_ZONE) and type(AZS_SendCommand) == "function" then
-		AZS_SendCommand("sync")
-		Say("Requested a worn gear refresh from the game.")
-	end
 end
 
 local function Label(parent, text, x, y)
@@ -591,9 +680,9 @@ local function Label(parent, text, x, y)
 end
 
 local function Picker(parent, suffix, caption, x, width, choices, select)
-	Label(parent, caption, x + 16, -110)
+	Label(parent, caption, x + 16, -273)
 	local menu = CreateFrame("Frame", "SurvivorUIRebornGear" .. suffix, parent, "UIDropDownMenuTemplate")
-	menu:SetPoint("TOPLEFT", parent, "TOPLEFT", x, -126)
+	menu:SetPoint("TOPLEFT", parent, "TOPLEFT", x, -290)
 	UIDropDownMenu_SetWidth(menu, width)
 	UIDropDownMenu_Initialize(menu, function()
 		for _, option in ipairs(choices()) do
@@ -667,6 +756,7 @@ local function Build()
 	panel:RegisterEvent("PLAYER_ENTERING_WORLD")
 	panel:SetScript("OnEvent", function()
 		blockedZone = AZS_ZONE
+		pendingReference = nil
 		clearPreview()
 		panel:Hide()
 	end)
@@ -686,13 +776,14 @@ local function Build()
 	wornView:SetAllPoints(panel)
 	advanced = CreateFrame("Frame", nil, panel)
 	advanced:SetAllPoints(panel)
-	Label(mapView, "Enter the map you want to use as your reference. No gear entry is needed.", 16, -48)
-	for index, row in ipairs({ { "save_map", "Set current map to 100%" }, { "map", "Refresh current map" } }) do
+	Label(mapView, "The current map is shown automatically. Use the selectors below to preview another map.", 16, -48)
+	for index, row in ipairs({ { "save_map", "Set current map to 100%" }, { "map", "Clear map preview" } }) do
 		local action = row[1]
 		local button = CreateFrame("Button", nil, mapView, "UIPanelButtonTemplate")
 		button:SetPoint("TOPLEFT", mapView, "TOPLEFT", 16 + (index - 1) * 204, -76)
 		button:SetWidth(196); button:SetHeight(24)
 		button:SetText(T(row[2]))
+		if action == "map" then resetMapButton = button; button:Hide() end
 		button:SetScript("OnClick", function()
 			if action == "map" then clearPreview() end
 			RunAction(action)
@@ -700,37 +791,19 @@ local function Build()
 	end
 	BuildPreviewPickers(mapView)
 	for index = 1, 6 do
-		local label = Label(mapView, "", 16, -166 - (index - 1) * 21)
+		local label = Label(mapView, "", 16, -109 - (index - 1) * 22)
 		label:SetWidth(WIDTH - 32)
 		label:SetJustifyH("LEFT")
 		if index == 3 then label:SetTextColor(1, 0.82, 0.22) else label:SetTextColor(0.92, 0.94, 0.98) end
 		mapLines[index] = label
 	end
-	local edit = CreateFrame("Button", nil, wornView, "UIPanelButtonTemplate")
-	edit:SetPoint("TOPLEFT", wornView, "TOPLEFT", 16, -48)
-	edit:SetWidth(180); edit:SetHeight(24)
-	edit:SetText(T("Edit gear and prices"))
-	edit:SetScript("OnClick", function() ShowView("manual") end)
-	local use = CreateFrame("Button", nil, wornView, "UIPanelButtonTemplate")
-	use:SetPoint("LEFT", edit, "RIGHT", 8, 0)
-	use:SetWidth(190); use:SetHeight(24)
-	use:SetText(T("Load recorded gear"))
-	use:SetScript("OnClick", UseRecordedGear)
-	local refresh = CreateFrame("Button", nil, wornView, "UIPanelButtonTemplate")
-	refresh:SetPoint("LEFT", use, "RIGHT", 8, 0)
-	refresh:SetWidth(170); refresh:SetHeight(24)
-	refresh:SetText(T("Refresh worn gear"))
-	refresh:SetScript("OnClick", RefreshWorn)
-	wornView:SetScript("OnShow", function()
-		if InHub(AZS_ZONE) and type(AZS_SendCommand) == "function" then refresh:Show() else refresh:Hide() end
-	end)
-	for index = 1, 16 do
-		local label = Label(wornView, "", 16, -86 - (index - 1) * 20)
-		label:SetWidth(WIDTH - 32)
-		label:SetJustifyH("LEFT")
-		label:SetTextColor(0.92, 0.94, 0.98)
-		wornLines[index] = label
-	end
+	wornScroll = CreateFrame("ScrollFrame", "SurvivorUIRebornWornScroll", wornView, "UIPanelScrollFrameTemplate")
+	wornScroll:SetPoint("TOPLEFT", wornView, "TOPLEFT", 16, -51)
+	wornScroll:SetPoint("BOTTOMRIGHT", wornView, "BOTTOMRIGHT", -32, 16)
+	wornContent = CreateFrame("Frame", "SurvivorUIRebornWornContent", wornScroll)
+	wornContent:SetWidth(WIDTH - 54)
+	wornContent:SetHeight(1)
+	wornScroll:SetScrollChild(wornContent)
 	Label(advanced, "class map tier background% [slot]", 16, -46)
 	context = CreateFrame("EditBox", nil, advanced, "InputBoxTemplate")
 	context:SetWidth(WIDTH - 38); context:SetHeight(23); context:SetMaxLetters(125)
@@ -790,7 +863,8 @@ function SurvivorUI_RebornGearOpen(argument)
 		settings[feature] = not enabled
 		if results then results:Clear() end
 		if feature == "difficulty" and enabled then DisplayLines(mapLines, {}) end
-		if (feature == "worn" or feature == "preview") and wornView and wornView:IsShown() then ShowWorn() end
+		if (feature == "worn" or feature == "preview" or feature == "planner")
+			and panel and panel:IsShown() and wornView:IsShown() then ShowWorn() end
 		if feature == "preview" then RefreshInspectOverview() end
 		Say(not enabled and "Gear analysis feature enabled." or "This gear analysis feature is disabled.")
 		return
@@ -802,6 +876,9 @@ function SurvivorUI_RebornGearOpen(argument)
 	if not panel then Build() end
 	if argument == "worn" then
 		ShowView("worn")
+		panel:Show()
+	elseif argument == "advanced" then
+		ShowView("manual")
 		panel:Show()
 	elseif argument == "keys" then
 		ShowView("manual")
@@ -834,6 +911,14 @@ function SurvivorUI_RebornGearOpen(argument)
 end
 
 if AZS and type(AZS.On) == "function" then
+	AZS.On("AZSZONE", function()
+		local key, tier = CurrentMap()
+		if key and (key ~= lastLiveMap or tier ~= lastLiveTier) and clearPreview then clearPreview() end
+		lastLiveMap, lastLiveTier = key, tier
+		if panel and panel:IsShown() then
+			if mapView:IsShown() then RunAction("map") elseif wornView:IsShown() then ShowWorn() end
+		end
+	end)
 	AZS.On("AZSARMOR", function()
 		InstallInspectHook()
 		if StoreWorn() and panel and panel:IsShown() and wornView:IsShown() then ShowWorn() end

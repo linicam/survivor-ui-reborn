@@ -71,6 +71,14 @@ local worn = assert(G.Worn(cat, "warlock", { { slot = "8", rarity = "7", stars =
 assert(#worn == 2 and worn[1].tier == "legendary" and worn[2].slot == "main_hand" and worn[2].tier == "mythic")
 assert(not G.Worn(cat, "warlock", { { slot = 0, rarity = 0, stars = 0 }, { slot = 0, rarity = 1, stars = 1 } }))
 assert(not G.Worn(cat, "warlock", {}) and not G.Worn(cat, "warlock", { { slot = 0, rarity = 2 } }))
+local candidate = assert(G.WornPlan(cat, "warlock", { { slot = "head", tier = "elementium", stars = 0 } }))
+local source = { pressure = 1, damage = candidate.current[1].power }
+local strict = assert(G.UnderBaseline(candidate, 1, source))
+assert(strict.current == 1 and strict.after < 1 and strict.reached and strict.cost == 3101 and strict.pieces[1].stars == 1)
+local easy = assert(G.UnderBaseline(candidate, 0.9, source))
+assert(easy.reached and easy.cost == 0 and easy.pieces[1].stars == 0)
+local impossible = assert(G.UnderBaseline(candidate, 12, source))
+assert(not impossible.reached and impossible.after >= 1 and impossible.cost == 72353 and impossible.pieces[1].stars == 5)
 near(G.Piece(cat, "warlock", "main_hand", "common", 0).damage, 0.084)
 near(G.Piece(cat, "warlock", "main_hand", "common", 5).damage, 0.61236)
 near(G.Piece(cat, "warlock", "main_hand", "exotic", 0).damage, 0.4704)
@@ -207,6 +215,7 @@ function SurvivorUI_T(string) return string end
 function SurvivorUI_TF(text, value) return (string.gsub(text, "{1}", value)) end
 local reborn, phase = false, "playing"
 function SurvivorUI_RebornActive() return reborn end
+function SurvivorUI_RebornStableRunId(run) return run end
 function AZS_GetPhase() return phase end
 local handlers = {}
 AZS = { On = function(event, callback) handlers[event] = callback end }
@@ -257,7 +266,8 @@ AZSInspect:RefreshDoll({ { slot = 0, rarity = 0, stars = 0 } })
 AZSInspect:RefreshDoll({ { slot = 0, rarity = 0, stars = 0 } })
 local tooltip = dollSlot:Hover()
 assert(dollSlot.hooks == 1 and string.find(tooltip, "Native tooltip", 1, true))
-assert(string.find(tooltip, "Next star · ★0 → ★1", 1, true) and string.find(tooltip, "408 gold (table)", 1, true))
+assert(string.find(tooltip, "Next star · ★0 → ★1", 1, true) and string.find(tooltip, "408 gold", 1, true))
+assert(not string.find(tooltip, "(table)", 1, true))
 assert(string.find(tooltip, "Damage +5.38%", 1, true))
 AZSInspect.unit = "party1"
 assert(dollSlot:Hover() == "Native tooltip", "a party member's tooltip is not changed")
@@ -290,7 +300,7 @@ assert(not overview:IsShown(), "disabling gear preview also hides the overview b
 SurvivorUI_RebornGearOpen("toggle preview")
 assert(overview:IsShown())
 overview.scripts.OnClick()
-assert(not AZSInspect:IsShown() and buttons["Load recorded gear"].parent:IsShown())
+assert(not AZSInspect:IsShown() and not buttons["Load recorded gear"] and not buttons["Edit gear and prices"] and not buttons["Refresh worn gear"])
 assert(SurvivorUI_RebornGearOpen("show"))
 local input, items, output, gearPanel, gearView
 for _, w in ipairs(widgets) do
@@ -314,6 +324,7 @@ assert(SurvivorUI_RebornGearOpen("show") and MapShows("179.0%"), "opening from o
 saveMap()
 local mapRef = SurvivorUIDB.rebornGear.mapReference
 assert(mapRef.zone == "naxx" and mapRef.tier == 1 and MapShows("100.0%") and MapShows("Naxxramas · Heroic I"))
+assert(mapRef.worn.warlock[1].tier == "elementium" and mapRef.worn.warlock[1].stars == 0)
 assert(not SurvivorUI_RebornGearOpen() and not gearPanel:IsShown(), "slash command still toggles the panel")
 gearPanel.scripts.OnEvent()
 assert(SurvivorUI_RebornGearOpen("show"))
@@ -321,7 +332,7 @@ saveMap()
 assert(SurvivorUIDB.rebornGear.mapReference == mapRef and MapShows("Your reference was kept"), "prior world snapshot is rejected")
 AZS_ZONE = { zone = "elwynn", dt = "2", zname = "Elwynn Forest" }
 phase = "playing"
-buttons["Refresh current map"].scripts.OnClick()
+handlers.AZSZONE()
 local expected = 100 * G.Pressure(SurvivorUI_RebornMapReference, "elwynn", 2) / G.Pressure(SurvivorUI_RebornMapReference, "naxx", 1)
 assert(MapShows(string.format("%.1f%%", expected)) and MapShows("Current map: Elwynn Forest · Heroic II"))
 saveMap()
@@ -329,9 +340,11 @@ mapRef = SurvivorUIDB.rebornGear.mapReference
 assert(mapRef.zone == "elwynn" and mapRef.tier == 2 and MapShows("100.0%"), "map can be saved during a run")
 AZS_ZONE = { zone = "naxx", dt = 0, hub = 1, class = "warlock" }
 phase = nil -- The native API returns nil in the Hub.
-AZS_ARMOR = { { slot = 8, rarity = 2 } }
+AZS_ARMOR = { { slot = 8, rarity = 2, stars = 3 } }
+handlers.AZSZONE()
+assert(MapShows("Last Campaign map: Naxxramas · Heroic I"))
 handlers.AZSARMOR()
-assert(SurvivorUIDB.rebornGear.wornSnapshots.warlock == snapshot, "an incomplete Hub message keeps the previous snapshot")
+assert(SurvivorUIDB.rebornGear.wornSnapshots.warlock == snapshot, "Hub events do not replace the Campaign entry snapshot")
 assert(Pick("World", 2) and not Pick("Zone", "elwynn") and not Pick("Zone", "unmodeled"))
 assert(Pick("Zone", "shadowmoon") and MapShows("Preview map: Shadowmoon Valley · Normal"))
 assert(Pick("Tier", 5) and MapShows("Preview map: Shadowmoon Valley · Heroic V"))
@@ -339,6 +352,8 @@ local hubExpected = 100 * G.Pressure(SurvivorUI_RebornMapReference, "shadowmoon"
 assert(MapShows(string.format("%.1f%%", hubExpected)))
 saveMap()
 assert(SurvivorUIDB.rebornGear.mapReference == mapRef and MapShows("Your reference was kept") and MapShows("Preview map: Shadowmoon Valley · Heroic V"))
+buttons["Clear map preview"].scripts.OnClick()
+assert(MapShows("Last Campaign map: Naxxramas · Heroic I"))
 AZS_ZONE = { zone = "naxx" }
 phase = "ready"
 saveMap()
@@ -346,7 +361,7 @@ assert(SurvivorUIDB.rebornGear.mapReference == mapRef and MapShows("Your referen
 AZS_ZONE = { zone = "naxx", dt = 6 }
 saveMap()
 assert(SurvivorUIDB.rebornGear.mapReference == mapRef and MapShows("Your reference was kept"), "unmodeled tiers cannot replace the reference")
-AZS_ZONE = { zone = "naxx", dt = 0 }
+AZS_ZONE = { zone = "naxx", dt = 0, class = "paladin", run = "azs:r00000001" }
 AZS_PG = { active = true }
 saveMap()
 assert(SurvivorUIDB.rebornGear.mapReference == mapRef and MapShows("Your reference was kept"))
@@ -355,47 +370,46 @@ saveMap()
 mapRef = SurvivorUIDB.rebornGear.mapReference
 assert(mapRef.zone == "naxx" and mapRef.tier == 0 and MapShows("Current map: Naxxramas · Normal") and not MapShows("Preview map:"), "save takes the actual map even with a preview selected")
 phase = "playing"
-buttons["Gear planner"].scripts.OnClick()
-buttons["Edit gear and prices"].scripts.OnClick()
+SurvivorUI_RebornGearOpen("advanced")
 assert(gearView:IsShown())
 buttons["Gear preview"].scripts.OnClick()
 assert(logs[#logs] == "Open gear analysis from the hub or outside active combat.")
-phase = nil
-AZS_ZONE = { hub = 1, class = "paladin" }
-assert(SurvivorUI_RebornGearOpen("show"))
-buttons["Gear planner"].scripts.OnClick()
 local function WornShows(text)
 	for _, w in ipairs(widgets) do
-		if w.kind == "FontString" and w.parent == buttons["Load recorded gear"].parent
+		if w.kind == "FontString" and w.parent and w.parent.name == "SurvivorUIRebornWornContent" and w:IsShown()
 			and string.find(w:GetText(), text, 1, true) then return true end
 	end
 	return false
 end
-assert(WornShows("No worn gear received in the Hub"), "the Hub never borrows another class's gear")
-assert(#commands == 0, "gear capture never sends an automatic sync")
-buttons["Refresh worn gear"].scripts.OnClick()
-assert(#commands == 1 and commands[1] == "sync")
+assert(SurvivorUI_RebornGearOpen("worn") and WornShows("Waiting for the game's Campaign gear snapshot"))
 AZS_ARMOR = { { slot = 0, rarity = 2, stars = 0 } }
 handlers.AZSARMOR()
-local fromHub = assert(SurvivorUIDB.rebornGear.wornSnapshots.paladin)
-assert(fromHub.source == "hub" and #fromHub.pieces == 1 and fromHub.pieces[1].tier == "rare")
-assert(WornShows("Last recorded gear: Paladin · 1 pieces") and WornShows("Recorded in Dalaran Hub"),
-	"the open planner accepts the first snapshot directly in the Hub")
-assert(WornShows("1020 gold (table)"))
-AZS_ARMOR = {}
+local fromRun = assert(SurvivorUIDB.rebornGear.wornSnapshots.paladin)
+assert(mapRef.worn.paladin[1].stars == 0 and fromRun.source == "campaign")
+assert(WornShows("Upgrade plan for Naxxramas · Normal") and WornShows("100.00% → ") and WornShows("1020 gold"))
+assert(WornShows("Head · Rare · ★0 → ★1") and WornShows("Lowest estimated cost"))
+AZS_ZONE = { zone = "naxx", dt = 0, class = "paladin", run = "azs:r00000001" }
+AZS_ARMOR = { { slot = 0, rarity = 2, stars = 5 } }
 handlers.AZSARMOR()
-assert(SurvivorUIDB.rebornGear.wornSnapshots.paladin == fromHub, "an empty reply does not clear the saved snapshot")
+assert(SurvivorUIDB.rebornGear.wornSnapshots.paladin == fromRun, "repeated sync in the same run is ignored")
+AZS_ZONE = { zone = "elwynn", dt = 0, class = "paladin", run = "azs:r00000002" }
+handlers.AZSZONE()
+assert(WornShows("Waiting for the game's Campaign gear snapshot"), "a new run does not use stale gear")
+handlers.AZSARMOR()
+assert(SurvivorUIDB.rebornGear.wornSnapshots.paladin.pieces[1].stars == 5 and mapRef.worn.paladin[1].stars == 0)
+assert(WornShows("Already below 100%"))
+assert(#commands == 0, "the analyzer never requests refresh commands")
+phase = nil
 AZS_ZONE = { hub = 1, class = "warlock" }
 assert(SurvivorUI_RebornGearOpen("show"))
 assert(not gearView:IsShown())
 zone = 8 * 3600
 assert(SurvivorUI_RebornGearOpen("worn"))
 assert(dateAt == 100 + 8 * 3600 and WornShows("Recorded at 2026-11-26 12:00") and not WornShows("12:00 UTC"))
-assert(WornShows("Last recorded gear: Warlock · 2 pieces") and WornShows("3101 gold (estimate)"))
+assert(WornShows("Last recorded gear: Warlock · 2 pieces") and WornShows("3101 gold"))
 assert(WornShows("Recorded in a Campaign map"), "the Hub still displays the provenance of a fallback snapshot")
-assert(WornShows("3754 gold (same as armor)"))
-buttons["Load recorded gear"].scripts.OnClick()
-assert(gearView:IsShown() and items:GetText() == "head elementium 0 worn\nmain_hand legendary 1 worn")
+assert(WornShows("3754 gold") and WornShows("Enter the reference map at its saved difficulty"))
+assert(SurvivorUI_RebornGearOpen("advanced") and gearView:IsShown())
 items:SetText("main_hand common 4 worn 100")
 buttons["Save gear setup"].scripts.OnClick()
 assert(SurvivorUIDB.rebornGear.references.warlock.gear[1].stars == 4)
@@ -426,6 +440,7 @@ function SurvivorUI_T(text) return SurvivorUI_WORDS.zh[text] or text end
 assert(SurvivorUI_RebornGearOpen("worn") and WornShows("伤害 +") and not WornShows("Damage +"))
 AZSInspect:RefreshDoll({ { slot = 0, rarity = 0, stars = 0 } })
 local chineseTooltip = dollSlot:Hover()
-assert(string.find(chineseTooltip, "下一星", 1, true) and string.find(chineseTooltip, "408 金币（价格表）", 1, true))
+assert(string.find(chineseTooltip, "下一星", 1, true) and string.find(chineseTooltip, "408 金币", 1, true))
+assert(not string.find(chineseTooltip, "价格表", 1, true))
 assert(string.find(chineseTooltip, "伤害 +5.38%", 1, true))
 print("PASS: gear arithmetic, sets, exhaustive solver comparison, and panel lifecycle")

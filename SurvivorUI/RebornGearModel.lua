@@ -267,6 +267,37 @@ function Gear.Scenario(target, reference, currentDamage, background)
 	return (1 + background + required) / (1 + background + currentDamage), required
 end
 
+-- Build star-only candidates from observed equipment. Prices are estimates of
+-- gold expenditure and do not establish account-level upgrade eligibility.
+function Gear.WornPlan(catalog, class, pieces)
+	if not catalog or type(pieces) ~= "table" or not pieces[1] then return end
+	local groups, current, seen, incomplete = {}, {}, {}, false
+	for _, piece in ipairs(pieces) do
+		local stars = type(piece) == "table" and Integer(piece.stars, 5)
+		if not stars or seen[piece.slot] then return end
+		local slot = catalog.slots[piece.slot]
+		local stats = Gear.Piece(catalog, class, piece.slot, piece.tier, stars)
+		if not stats then return end
+		seen[piece.slot] = true
+		local first = { slot = piece.slot, tier = piece.tier, stars = stars, armor = slot.index < 8,
+			stats = stats, power = stats.damage or 0, cost = 0 }
+		local options = { first }
+		local cost = 0
+		for target = stars + 1, 5 do
+			local price = Gear.StarQuote(catalog, piece.slot, piece.tier, target)
+			if not price then incomplete = true; break end
+			cost = cost + price
+			local after = Gear.Piece(catalog, class, piece.slot, piece.tier, target)
+			table.insert(options, { slot = piece.slot, tier = piece.tier, stars = target, armor = first.armor,
+				stats = after, power = after.damage or 0, cost = cost })
+		end
+		local entry = { choices = options }
+		table.insert(current, first)
+		table.insert(groups, { worn = entry, entries = { entry } })
+	end
+	return { current = current, groups = groups, incomplete = incomplete }
+end
+
 local function Better(candidate, existing)
 	return not existing or candidate.power > existing.power + EPS
 		or (math.abs(candidate.power - existing.power) <= EPS and candidate.changes < existing.changes)
@@ -381,4 +412,19 @@ function Gear.Optimize(plan, needed, farm, limit, requirements)
 		node = node.prior
 	end
 	return { cost = chosen.cost, power = chosen.power, pieces = pieces, reached = chosen.power + EPS >= needed }
+end
+
+function Gear.UnderBaseline(plan, pressure, reference)
+	local damage = 0
+	for _, piece in ipairs(plan.current) do damage = damage + piece.power end
+	local ratio, needed = Gear.Scenario(pressure, reference, damage, 0)
+	if ratio < 1 then return { current = ratio, after = ratio, reached = true, cost = 0, pieces = plan.current } end
+	-- The existing solver treats values within EPS as equal. At 100%, require
+	-- strictly more gear damage so that equality does not count as a pass.
+	local result = Gear.Optimize(plan, needed + 2 * EPS, false)
+	if not result then return end
+	result.current = ratio
+	result.after = Gear.Scenario(pressure, reference, result.power, 0)
+	result.reached = result.after < 1
+	return result
 end
