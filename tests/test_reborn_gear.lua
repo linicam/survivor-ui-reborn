@@ -213,7 +213,36 @@ AZS = { On = function(event, callback) handlers[event] = callback end }
 local commands = {}
 AZS_SendCommand = function(command) table.insert(commands, command) end
 time = function() return 100 end
-date = function() return "2026-11-26 12:00" end
+local dateAt, zone
+date = function(_, at) dateAt = at; return "2026-11-26 12:00" end
+function SurvivorUI_TimeZone() return zone end
+local dollSlot = { slot = 0, hooks = 0 }
+function dollSlot:HookScript(event, fn)
+	assert(event == "OnEnter")
+	self.hooks, self.afterEnter = self.hooks + 1, fn
+end
+GameTooltip = {
+	IsOwned = function(self, owner) return self.owner == owner end,
+	AddLine = function(self, text) table.insert(self.lines, text) end,
+	Show = function() end,
+}
+function dollSlot:Hover()
+	GameTooltip.owner, GameTooltip.lines = self, { "Native tooltip" }
+	if self.afterEnter then self.afterEnter(self) end
+	return table.concat(GameTooltip.lines, "\n")
+end
+AZSInspect = { unit = "player" }
+function AZSInspect:RefreshDoll(armor)
+	AZSInspectSlot0 = { GetParent = function() return dollSlot end }
+	dollSlot.piece = armor[1]
+end
+function hooksecurefunc(target, method, callback)
+	local original = target[method]
+	target[method] = function(self, ...)
+		original(self, ...)
+		callback(self, ...)
+	end
+end
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, text) table.insert(logs, text) end }
 dofile("SurvivorUI/RebornGear.lua")
 assert(count == 0)
@@ -222,6 +251,22 @@ assert(count == 0)
 reborn = true
 AZS_ZONE = { zone = "naxx", dt = 1, zname = "Naxxramas", class = "warlock" }
 phase = "ready"
+AZSInspect:RefreshDoll({ { slot = 0, rarity = 0, stars = 0 } })
+AZSInspect:RefreshDoll({ { slot = 0, rarity = 0, stars = 0 } })
+local tooltip = dollSlot:Hover()
+assert(dollSlot.hooks == 1 and string.find(tooltip, "Native tooltip", 1, true))
+assert(string.find(tooltip, "Next star · ★0 → ★1", 1, true) and string.find(tooltip, "408 gold (table)", 1, true))
+assert(string.find(tooltip, "Damage +5.38%", 1, true))
+AZSInspect.unit = "party1"
+assert(dollSlot:Hover() == "Native tooltip", "a party member's tooltip is not changed")
+AZSInspect.unit = "player"
+AZSInspect:RefreshDoll({})
+assert(dollSlot:Hover() == "Native tooltip", "an empty slot has no upgrade")
+AZSInspect:RefreshDoll({ { slot = 0, rarity = 0, stars = 5 } })
+assert(string.find(dollSlot:Hover(), "At five stars", 1, true))
+SurvivorUI_RebornGearOpen("toggle preview")
+assert(dollSlot:Hover() == "Native tooltip", "disabled previews do not extend native tooltips")
+SurvivorUI_RebornGearOpen("toggle preview")
 AZS_ARMOR = { { slot = 0, rarity = 8, stars = 0 }, { slot = 8, rarity = 4, stars = 1 } }
 handlers.AZSARMOR()
 local snapshot = assert(SurvivorUIDB.rebornGear.wornSnapshots.warlock)
@@ -324,7 +369,9 @@ assert(SurvivorUIDB.rebornGear.wornSnapshots.paladin == fromHub, "an empty reply
 AZS_ZONE = { hub = 1, class = "warlock" }
 assert(SurvivorUI_RebornGearOpen("show"))
 assert(not gearView:IsShown())
-buttons["Gear planner"].scripts.OnClick()
+zone = 8 * 3600
+assert(SurvivorUI_RebornGearOpen("worn"))
+assert(dateAt == 100 + 8 * 3600 and WornShows("Recorded at 2026-11-26 12:00") and not WornShows("12:00 UTC"))
 assert(WornShows("Last recorded gear: Warlock · 2 pieces") and WornShows("3101 gold (estimate)"))
 assert(WornShows("Recorded in a Campaign map"), "the Hub still displays the provenance of a fallback snapshot")
 assert(WornShows("3754 gold (same as armor)"))
@@ -346,8 +393,8 @@ input:SetText("warlock naxx 1 0 main_hand")
 items:SetText("main_hand common 0 worn\nmain_hand rare 0 farm")
 buttons["Gear preview"].scripts.OnClick()
 local previews = table.concat(output.messages, "\n")
-assert(string.find(previews, "rare ★3 · farm · 6800 extra gold", 1, true))
-assert(string.find(previews, "common ★5 · worn · 9520 extra gold", 1, true))
+assert(string.find(previews, "Rare ★3 · farm · 6800 extra gold", 1, true))
+assert(string.find(previews, "Common ★5 · worn · 9520 extra gold", 1, true))
 SurvivorUI_RebornGearOpen("toggle planner")
 buttons["Farm & Upgrade"].scripts.OnClick()
 assert(logs[#logs] == "This gear analysis feature is disabled.")
@@ -355,4 +402,10 @@ GetLocale = function() return "zhCN" end
 dofile("SurvivorUI/Locale_zh.lua")
 assert(SurvivorUI_WORDS.zh["Set current map to 100%"] == "将当前地图设为 100%")
 assert(string.format(SurvivorUI_WORDS.zh["100%% reference: %s"], "纳克萨玛斯") == "100% 基准：纳克萨玛斯")
+function SurvivorUI_T(text) return SurvivorUI_WORDS.zh[text] or text end
+assert(SurvivorUI_RebornGearOpen("worn") and WornShows("伤害 +") and not WornShows("Damage +"))
+AZSInspect:RefreshDoll({ { slot = 0, rarity = 0, stars = 0 } })
+local chineseTooltip = dollSlot:Hover()
+assert(string.find(chineseTooltip, "下一星", 1, true) and string.find(chineseTooltip, "408 金币（价格表）", 1, true))
+assert(string.find(chineseTooltip, "伤害 +5.38%", 1, true))
 print("PASS: gear arithmetic, sets, exhaustive solver comparison, and panel lifecycle")

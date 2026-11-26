@@ -2,12 +2,17 @@
 if SurvivorUI_Standby or not SurvivorUI_RebornGearModel then return end
 
 local Gear = SurvivorUI_RebornGearModel
-local WIDTH, MAP_HEIGHT, GEAR_HEIGHT = 590, 315, 510
+local WIDTH, MAP_HEIGHT, WORN_HEIGHT, GEAR_HEIGHT = 590, 315, 420, 510
 local panel, mapView, wornView, advanced, viewButton, context, entries, results
 local mapLines, wornLines = {}, {}
 local blockedZone, previewKey, previewTier, clearPreview, previewAvailable
 local ROMAN = { "I", "II", "III", "IV", "V" }
 local WORLDS = { "Classic", "The Burning Crusade", "Lich King", "Cataclysm" }
+local STAT_NAMES = {
+	damage = "Damage", crit = "Critical strike", crit_damage = "Critical damage", cooldown = "Cooldown reduction",
+	area = "Area of effect", hp = "Health", armor = "Damage reduction", regen = "Health per second",
+	speed = "Movement speed", pickup = "Pickup range", gold = "Gold find",
+}
 local function T(key) return SurvivorUI_T(key) end
 
 local function Settings()
@@ -88,6 +93,14 @@ local function NativeName(name)
 	return localized and localized ~= name and localized or T(name)
 end
 
+local function GearName(key)
+	if key == "pvp" then return NativeName("PvP") end
+	if key == "deathknight" then return NativeName("Death Knight") end
+	if key == "demonhunter" then return NativeName("Demon Hunter") end
+	local words = string.gsub(key, "_", " ")
+	return NativeName((string.gsub(words, "(%a)(%a*)", function(first, rest) return string.upper(first) .. rest end)))
+end
+
 local function DifficultyName(tier)
 	return tier == 0 and T("Normal") or SurvivorUI_TF("Heroic {1}", ROMAN[tier])
 end
@@ -157,36 +170,34 @@ local function ActiveSets(sets)
 			local text = template and string.gsub(template, "{(%w+)}", function(key)
 				return bonus.values[key] or "?"
 			end) or bonus.text
-			table.insert(list, string.format("%s %d%s · %s", tier, bonus.pieces, bonus.strong and " ★5" or "", text))
+			table.insert(list, string.format("%s %d%s · %s", GearName(tier), bonus.pieces, bonus.strong and " ★5" or "", text))
 		end
 	end
 	table.sort(list)
 	return list
 end
 
-local function Delta(old, new)
+local function StatChanges(old, new)
 	local list = {}
+	local function AddStat(key, delta)
+		if math.abs(delta) <= 0.00001 then return end
+		local flat = key == "hp" or key == "regen"
+		local name = NativeName(STAT_NAMES[key] or key)
+		table.insert(list, string.format("%s %+.2f%s", name, flat and delta or delta * 100, flat and "" or "%"))
+	end
 	for key, after in pairs(new) do
-		local change = after - (old[key] or 0)
-		if math.abs(change) > 0.00001 then
-			local flat = key == "hp" or key == "regen"
-			table.insert(list, string.format("%s %+.2f%s", T(key), flat and change or change * 100, flat and "" or "%"))
-		end
+		AddStat(key, after - (old[key] or 0))
 	end
 	for key, before in pairs(old) do
-		if not new[key] and math.abs(before) > 0.00001 then
-			local flat = key == "hp" or key == "regen"
-			table.insert(list, string.format("%s %+.2f%s", T(key), flat and -before or -100 * before, flat and "" or "%"))
-		end
+		if not new[key] then AddStat(key, -before) end
 	end
 	table.sort(list)
-	return table.getn(list) > 0 and table.concat(list, "  ·  ") or T("No modeled attribute change")
+	if not list[1] then list[1] = T("No modeled attribute change") end
+	return list
 end
 
-local function GearName(key)
-	if key == "pvp" then return NativeName("PvP") end
-	local words = string.gsub(key, "_", " ")
-	return NativeName((string.gsub(words, "(%a)(%a*)", function(first, rest) return string.upper(first) .. rest end)))
+local function Delta(old, new)
+	return table.concat(StatChanges(old, new), "  ·  ")
 end
 
 local function PriceText(catalog, slot, tier, star)
@@ -194,6 +205,51 @@ local function PriceText(catalog, slot, tier, star)
 	if not amount then return T("Price unknown") end
 	local labels = { table = "%d gold (table)", weapon = "%d gold (same as armor)", estimated = "%d gold (estimate)" }
 	return string.format(T(labels[source]), amount)
+end
+
+local function AddInspectGearPreview(owner)
+	if not SurvivorUI_RebornActive() or not AZSInspect or AZSInspect.unit ~= "player" or not (owner and owner.piece)
+		or not (GameTooltip and GameTooltip:IsOwned(owner)) then return end
+	local settings = SurvivorUIDB and SurvivorUIDB.rebornGear
+	if type(settings) == "table" and settings.preview == false then return end
+	local class, catalog = ClassKey(), Gear.Catalog(AZS_GEN)
+	local pieces = Gear.Worn(catalog, class, { owner.piece })
+	local nextStars = pieces and Gear.NextStars(catalog, class, pieces)
+	if not nextStars then return end
+	local piece, nextStar = pieces[1], nextStars[1]
+	GameTooltip:AddLine(" ")
+	if nextStar then
+		local target = piece.stars + 1
+		GameTooltip:AddLine(string.format(T("Next star · ★%d → ★%d"), piece.stars, target), 1, 0.82, 0.22)
+		for _, line in ipairs(StatChanges(nextStar.before, nextStar.after)) do
+			GameTooltip:AddLine(line, 0.55, 1, 0.65)
+		end
+		GameTooltip:AddLine(PriceText(catalog, piece.slot, piece.tier, target), 1, 0.82, 0.22)
+	else
+		GameTooltip:AddLine(T("At five stars"), 0.85, 0.85, 0.85)
+	end
+	GameTooltip:Show()
+end
+
+local hookedInspect, hookedSlots = nil, {}
+local function HookInspectSlots()
+	-- Reborn creates the paper-doll frames lazily inside RefreshDoll.
+	for index = 0, 10 do
+		local icon = _G["AZSInspectSlot" .. index]
+		local owner = icon and icon:GetParent()
+		if owner and owner.slot == index and not hookedSlots[owner] and type(owner.HookScript) == "function" then
+			owner:HookScript("OnEnter", AddInspectGearPreview)
+			hookedSlots[owner] = true
+		end
+	end
+end
+
+local function InstallInspectHook()
+	local inspect = AZSInspect
+	if not inspect or inspect == hookedInspect or type(inspect.RefreshDoll) ~= "function" or type(hooksecurefunc) ~= "function" then return end
+	hooksecurefunc(inspect, "RefreshDoll", HookInspectSlots)
+	hookedInspect = inspect
+	HookInspectSlots()
 end
 
 local function MissingWornMessage(settings)
@@ -213,19 +269,22 @@ local function ShowWorn()
 		return
 	end
 	local native = AZS_ZONE and AZS_ZONE.cname
-	local stamp = snapshot.at and date and date("%Y-%m-%d %H:%M", snapshot.at)
+	local zone = SurvivorUI_TimeZone and SurvivorUI_TimeZone()
+	local stamp = snapshot.at and date and date("%Y-%m-%d %H:%M", snapshot.at + (zone or 0))
+	local recorded = stamp and string.format(T(zone and "Recorded at %s" or "Recorded at %s UTC"), stamp)
 	local lines = { string.format(T("Last recorded gear: %s · %d pieces"), native or GearName(class), table.getn(snapshot.pieces)) }
 	local source = snapshot.source == "hub" and T("Recorded in Dalaran Hub")
 		or snapshot.source == "campaign" and T("Recorded in a Campaign map")
-	if source and stamp then source = source .. " · " .. string.format(T("Recorded at %s UTC"), stamp) end
+	if source and recorded then source = source .. " · " .. recorded end
 	if source then table.insert(lines, source)
-	elseif stamp then table.insert(lines, string.format(T("Recorded at %s UTC"), stamp)) end
+	elseif recorded then table.insert(lines, recorded) end
 	table.insert(lines, T(rows[1] and "Top next-star gains, ordered by added piece damage" or "All recorded pieces are at five stars."))
 	for i = 1, math.min(table.getn(rows), 6) do
 		local row = rows[i]
 		local piece = row.piece
-		table.insert(lines, string.format("%s · %s · ★%d → ★%d · %s · %s", GearName(piece.slot), GearName(piece.tier), piece.stars,
-			piece.stars + 1, Delta(row.before, row.after), PriceText(catalog, piece.slot, piece.tier, piece.stars + 1)))
+		table.insert(lines, string.format("%s · %s · ★%d → ★%d · %s", GearName(piece.slot), GearName(piece.tier), piece.stars,
+			piece.stars + 1, PriceText(catalog, piece.slot, piece.tier, piece.stars + 1)))
+		table.insert(lines, "    " .. Delta(row.before, row.after))
 	end
 	table.insert(lines, T("Armor price table: 2026-11-16. Check upgrade eligibility in Gear."))
 	DisplayLines(wornLines, lines)
@@ -261,7 +320,7 @@ local function UpgradePreview(s, ref)
 	for _, group in ipairs(s.pieces.groups) do
 		if s.slot == "" or s.slot == group.slot then
 			local current = group.worn and group.worn.choices[1]
-			Add(T(group.slot) .. " · " .. (current and (current.tier .. " ★" .. current.stars) or T("No declared equipped piece")))
+			Add(GearName(group.slot) .. " · " .. (current and (GearName(current.tier) .. " ★" .. current.stars) or T("No declared equipped piece")))
 			for _, entry in ipairs(group.entries) do
 				local indices, seen = {}, {}
 				local function Include(index)
@@ -278,17 +337,17 @@ local function UpgradePreview(s, ref)
 				for _, index in ipairs(indices) do
 					local option = entry.choices[index]
 					if option then
-						Add(string.format(T("%s ★%d · %s · %d extra gold"), option.tier, option.stars, T(option.kind), option.cost))
+						Add(string.format(T("%s ★%d · %s · %d extra gold"), GearName(option.tier), option.stars, T(option.kind), option.cost))
 						if option.tablePrice then Add(T("Includes chart-based prices dated 2026-11-16.")) end
 					else
 						local stars = entry.start + index - 1
 						option = { slot = entry.slot, tier = entry.tier, stars = stars,
 							stats = Gear.Piece(s.catalog, s.class, entry.slot, entry.tier, stars) }
 						if index == 2 and entry == group.worn then
-							Add(string.format("%s ★%d · %s", option.tier, option.stars,
+							Add(string.format("%s ★%d · %s", GearName(option.tier), option.stars,
 								PriceText(s.catalog, entry.slot, entry.tier, stars)))
 						else
-							Add(string.format(T("%s ★%d · price unknown"), option.tier, option.stars))
+							Add(string.format(T("%s ★%d · price unknown"), GearName(option.tier), option.stars))
 						end
 					end
 					Add(Delta(current and current.stats or {}, option.stats))
@@ -344,9 +403,9 @@ local function ShowPlan(s, needed, farm, ref, requirements)
 	if table.getn(steps) > 0 then Add(T("Suggested order by piece damage gain per gold")) end
 	for _, item in ipairs(steps) do
 		local old = current[item.slot]
-		local from = old and (old.tier .. " ★" .. old.stars) or "—"
-		Add(T(item.slot) .. " · " .. from .. " → " ..
-			string.format(T("%s ★%d · %s · %d extra gold"), item.tier, item.stars, T(item.kind), item.cost))
+		local from = old and (GearName(old.tier) .. " ★" .. old.stars) or "—"
+		Add(GearName(item.slot) .. " · " .. from .. " → " ..
+			string.format(T("%s ★%d · %s · %d extra gold"), GearName(item.tier), item.stars, T(item.kind), item.cost))
 		Add(Delta(old and old.stats or {}, item.stats))
 	end
 	local stats, sets = Gear.Totals(s.catalog, s.class, plan.pieces)
@@ -367,7 +426,7 @@ local function Calculate(action)
 		if not ref then Add(T("Save a reference with this class and fixed background.")); return end
 		Add(string.format(T("Reference %s / %d · %d pieces"), ref.zone, ref.tier, table.getn(ref.gear)))
 		for _, item in ipairs(ref.gear) do
-			Add(T(item.slot) .. " · " .. item.tier .. " ★" .. item.stars .. " · " .. Delta({}, item.stats))
+			Add(GearName(item.slot) .. " · " .. GearName(item.tier) .. " ★" .. item.stars .. " · " .. Delta({}, item.stats))
 		end
 		for _, label in ipairs(ActiveSets(ref.sets)) do Add(T("Active set") .. " · " .. label) end
 		return
@@ -404,7 +463,7 @@ local function Calculate(action)
 	end
 	local ref = Reference(state, settings)
 	if action == "gear" then UpgradePreview(state, ref); return end
-	Add(T("Map / tier") .. " · " .. state.zone .. " / " .. state.tier)
+	Add(T("Map / tier") .. " · " .. MapTitle(state.zone, state.tier))
 	Add(string.format(T("Listed gear damage +%.2f%%"), damage * 100))
 	for _, label in ipairs(ActiveSets(state.sets)) do Add(T("Active set") .. " · " .. label) end
 	if not ref then Add(T("Save a reference with this class and fixed background.")); return end
@@ -454,7 +513,7 @@ local function ShowView(view)
 	if view == "map" then mapView:Show() else mapView:Hide() end
 	if view == "worn" then wornView:Show() else wornView:Hide() end
 	if equipment then advanced:Show() else advanced:Hide() end
-	panel:SetHeight(equipment and GEAR_HEIGHT or (view == "worn" and 360 or MAP_HEIGHT))
+	panel:SetHeight(equipment and GEAR_HEIGHT or (view == "worn" and WORN_HEIGHT or MAP_HEIGHT))
 	viewButton:SetText(T(view == "map" and "Gear planner" or "Map difficulty"))
 	results:Clear()
 	if equipment then results:Show() else results:Hide() end
@@ -639,8 +698,8 @@ local function Build()
 	wornView:SetScript("OnShow", function()
 		if InHub(AZS_ZONE) and type(AZS_SendCommand) == "function" then refresh:Show() else refresh:Hide() end
 	end)
-	for index = 1, 10 do
-		local label = Label(wornView, "", 16, -86 - (index - 1) * 23)
+	for index = 1, 16 do
+		local label = Label(wornView, "", 16, -86 - (index - 1) * 20)
 		label:SetWidth(WIDTH - 32)
 		label:SetJustifyH("LEFT")
 		label:SetTextColor(0.92, 0.94, 0.98)
@@ -714,7 +773,10 @@ function SurvivorUI_RebornGearOpen(argument)
 		return
 	end
 	if not panel then Build() end
-	if argument == "keys" then
+	if argument == "worn" then
+		ShowView("worn")
+		panel:Show()
+	elseif argument == "keys" then
 		ShowView("manual")
 		results:Clear()
 		local catalog = Gear.Catalog(AZS_GEN)
@@ -746,6 +808,8 @@ end
 
 if AZS and type(AZS.On) == "function" then
 	AZS.On("AZSARMOR", function()
+		InstallInspectHook()
 		if StoreWorn() and panel and panel:IsShown() and wornView:IsShown() then ShowWorn() end
 	end)
 end
+InstallInspectHook()
