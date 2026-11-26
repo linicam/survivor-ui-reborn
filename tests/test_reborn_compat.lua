@@ -591,6 +591,28 @@ eq("diag: repeated extra-button state recorded once", table.getn(sess3.events), 
 SurvivorUI_RebornRecord("extra_button", { button = 12, spell = nil, visible = false })
 eq("diag: extra-button transition recorded", table.getn(sess3.events), beforeDedup + 3)
 SurvivorUI_RebornRecordStop()
+-- SavedVariables available only after file load: initialization
+-- (not file scope) starts auto recording exactly once.
+SurvivorUIDB.rebornRecordAuto = true
+local sessionsBeforeInit = table.getn(SurvivorUIRebornDiagnostics.order)
+SurvivorUI_RebornRecordInitialize()
+eq("diag: auto recording starts on initialize", SurvivorUI_RebornRecordStatus().active, true)
+eq("diag: initialize creates one session", table.getn(SurvivorUIRebornDiagnostics.order), sessionsBeforeInit + 1)
+SurvivorUI_RebornRecordInitialize()
+eq("diag: initialize is exactly once", table.getn(SurvivorUIRebornDiagnostics.order), sessionsBeforeInit + 1)
+-- Play Again: a new run id records a transition in the same session.
+local autoSession = SurvivorUIRebornDiagnostics.sessions[SurvivorUIRebornDiagnostics.order[table.getn(SurvivorUIRebornDiagnostics.order)]]
+AZS_ZONE = { run = "azs:playagain1" }
+SurvivorUI_RebornCheckRun()
+AZS_ZONE = { run = "azs:playagain2" }
+SurvivorUI_RebornCheckRun()
+local transitions = 0
+for i = 1, table.getn(autoSession.events) do
+	if autoSession.events[i].type == "run_transition" then transitions = transitions + 1 end
+end
+check("diag: Play Again records run transitions in one session", transitions >= 2)
+SurvivorUI_RebornRecordStop()
+SurvivorUIDB.rebornRecordAuto = false
 -- Cooldown-only updates do not flood the recorder.
 SurvivorUI_RebornRecordStart()
 local db2 = SurvivorUIRebornDiagnostics

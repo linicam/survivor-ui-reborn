@@ -307,15 +307,62 @@ function SurvivorUI_RebornRecordTooltipSoon(key, phase)
 	})
 end
 
+local diagnosticsInitialized = false
+local autoStartDone = false
+local initDeadline = nil
+local nextInitCheck = 0
+
+local function InitializeDiagnostics()
+	if diagnosticsInitialized then
+		return
+	end
+	diagnosticsInitialized = true
+	-- SavedVariables are populated after addon files execute, so
+	-- interrupted-session recovery and the auto-start preference
+	-- are read here, on an initialization event, not at file load.
+	local db = DB()
+	for id, s in pairs(db.sessions) do
+		if type(s) == "table" and s.status == "active" then
+			s.status = "interrupted"
+		end
+	end
+	if SurvivorUIDB and SurvivorUIDB.rebornRecordAuto == true and not autoStartDone then
+		autoStartDone = true
+		local sessionId = SurvivorUI_RebornRecordStart()
+		if sessionId then
+			local message = "SurvivorUI Reborn diagnostics recording started: " .. tostring(sessionId)
+			if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
+				DEFAULT_CHAT_FRAME:AddMessage(message)
+			elseif print then
+				print(message)
+			end
+		end
+	end
+end
+
 local timer = CreateFrame and CreateFrame("Frame") or nil
 if timer then
 	local observeAt = 0
 	local lastBossKey = nil
+	initDeadline = Now() + 60
 	timer:SetScript("OnUpdate", function()
+		local now = Now()
+		if not diagnosticsInitialized then
+			-- Bounded fallback: if no initialization event arrives,
+			-- retry for up to 60 seconds after load.
+			if now >= nextInitCheck and now <= initDeadline then
+				nextInitCheck = now + 2
+				if SurvivorUIDB ~= nil or SurvivorUIRebornDiagnostics ~= nil then
+					InitializeDiagnostics()
+				end
+			end
+			if not diagnosticsInitialized then
+				return
+			end
+		end
 		if not recording or not session then
 			return
 		end
-		local now = Now()
 		for i = table.getn(pendingTooltips), 1, -1 do
 			local p = pendingTooltips[i]
 			local currentRun = SurvivorUI_RebornRunId and SurvivorUI_RebornRunId() or nil
@@ -372,6 +419,10 @@ if timer then
 	end)
 end
 
+function SurvivorUI_RebornRecordInitialize()
+	InitializeDiagnostics()
+end
+
 function SurvivorUI_RebornRecordAuto(enabled)
 	SurvivorUIDB = SurvivorUIDB or {}
 	SurvivorUIDB.rebornRecordAuto = enabled == true
@@ -385,24 +436,22 @@ function SurvivorUI_RebornRecordAuto(enabled)
 	return SurvivorUIDB.rebornRecordAuto, stopped
 end
 
--- A session left "active" by a reload or crash is interrupted, not
--- completed; it stays available for export.
-local db = DB()
-for id, s in pairs(db.sessions) do
-	if type(s) == "table" and s.status == "active" then
-		s.status = "interrupted"
-	end
-end
-if SurvivorUIDB and SurvivorUIDB.rebornRecordAuto == true then
-	SurvivorUI_RebornRecordStart()
-end
+-- Initialization runs on addon/game init events (SavedVariables
+-- are available by then), with the bounded OnUpdate fallback above.
 if timer and timer.RegisterEvent then
+	timer:RegisterEvent("ADDON_LOADED")
+	timer:RegisterEvent("PLAYER_LOGIN")
+	timer:RegisterEvent("PLAYER_ENTERING_WORLD")
 	timer:RegisterEvent("PLAYER_LOGOUT")
 	local prior = timer.GetScript and timer:GetScript("OnEvent") or nil
-	timer:SetScript("OnEvent", function(self, event)
-		if event == "PLAYER_LOGOUT" and recording then
+	timer:SetScript("OnEvent", function(self, event, arg1)
+		if event == "ADDON_LOADED" and arg1 == "SurvivorUI" then
+			InitializeDiagnostics()
+		elseif event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
+			InitializeDiagnostics()
+		elseif event == "PLAYER_LOGOUT" and recording then
 			SurvivorUI_RebornRecordStop()
 		end
-		if prior then prior(self, event) end
+		if prior then prior(self, event, arg1) end
 	end)
 end

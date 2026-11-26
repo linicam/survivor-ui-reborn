@@ -355,6 +355,38 @@ if ($SelfTest) {
     AssertSelfTest ($events[3].data["lines"][0] -eq "Upgrades: +10% damage") "tooltip line was not preserved"
 }
 
+function ConvertTo-SortedValue($value) {
+    if ($null -eq $value) { return $null }
+    if ($value -is [System.Collections.IDictionary]) {
+        $sorted = [ordered]@{}
+        foreach ($key in @($value.Keys | Sort-Object)) {
+            $sorted[[string]$key] = ConvertTo-SortedValue $value[$key]
+        }
+        return $sorted
+    }
+    if ($value -is [pscustomobject]) {
+        $sorted = [ordered]@{}
+        foreach ($prop in @($value.PSObject.Properties | Sort-Object Name)) {
+            $sorted[$prop.Name] = ConvertTo-SortedValue $prop.Value
+        }
+        return $sorted
+    }
+    if ($value -is [System.Collections.IEnumerable] -and $value -isnot [string]) {
+        $items = @()
+        foreach ($item in $value) { $items += ,(ConvertTo-SortedValue $item) }
+        return ,$items
+    }
+    return $value
+}
+function Get-CanonicalJson($text) {
+    try {
+        $obj = $text | ConvertFrom-Json
+        return (ConvertTo-SortedValue $obj | ConvertTo-Json -Depth 30 -Compress)
+    } catch {
+        return $text
+    }
+}
+
 $exportDir = Join-Path $ScriptDir ("export\" + $sessionId)
 New-Item -ItemType Directory -Force -Path $exportDir | Out-Null
 
@@ -375,12 +407,12 @@ $chunkIndex = 0
 for ($i = 0; $i -lt $events.Count; $i += $chunkSize) {
     $chunkIndex++
     $slice = $events[$i..([Math]::Min($i + $chunkSize - 1, $events.Count - 1))]
-    $files[("events-{0:D3}.json" -f $chunkIndex)] = ConvertTo-Json -InputObject ([object[]]@($slice)) -Depth 20
+    $files[("events-{0:D3}.json" -f $chunkIndex)] = ConvertTo-Json -InputObject (ConvertTo-SortedValue ([object[]]@($slice))) -Depth 30
 }
 $summary = "# Diagnostic session $sessionId`n`n- Status: $exportStatus`n- Original status: $($session.status)`n- Recovered active session: $([bool]$recoveredActive)`n- Addon commit: $($session.addonCommit)`n- Events: $($events.Count)`n- Runs: $runs`n- Truncated: $($session.truncated)`n"
 $files["summary.md"] = $summary
 
-$manifest = [ordered]@{ sessionId = $sessionId; files = @{} }
+$manifest = [ordered]@{ sessionId = $sessionId; files = [ordered]@{} }
 foreach ($name in $files.Keys) {
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($files[$name])
     $sha = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace("-", "").ToLower()
@@ -395,12 +427,28 @@ $base = "$BaseDir/$sessionId"
 # contents must never be overwritten silently.
 $remoteManifestText = GetRemoteText "$base/manifest.json"
 if ($null -ne $remoteManifestText) {
-    $remoteManifest = $remoteManifestText | ConvertFrom-Json
-    $conflict = $false
+    # Compare semantically, not only by hash: older uploads were
+    # serialized with nondeterministic key order, so identical data
+    # can hash differently. Identical content means there is no new
+    # session to upload.
+    $differing = @()
     foreach ($name in $manifest.files.Keys) {
-        if ($remoteManifest.files.$name -and $remoteManifest.files.$name -ne $manifest.files[$name]) { $conflict = $true }
+        $remoteText = GetRemoteText "$base/$name"
+        if ($null -eq $remoteText) { $differing += $name; continue }
+        if ($name -like "*.json") {
+            if ((Get-CanonicalJson $remoteText) -ne (Get-CanonicalJson $files[$name])) { $differing += $name }
+        } elseif ($remoteText -ne $files[$name]) {
+            $differing += $name
+        }
     }
-    if ($conflict) { Fail "Session $sessionId already exists remotely with different contents. Refusing to overwrite; investigate the collision." }
+    if ($differing.Count -eq 0) {
+        if ($SelfTest) { Write-Host "SELF-TEST PASS" }
+        Write-Host "No new diagnostic session to upload."
+        Write-Host "Session $sessionId was already uploaded with identical contents."
+        Write-Host "If you played since then, automatic recording did not create a new session; check /sui reborn record status in game."
+        exit 0
+    }
+    Fail "Session $sessionId already exists remotely with different contents ($($differing -join ', ')). Refusing to overwrite; investigate the collision."
 }
 foreach ($name in $files.Keys) {
     if ($name -ne "manifest.json") { PutFile "$base/$name" $files[$name] "diagnostics: $sessionId $name" }
