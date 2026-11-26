@@ -882,5 +882,26 @@ AZS_CARDS = { kind = "spell", cards = {} }
 button.Fit()
 eq("cards: next offer clears the old hint", rendered, display)
 
+local curseClock = 300
+AZS_GetRunTime = function() return curseClock end
+AZS_BANNERS = { {
+	id = 214, kind = "curse", time = localeTime,
+	text = "Проклятие тяготеет над тобой: враги движутся на 50% быстрее (20 с)!",
+} }
+local function EnemySpeedCurse()
+	for _, effect in ipairs(SurvivorUI_RebornCurses().items) do
+		if effect.effectId == "enemy_speed" then return effect end
+	end
+end
+local speedCurse = EnemySpeedCurse()
+eq("curse: enemy movement English", speedCurse and speedCurse.text, "Enemy speed increased 50%")
+eq("curse: enemy movement duration from banner", speedCurse and speedCurse.left, 20)
+locale, localeTime, curseClock = "zh", 1006, 307
+speedCurse = EnemySpeedCurse()
+eq("curse: enemy movement Chinese", speedCurse and speedCurse.text, "敌人移动速度提高50%")
+eq("curse: enemy movement counts down on run clock", speedCurse and speedCurse.left, 13)
+curseClock = 320
+eq("curse: enemy movement expires", EnemySpeedCurse(), nil)
+
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

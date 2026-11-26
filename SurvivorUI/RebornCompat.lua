@@ -1455,7 +1455,8 @@ local function CurseEffectId(text)
 	if string.find(text, "исцеление", 1, true) or string.find(text, "лечение", 1, true) then
 		return "healing_reduced", pct, false
 	end
-	if string.find(text, "скорость врагов", 1, true) or string.find(text, "враги быстрее", 1, true) then
+	if string.find(text, "скорость врагов", 1, true) or string.find(text, "враги быстрее", 1, true)
+		or string.find(text, "враги движутся на %d+%% быстрее") then
 		return "enemy_speed", pct, false
 	end
 	if string.find(text, "орда", 1, true) then
