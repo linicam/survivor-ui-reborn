@@ -44,6 +44,7 @@ SurvivorUI_WORDS.zh = {
 	["Target met · best found within the search budget"] = "已达到目标 · 当前搜索范围内的最佳方案",
 	["Target above 100% with these constraints · best achievable"] = "该约束下无法降至 100% · 已达到最佳结果",
 	["Best found within the search budget · reachability unproven"] = "当前搜索范围内的最佳方案 · 尚未确定能否达到目标",
+	["No priced option reaches 100%. Reachability with unpriced options is unknown."] = "已知报价的方案无法降至 100%。费用未知的方案能否达标尚不确定。",
 	["Gold covers stars. Replacement pieces require drops or separate ownership."] = "金币只计升星。替换装备需要获得掉落，或已经持有。",
 	["Direct ascension eligibility unavailable. Legendary or higher requires the next expansion's final clear."] = "无法读取直接升阶资格。传说及以上升阶需要通关下一资料片的最终地图。",
 	["Highest drop tier in this expansion: %s"] = "当前资料片最高掉落品质：%s",

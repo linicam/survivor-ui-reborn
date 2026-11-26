@@ -393,6 +393,8 @@ local function OutputPlan(current, index)
 	local status
 	if plan.after <= 100 then
 		status = plan.complete and "Target met · minimum among comparable priced options" or "Target met · best found within the search budget"
+	elseif plan.complete and plan.excluded then
+		status = "No priced option reaches 100%. Reachability with unpriced options is unknown."
 	else
 		status = plan.complete and "Target above 100% with these constraints · best achievable" or "Best found within the search budget · reachability unproven"
 	end

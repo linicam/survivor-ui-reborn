@@ -188,6 +188,52 @@ local stars = Finish(P.Search(cat, farming, farmingActual, farmingReference, nil
 local drops = Finish(P.Search(cat, farming, farmingActual, farmingReference, { exotic = true }, 2000))
 local _, acquisition = P.Changes(cat, farming.pieces, drops.pieces, { exotic = true })
 assert(stars.complete and stars.after > 100 and drops.complete and drops.after <= 100 and drops.gold == 0 and acquisition.acquisition)
+
+-- Oracle for a mixed-tier plan. Use one reachable and one unreachable target,
+-- with a four-piece combat effect protected and different HP/armor choices.
+cat.pieces.scale.top = 1
+table.insert(AZS_GEN.setBonuses, { class = "", rarity = 4, pieces = 4, text = "Conditional damage" })
+local mixed = P.Copy(source)
+mixed.pieces = {}
+for i = 1, 9 do mixed.pieces[i] = Item(keys[i], i <= 4 and "legendary" or "common", 1) end
+local mixedActual = Eval(mixed.pieces)
+local mixedRef = assert(P.Reference(mixed, mixedActual))
+local candidate = {}
+for _, factor in ipairs({ 1.08, 1.8 }) do
+	mixed.demand = { output = mixedRef.demand.output * factor, survival = mixedRef.demand.survival * factor }
+	local expected
+	local function Enumerate(i, gold)
+		local item = mixed.pieces[i]
+		if item then
+			candidate[i] = item
+			Enumerate(i + 1, gold)
+			-- Changing one of the first four pieces would lose the protected set.
+			if i > 4 then
+				candidate[i] = Item(item.slot, "exotic", 0)
+				Enumerate(i + 1, gold)
+				candidate[i] = Item(item.slot, "exotic", 1)
+				Enumerate(i + 1, gold + 2366)
+			end
+			return
+		end
+		local difficulty = P.Difficulty(mixed.demand, Eval(candidate), mixedRef).combined
+		local reached = difficulty <= 100
+		if not expected or (reached and not expected.reached) or (reached and expected.reached and gold < expected.gold)
+			or (not reached and not expected.reached and (difficulty < expected.after - P.tolerance
+				or (math.abs(difficulty - expected.after) <= P.tolerance and gold < expected.gold))) then
+			expected = { after = difficulty, gold = gold, reached = reached }
+		end
+	end
+	Enumerate(1, 0)
+	local first = Finish(P.Search(cat, mixed, mixedActual, mixedRef, { exotic = true }, 12000))
+	local second = Finish(P.Search(cat, mixed, mixedActual, mixedRef, { exotic = true }, 12000))
+	assert(first.complete and first.gold == expected.gold and (first.after <= 100) == expected.reached)
+	assert(first.after == second.after and first.gold == second.gold and #first.pieces == #second.pieces)
+	for i, piece in ipairs(first.pieces) do assert(P.SamePiece(piece, second.pieces[i])) end
+	if not expected.reached then near(first.after, expected.after) end
+	assert(Eval(first.pieces).sets.legendary[1].pieces == 4)
+end
+table.remove(AZS_GEN.setBonuses)
 cat.pieces.scale.top = savedTop
 
 -- Event and widget mocks follow the native zone-before-armor sync contract.
@@ -356,6 +402,12 @@ assert(not VisiblePanel().scripts.OnUpdate, "simulator editing suspends optimize
 Click("Difficulty & Upgrade Planner")
 DrainSearch()
 assert(Find("FontString", "Plan A") and Find("FontString", "Plan B"))
+Click("Equipment Simulator")
+Click("Load Plan A")
+assert(Find("FontString", "Calculable upgrade gold:") and not VisiblePanel().scripts.OnUpdate)
+Click("Reset to Actual Equipment")
+assert(Find("FontString", "Calculable upgrade gold: 0") and not Find("FontString", "Changes and acquisition"))
+Click("Difficulty & Upgrade Planner")
 assert(saved == SurvivorUIDB.rebornGear.baselines.warlock)
 Zone("naxx", 0, "paladin", "c")
 Armor({})
