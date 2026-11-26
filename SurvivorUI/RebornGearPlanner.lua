@@ -2,9 +2,10 @@
 if SurvivorUI_Standby or not SurvivorUI_RebornGearModel then return end
 
 local Gear = SurvivorUI_RebornGearModel
-local Planner = { version = 2, data = "Reborn 0.7.4 / zones-v1 21071e86fee66ca7", tolerance = 0.000001 }
+local Planner = { schema = 1, version = 3, data = "Reborn 0.7.4 / zones-v1 21071e86fee66ca7", tolerance = 0.000001 }
 SurvivorUI_RebornGearPlanner = Planner
 local EPS = Planner.tolerance
+local ARMOR_CAP = 0.60
 local PACK_TIER = { exotic = 2, mythic = 3, elementium = 4 }
 local EFFECTS = {
 	["+{v}% gold, +{v2}% pickup range"] = { "gold", "pickup" },
@@ -28,32 +29,55 @@ local function SameNumbers(before, after)
 	return true
 end
 
+function Planner.Token(value)
+	if type(value) == "number" then value = tostring(value) end
+	if type(value) ~= "string" then return end
+	local token = string.lower((string.gsub(value, "^%s*(.-)%s*$", "%1")))
+	if token ~= "" then return token end
+end
+
+function Planner.Affixes(value)
+	-- The native wire is comma-delimited. Accept an equivalent list without
+	-- carrying mutable tables or their addresses into context identity.
+	local found, names = {}, {}
+	local function Add(raw)
+		if type(raw) ~= "string" then return end
+		for token in string.gmatch(raw, "[^,]+") do
+			local name = Planner.Token(token)
+			if name and not found[name] then found[name] = true; table.insert(names, name) end
+		end
+	end
+	if type(value) == "table" then
+		for _, raw in ipairs(value) do Add(raw) end
+	else Add(value) end
+	table.sort(names)
+	return table.concat(names, ",")
+end
+
+function Planner.Scope(level, modifiers)
+	local mode = Planner.Token(modifiers and modifiers.mode)
+	if mode and mode ~= "campaign" and mode ~= "standard" and mode ~= "hub" then return "unsupported" end
+	local challenge = Planner.Token(modifiers and modifiers.challenge)
+	local affixes = Planner.Affixes(modifiers and modifiers.affixes)
+	-- 'aff' is legacy metadata. The named affix list and Heroic tier carry
+	-- the documented rules, including built-in Heroic modifiers.
+	if (level and level > 0) or affixes ~= "" or (challenge and challenge ~= "0") then return "standard-only" end
+	return "standard"
+end
+
 function Planner.SamePiece(a, b)
 	return a and b and a.slot == b.slot and a.tier == b.tier and a.stars == b.stars
 end
 
 function Planner.Class(catalog, key)
-	for _, class in ipairs(catalog.native.classes or {}) do
-		if class.key == key then return class end
-	end
+	return catalog.classes[key]
 end
 
-function Planner.Slots(catalog, class, pieces)
-	local worn, out = {}, {}
-	for _, piece in ipairs(pieces) do worn[piece.slot] = true end
-	local native = Planner.Class(catalog, class)
-	local weapons = native and native.gear and native.gear.weapons
-	local double = weapons and weapons[2]
-	for _, tier in ipairs(catalog.native.gearTiers or {}) do
-		local icons = tier.weapon_icons and tier.weapon_icons[class]
-		if icons and icons[2] then double = true end
-	end
+function Planner.Slots(catalog, class)
+	local out = {}
 	for index = 0, 10 do
 		local key = catalog.pieces.slots[index].key
-		if index < 8 or worn[key] or (native and ((index == 8 and class ~= "hunter")
-			or (index == 10 and class == "hunter") or (index == 9 and double))) then
-			table.insert(out, key)
-		end
+		if Gear.ValidSlot(catalog, class, key) then table.insert(out, key) end
 	end
 	return out
 end
@@ -95,11 +119,12 @@ function Planner.Replace(pieces, slot, tier, stars)
 	return out
 end
 
-function Planner.Quote(catalog, before, after, drops)
+function Planner.Quote(catalog, before, after, drops, class)
 	if not after then return { gold = 0, kind = "removed" } end
 	local same = before and before.tier == after.tier
 	local start = same and before.stars or 0
-	local quote = { gold = 0, kind = same and "stars" or (drops and drops[after.tier] and "farm" or "theoretical") }
+	local farm = drops and drops[after.tier] and Gear.DropSlot(catalog, class, after.slot, after.tier)
+	local quote = { gold = 0, kind = same and "stars" or (farm and "farm" or "theoretical") }
 	if same and after.stars < start then quote.kind = "downgrade" end
 	if not same and before and catalog.tiers[before.tier].rank >= catalog.tiers.legendary.rank then
 		quote.progression = true
@@ -122,14 +147,14 @@ local function BySlot(pieces)
 end
 Planner.BySlot = BySlot
 
-function Planner.Changes(catalog, actual, simulated, drops)
+function Planner.Changes(catalog, actual, simulated, drops, class)
 	local previous, target = BySlot(actual), BySlot(simulated)
 	local rows, summary = {}, { gold = 0 }
 	for index = 0, 10 do
 		local slot = catalog.pieces.slots[index].key
 		local before, after = previous[slot], target[slot]
 		if (before or after) and not Planner.SamePiece(before, after) then
-			local quote = Planner.Quote(catalog, before, after, drops)
+			local quote = Planner.Quote(catalog, before, after, drops, class)
 			summary.gold = summary.gold + quote.gold
 			summary.unknown = summary.unknown or quote.unknown
 			summary.acquisition = summary.acquisition or quote.kind == "farm" or quote.kind == "theoretical"
@@ -143,10 +168,11 @@ end
 local function Capacity(classHealth, damage, health, armor)
 	-- Standard 60% damage-reduction cap. The Warrior Titan exception and
 	-- unobserved talents are outside this equipment-only proxy.
-	return 1 + damage, classHealth and (classHealth + health) / (1 - math.min(armor, 0.60))
+	return 1 + damage, classHealth and (classHealth + health) / (1 - math.min(armor, ARMOR_CAP))
 end
 
 function Planner.Evaluate(catalog, class, pieces)
+	if not catalog.classes[class] or not Gear.ListSize(pieces, 11) then return end
 	local rows, used = {}, {}
 	for i, piece in ipairs(pieces) do
 		if type(piece) ~= "table" or not piece.slot or used[piece.slot] then return end
@@ -179,34 +205,28 @@ end
 function Planner.Reference(context, result)
 	if not result or not result.sets or not context.demand or not context.demand.output
 		or not context.demand.survival or not result.survival then return end
-	return Planner.Copy({ version = Planner.version, data = Planner.data, build = context.build, at = context.at,
+	return Planner.Copy({ schema = Planner.schema, version = Planner.version, data = Planner.data, build = context.build, at = context.at,
 		class = context.class, zone = context.zone, level = context.level, heroic = context.heroic,
 		modifiers = context.modifiers, pieces = context.pieces, stats = result.stats, sets = result.sets,
 		demand = context.demand, output = result.output, survival = result.survival })
 end
 
 function Planner.CheckReference(saved, context, catalog, maps)
-	if type(saved) ~= "table" then return nil, "missing" end
-	if saved.version ~= Planner.version or saved.data ~= Planner.data or saved.build ~= context.build
-		or saved.class ~= context.class or type(saved.pieces) ~= "table" or type(saved.sets) ~= "table" then
+	if saved == nil then return nil, "missing" end
+	if type(saved) ~= "table" or (saved.schema ~= Planner.schema and not (saved.schema == nil and saved.version == 2))
+		or saved.class ~= context.class or type(saved.zone) ~= "string" or type(saved.level) ~= "number"
+		or saved.level ~= math.floor(saved.level) or (saved.heroic ~= nil and saved.heroic ~= saved.level)
+		or (saved.modifiers ~= nil and type(saved.modifiers) ~= "table") then
 		return nil, "incompatible"
 	end
+	local scope = Planner.Scope(saved.level, saved.modifiers)
 	local demand = SurvivorUI_RebornAnalysisModel.GearDemand(maps[saved.zone], saved.level)
 	local eval = Planner.Evaluate(catalog, saved.class, saved.pieces)
-	if not SameNumbers(demand, saved.demand) or not eval or not eval.sets or not SameNumbers(saved.stats, eval.stats)
-		or not SameNumbers({ output = saved.output, survival = saved.survival },
-			{ output = eval.output, survival = eval.survival }) then return nil, "incompatible" end
-	for tier, bonuses in pairs(eval.sets) do
-		local old = saved.sets[tier]
-		if type(old) ~= "table" or table.getn(old) ~= table.getn(bonuses) then return nil, "incompatible" end
-		for i, bonus in ipairs(bonuses) do
-			local value = old[i]
-			if type(value) ~= "table" or value.text ~= bonus.text or value.strong ~= bonus.strong
-				or value.pieces ~= bonus.pieces or value.needs ~= bonus.needs then return nil, "incompatible" end
-		end
-	end
-	for tier in pairs(saved.sets) do if not eval.sets[tier] then return nil, "incompatible" end end
-	return saved
+	if scope == "unsupported" or not demand or not demand.output or not demand.survival
+		or not eval or not eval.sets or not eval.survival then return nil, "incompatible" end
+	local changed = not SameNumbers(demand, saved.demand)
+		or not SameNumbers({ output = eval.output, survival = eval.survival }, { output = saved.output, survival = saved.survival })
+	return { demand = demand, output = eval.output, survival = eval.survival, scope = scope }, changed and "updated" or nil
 end
 
 function Planner.Difficulty(demand, result, reference)
@@ -226,6 +246,102 @@ local function Better(current, gold, best)
 	return gold < best.gold
 end
 
+local function Protects(catalog, item, req)
+	return item and item.tier == req.tier and item.stars >= req.stars and catalog.slots[item.slot].index < 8
+end
+
+local function Dominates(a, b)
+	-- Same acquisition path and contribution to protected sets. Both
+	-- capabilities are monotone in these three gear attributes.
+	return a.tier == b.tier and a.protection == b.protection and a.gold <= b.gold
+		and a.damage >= b.damage and a.hp >= b.hp and a.armor >= b.armor
+end
+
+local function RemoveDominated(group)
+	local result = {}
+	for _, choice in ipairs(group) do
+		local dominated = false
+		for _, other in ipairs(result) do
+			if Dominates(other, choice) then dominated = true; break end
+		end
+		if not dominated then
+			for i = table.getn(result), 1, -1 do
+				if Dominates(choice, result[i]) then table.remove(result, i) end
+			end
+			table.insert(result, choice)
+		end
+	end
+	return result
+end
+
+local function MaxStats(out, choice)
+	out.damage = math.max(out.damage, choice.damage)
+	out.hp = math.max(out.hp, choice.hp)
+	out.armor = math.max(out.armor, choice.armor)
+end
+
+local function AddStats(a, b)
+	return { damage = a.damage + b.damage, hp = a.hp + b.hp, armor = a.armor + b.armor }
+end
+
+local function BoundSuffix(groups, requirements, survivalNeed, yield)
+	local zero = { damage = 0, hp = 0, armor = 0 }
+	local terminal = { stats = zero, protected = {}, free = { 0, 0, 0 }, rate = { 0, 0, 0 } }
+	for j in ipairs(requirements) do terminal.protected[j] = { [0] = zero } end
+	local suffix = { [table.getn(groups) + 1] = terminal }
+	for i = table.getn(groups), 1, -1 do
+		if yield then yield() end
+		local maximum = { damage = 0, hp = 0, armor = 0 }
+		local matching, free, rate = {}, { 0, 0, 0 }, { 0, 0, 0 }
+		for _, choice in ipairs(groups[i]) do
+			MaxStats(maximum, choice)
+			local j = choice.protection
+			if j then
+				matching[j] = matching[j] or { damage = 0, hp = 0, armor = 0 }
+				MaxStats(matching[j], choice)
+			end
+			if choice.gold == 0 then
+				free[1] = math.max(free[1], choice.damage)
+				free[2] = math.max(free[2], choice.hp + survivalNeed * choice.armor)
+				free[3] = math.max(free[3], choice.hp)
+			end
+		end
+		for _, choice in ipairs(groups[i]) do
+			if choice.gold > 0 then
+				rate[1] = math.max(rate[1], (choice.damage - free[1]) / choice.gold)
+				rate[2] = math.max(rate[2], (choice.hp + survivalNeed * choice.armor - free[2]) / choice.gold)
+				rate[3] = math.max(rate[3], (choice.hp - free[3]) / choice.gold)
+			end
+		end
+		local rest = suffix[i + 1]
+		local stats = AddStats(maximum, rest.stats)
+		local bound = { stats = stats, protected = {}, free = free, rate = rate }
+		for k = 1, 3 do
+			free[k] = free[k] + rest.free[k]
+			rate[k] = math.max(rate[k], rest.rate[k])
+		end
+		for j, req in ipairs(requirements) do
+			local prior, constrained = rest.protected[j], { [0] = stats }
+			for n = 1, req.count do
+				local best = prior[n] and AddStats(maximum, prior[n])
+				local included = matching[j] and prior[n - 1] and AddStats(matching[j], prior[n - 1])
+				if best and included then MaxStats(best, included) end
+				constrained[n] = best or included
+			end
+			bound.protected[j] = constrained
+		end
+		suffix[i] = bound
+	end
+	return suffix
+end
+
+local function RemainingCost(bound, index, deficit)
+	local gap = deficit - bound.free[index]
+	if gap <= 0 then return 0 end
+	local rate = bound.rate[index]
+	return rate > 0 and gap / rate or math.huge
+end
+
 function Planner.Search(catalog, context, actual, reference, allowed, limit)
 	local current = Planner.Difficulty(context.demand, actual, reference).combined
 	if not current or not actual.sets then return end
@@ -235,7 +351,7 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 	local groups, tiers = {}, Planner.Tiers(catalog)
 	local seed, seedGold = {}, 0
 	local worn = BySlot(context.pieces)
-	for _, slot in ipairs(Planner.Slots(catalog, context.class, context.pieces)) do
+	for _, slot in ipairs(Planner.Slots(catalog, context.class)) do
 		local piece = worn[slot]
 		if piece or allowed then
 			local group = {}
@@ -243,14 +359,18 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 			if not piece then table.insert(group, { gold = 0, damage = 0, hp = 0, armor = 0 }) end
 			for _, tier in ipairs(tiers) do
 				local same = piece and tier == piece.tier
-				if same or (allowed and allowed[tier]) then
+				if same or (allowed and allowed[tier] and Gear.DropSlot(catalog, context.class, slot, tier)) then
 					for star = same and piece.stars or 0, catalog.pieces.scale.top do
 						local candidate = same and star == piece.stars and piece or { slot = slot, tier = tier, stars = star }
-						local quote = Planner.Quote(catalog, piece, candidate, allowed)
+						local quote = Planner.Quote(catalog, piece, candidate, allowed, context.class)
 						if quote.unknown then result.excluded = true
 						else
 							local s = Gear.Piece(catalog, context.class, slot, tier, star)
-							table.insert(group, { piece = candidate, gold = quote.gold,
+							local protection
+							for j, req in ipairs(requirements) do
+								if Protects(catalog, candidate, req) then protection = j; break end
+							end
+							table.insert(group, { piece = candidate, gold = quote.gold, tier = tier, protection = protection,
 								damage = s.damage or 0, hp = s.hp or 0, armor = s.armor or 0 })
 							if same then sameTier = group[table.getn(group)] end
 						end
@@ -264,13 +384,23 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 				if ar ~= br then return ar < br end
 				return a.piece.stars < b.piece.stars
 			end)
-			table.insert(groups, group)
+			table.insert(groups, RemoveDominated(group))
+			local groupIndex = table.getn(groups)
+			local least, most = math.huge, 0
+			for _, choice in ipairs(groups[groupIndex]) do
+				least, most = math.min(least, choice.damage), math.max(most, choice.damage)
+			end
+			groups[groupIndex].spread, groups[groupIndex].order = most - least, groupIndex
 			if sameTier then
 				table.insert(seed, sameTier.piece)
 				seedGold = seedGold + sameTier.gold
 			end
 		end
 	end
+	table.sort(groups, function(a, b)
+		if a.spread == b.spread then return a.order < b.order end
+		return a.spread > b.spread
+	end)
 	-- The most upgraded currently worn pieces give both searches a comparable
 	-- starting point, including when the replacement space exceeds its budget.
 	local seedPressure = Planner.Difficulty(context.demand, Planner.Evaluate(catalog, context.class, seed), reference).combined
@@ -278,42 +408,108 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 		result.after, result.gold, result.pieces = seedPressure, seedGold, Planner.Copy(seed)
 	end
 
-	-- Optimistic suffix bounds may mix incompatible choices. This can only
-	-- improve the bound because all three modeled piece stats are monotone.
-	local suffix = { [table.getn(groups) + 1] = { damage = 0, hp = 0, armor = 0, counts = {} } }
-	local function CountsFor(group, req)
-		for _, choice in ipairs(group) do
-			local item = choice.piece
-			if item and catalog.slots[item.slot].index < 8 and item.tier == req.tier and item.stars >= req.stars then return 1 end
-		end
-		return 0
-	end
-	for i = table.getn(groups), 1, -1 do
-		local damage, hp, armor, counts = 0, 0, 0, {}
-		for _, choice in ipairs(groups[i]) do
-			damage, hp, armor = math.max(damage, choice.damage), math.max(hp, choice.hp), math.max(armor, choice.armor)
-		end
-		local rest = suffix[i + 1]
-		for j, req in ipairs(requirements) do counts[j] = (rest.counts[j] or 0) + CountsFor(groups[i], req) end
-		suffix[i] = { damage = rest.damage + damage, hp = rest.hp + hp, armor = rest.armor + armor, counts = counts }
-	end
-
+	-- These relaxed thresholds include the numerical tolerance at 100%.
+	-- EHP >= E requires both HP + E * armor >= E - base and HP >= .4 * E - base.
 	result.worker = coroutine.create(function()
+		local function Demands(cutoff)
+			local rate = 100 / (cutoff + EPS)
+			return context.demand.output / reference.demand.output * reference.output * rate - 1,
+				context.demand.survival / reference.demand.survival * reference.survival * rate
+		end
+		local outputNeed, survivalNeed = Demands(100)
+		local suffix = BoundSuffix(groups, requirements, survivalNeed, coroutine.yield)
 		local path, counts = {}, {}
+		local function Bound(i, damage, hp, armor)
+			local rest = suffix[i]
+			local d, h, a = rest.stats.damage, rest.stats.hp, rest.stats.armor
+			for j, req in ipairs(requirements) do
+				local need = math.max(0, req.count - (counts[j] or 0))
+				local constrained = rest.protected[j][need]
+				if not constrained then return end
+				d, h, a = math.min(d, constrained.damage), math.min(h, constrained.hp), math.min(a, constrained.armor)
+			end
+			local output, survival = Capacity(actual.health, damage + d, hp + h, armor + a)
+			return Planner.Difficulty(context.demand, { output = output, survival = survival }, reference).combined
+		end
+		local function Count(choice, delta)
+			local j = choice.protection
+			if j then counts[j] = (counts[j] or 0) + delta end
+		end
+
+		-- Choose one legal full seed using optimistic child bounds. The same
+		-- suffix data rules out choices that strand an active set threshold.
+		local d, h, a, cost = 0, 0, 0, 0
+		local selected = {}
+		local terminal = table.getn(groups) + 1
+		for i, group in ipairs(groups) do
+			local best, bestBound
+			for _, choice in ipairs(group) do
+				coroutine.yield()
+				Count(choice, 1)
+				local lower = Bound(i + 1, d + choice.damage, h + choice.hp, a + choice.armor)
+				Count(choice, -1)
+				if lower and (not bestBound or lower < bestBound - EPS) then best, bestBound = choice, lower end
+			end
+			if not best then break end
+			selected[i] = best
+			Count(best, 1)
+			d, h, a, cost = d + best.damage, h + best.hp, a + best.armor, cost + best.gold
+		end
+		local pressure = selected[terminal - 1] and Bound(terminal, d, h, a)
+		if pressure and pressure <= 100 then
+			-- Strip unnecessary expense from the feasible seed while preserving
+			-- the target and all protected sets. This is an incumbent only.
+			for i, group in ipairs(groups) do
+				local prior = selected[i]
+				for _, choice in ipairs(group) do
+					if choice.gold >= prior.gold then break end
+					coroutine.yield()
+					Count(prior, -1)
+					Count(choice, 1)
+					local nd, nh, na = d - prior.damage + choice.damage, h - prior.hp + choice.hp, a - prior.armor + choice.armor
+					local candidate = Bound(terminal, nd, nh, na)
+					if candidate and candidate <= 100 then
+						selected[i], d, h, a, pressure = choice, nd, nh, na, candidate
+						cost = cost - prior.gold + choice.gold
+						break
+					end
+					Count(choice, -1)
+					Count(prior, 1)
+				end
+			end
+		end
+		if pressure and Better(pressure, cost, result) then
+			for _, choice in ipairs(selected) do if choice.piece then table.insert(path, choice.piece) end end
+			result.after, result.gold, result.pieces = pressure, cost, Planner.Copy(path)
+		end
+		path, counts = {}, {}
+		local root = Bound(1, 0, 0, 0)
+		local priceTie = root and root > 100 and root >= result.after - EPS
+		if priceTie then
+			outputNeed, survivalNeed = Demands(root)
+			suffix = BoundSuffix(groups, requirements, survivalNeed, coroutine.yield)
+		end
+
 		local function Visit(i, gold, damage, hp, armor)
 			if result.visited >= limit then return false end
 			result.visited = result.visited + 1
 			coroutine.yield()
-			local rest = suffix[i]
-			for j, req in ipairs(requirements) do
-				if (counts[j] or 0) + (rest.counts[j] or 0) < req.count then return true end
-			end
 			if result.after <= 100 and gold >= result.gold then return true end
-			local output, survival = Capacity(actual.health, damage + rest.damage, hp + rest.hp, armor + rest.armor)
-			local lower = Planner.Difficulty(context.demand, { output = output, survival = survival }, reference).combined
+			local lower = Bound(i, damage, hp, armor)
+			if not lower then return true end
 			local cutoff = result.after <= 100 and 100 or result.after
 			if lower > cutoff + EPS then return true end
+			if result.after <= 100 or priceTie then
+				local rest = suffix[i]
+				local need = math.max(RemainingCost(rest, 1, outputNeed - damage),
+					RemainingCost(rest, 2, survivalNeed - actual.health - hp - survivalNeed * armor),
+					RemainingCost(rest, 3, (1 - ARMOR_CAP) * survivalNeed - actual.health - hp))
+				if gold + need > result.gold + EPS then return true end
+			elseif lower > 100 and lower >= result.after and gold >= result.gold then
+				return true
+			end
 			if not groups[i] then
+				if priceTie and lower > root + EPS then return true end
 				if Better(lower, gold, result) then
 					result.after, result.gold, result.pieces = lower, gold, Planner.Copy(path)
 				end
@@ -322,15 +518,9 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 			for _, choice in ipairs(groups[i]) do
 				local item = choice.piece
 				if item then table.insert(path, item) end
-				for j, req in ipairs(requirements) do
-					if item and catalog.slots[item.slot].index < 8 and item.tier == req.tier and item.stars >= req.stars then
-						counts[j] = (counts[j] or 0) + 1
-					end
-				end
+				Count(choice, 1)
 				local done = Visit(i + 1, gold + choice.gold, damage + choice.damage, hp + choice.hp, armor + choice.armor)
-				for j, req in ipairs(requirements) do
-					if item and catalog.slots[item.slot].index < 8 and item.tier == req.tier and item.stars >= req.stars then counts[j] = counts[j] - 1 end
-				end
+				Count(choice, -1)
 				if item then table.remove(path) end
 				if not done then return false end
 			end

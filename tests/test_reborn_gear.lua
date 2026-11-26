@@ -9,7 +9,8 @@ local M = SurvivorUI_RebornAnalysisModel
 local maps = SurvivorUI_RebornMapReference
 local keys = { "head", "shoulders", "chest", "waist", "legs", "feet", "wrists", "hands", "main_hand", "off_hand", "ranged" }
 AZS_GEN = {
-	classes = { { key = "warlock", name = "Warlock", health = 165 }, { key = "paladin", name = "Paladin", health = 245 } },
+	classes = { { key = "warlock", name = "Warlock", health = 165 }, { key = "paladin", name = "Paladin", health = 245 },
+		{ key = "hunter", health = 200 }, { key = "rogue", health = 190 } },
 	zones = {
 		{ key = "naxx", name = "Naxxramas", world = 1 },
 		{ key = "elwynn", name = "Elwynn Forest", world = 1 },
@@ -34,6 +35,10 @@ AZS_GEN = {
 		{ class = "warlock", rarity = 0, pieces = 8, text = "Hits {v}", v = { 2, 3 } },
 	},
 }
+AZS_GEN.pieces.classProfiles.hunter = AZS_GEN.pieces.classProfiles.warlock
+AZS_GEN.pieces.classProfiles.rogue = AZS_GEN.pieces.classProfiles.warlock
+AZS_GEN.gearTiers[1].weapon_icons = { rogue = { "main" } }
+AZS_GEN.gearTiers[2].weapon_icons = { rogue = { "main", "off" } }
 for i, key in ipairs(keys) do
 	AZS_GEN.pieces.slots[i - 1] = { key = key, profile = i <= 8, stats = { { "damage", i == 10 and 0.06 or 0.12 } } }
 end
@@ -68,7 +73,7 @@ cat.tiers.elementium.starFactor = 7.6
 local function Item(slot, tier, stars) return { slot = slot, tier = tier, stars = stars } end
 local function Eval(pieces) return assert(P.Evaluate(cat, "warlock", pieces)) end
 local source = { class = "warlock", zone = "naxx", level = 0, heroic = 0, build = "v0.7.4",
-	modifiers = { affixes = "some" }, demand = M.GearDemand(maps.naxx, 0), at = 100,
+	modifiers = { aff = "2", affixes = "" }, demand = M.GearDemand(maps.naxx, 0), at = 100,
 	pieces = { Item("head", "common", 0), Item("main_hand", "legendary", 0), Item("chest", "common", 1) } }
 table.insert(AZS_GEN.pieces.slots[0].stats, { "hp", 30 })
 table.insert(AZS_GEN.pieces.slots[2].stats, { "armor", 0.17 })
@@ -83,10 +88,41 @@ local worn = assert(G.Worn(cat, "warlock", { { slot = "8", rarity = "7", stars =
 	{ slot = 1, rarity = "" }, { slot = 0, rarity = 4, stars = 0, icon = "inv_test", name = "Test" } }))
 assert(#worn == 2 and worn[1].icon == "inv_test" and worn[2].slot == "main_hand" and worn[2].tier == "mythic")
 assert(P.Difficulty(source.demand, actual, ref).combined == 100 and ref.pieces[1] ~= source.pieces[1])
-assert(ref.modifiers ~= source.modifiers and P.CheckReference(ref, source, cat, maps) == ref)
+local reconstructed, issue = P.CheckReference(ref, source, cat, maps)
+assert(ref.modifiers ~= source.modifiers and reconstructed ~= ref and issue == nil and reconstructed.scope == "standard")
+assert(P.Difficulty(source.demand, actual, reconstructed).combined == 100)
 assert(not P.CheckReference(ref, { class = "paladin", build = source.build }, cat, maps))
-assert(not P.CheckReference(ref, { class = "warlock", build = "changed" }, cat, maps))
+assert(P.CheckReference(ref, { class = "warlock", build = "changed" }, cat, maps))
 assert(not P.CheckReference(P.Copy({ version = 1 }), source, cat, maps))
+local legacy = P.Copy(ref)
+legacy.schema, legacy.version, legacy.data = nil, 2, "older"
+assert(P.CheckReference(legacy, source, cat, maps))
+local updated = P.Copy(ref)
+updated.version, updated.data, updated.output = 900, "compatible new data", 1
+local recomputed, warning = P.CheckReference(updated, source, cat, maps)
+assert(recomputed.output == actual.output and warning == "updated" and updated.output == 1)
+local changedMaps = P.Copy(maps)
+changedMaps.naxx[1] = changedMaps.naxx[1] * 1.1
+recomputed, warning = P.CheckReference(ref, source, cat, changedMaps)
+assert(recomputed and warning == "updated" and recomputed.demand.output ~= ref.demand.output)
+for _, field in ipairs({ "schema", "zone", "level", "pieces", "heroic", "modifiers" }) do
+	local bad = P.Copy(ref)
+	bad[field] = "invalid"
+	assert(not P.CheckReference(bad, source, cat, maps), field)
+end
+local bad = P.Copy(ref)
+bad.pieces = { [2] = Item("head", "common", 1) }
+assert(not P.CheckReference(bad, source, cat, maps))
+bad.pieces = { Item("off_hand", "common", 1) }
+assert(not P.CheckReference(bad, source, cat, maps))
+local modifiedRef = P.Copy(ref)
+modifiedRef.modifiers.affixes = "explosive"
+assert(P.CheckReference(modifiedRef, source, cat, maps).scope == "standard-only")
+modifiedRef.modifiers.mode = "swarm"
+assert(not P.CheckReference(modifiedRef, source, cat, maps))
+assert(P.Scope(0, { aff = 1, affixes = " , ", challenge = "0" }) == "standard")
+assert(P.Scope(3, {}) == "standard-only" and P.Scope(0, { affixes = "sanguine" }) == "standard-only")
+assert(P.Affixes({ " Sanguine ", "explosive", "sanguine" }) == "explosive,sanguine")
 local partial = P.Difficulty(M.GearDemand({ 2 }, 0), actual, ref)
 assert(partial.output and not partial.survival and not partial.combined)
 local capped = Eval({ Item("chest", "common", 5) })
@@ -96,7 +132,14 @@ near(capped.survival, 165 / 0.4)
 assert(P.DropTiers(cat, maps, 1).legendary and not P.DropTiers(cat, maps, 1).exotic)
 assert(P.DropTiers(cat, maps, 2).exotic and not P.DropTiers(cat, maps, 2).common)
 assert(P.DropTiers(cat, maps, 3).mythic and P.DropTiers(cat, maps, 4).elementium)
-local upgrade = P.Quote(cat, source.pieces[2], Item("main_hand", "exotic", 2), P.DropTiers(cat, maps, 2))
+assert(G.ValidPiece(cat, "hunter", "ranged", "exotic", 1) and not G.ValidPiece(cat, "hunter", "main_hand", "exotic", 1))
+assert(G.ValidPiece(cat, "rogue", "off_hand", "exotic", 1) and not G.DropSlot(cat, "rogue", "off_hand", "exotic"))
+assert(G.DropSlot(cat, "rogue", "off_hand", "mythic") and G.DropSlot(cat, "rogue", "off_hand", "elementium"))
+assert(not G.ValidSlot(cat, "paladin", "off_hand") and not G.ValidSlot(cat, "warlock", "ranged"))
+assert(not G.Worn(cat, "paladin", { { slot = 9, rarity = 6, stars = 0 } }))
+assert(not G.Worn(cat, "warlock", { [2] = { slot = 0, rarity = 0, stars = 0 } }))
+assert(not G.ValidPiece(cat, "hunter", "ranged", "invented", 0) and not G.ValidPiece(cat, "hunter", "ranged", "exotic", 1.5))
+local upgrade = P.Quote(cat, source.pieces[2], Item("main_hand", "exotic", 2), P.DropTiers(cat, maps, 2), "warlock")
 assert(upgrade.kind == "farm" and upgrade.progression and upgrade.gold == 2366 + 4733 and upgrade.estimated)
 assert(P.Quote(cat, source.pieces[2], Item("main_hand", "exotic", 0), P.DropTiers(cat, maps, 1)).kind == "theoretical")
 assert(P.Quote(cat, Item("head", "common", 5), Item("head", "common", 2)).gold == 0)
@@ -186,7 +229,7 @@ local farmingReference = assert(P.Reference(farming, farmingActual))
 farming.demand = { output = farming.demand.output * 1.2, survival = farming.demand.survival * 1.2 }
 local stars = Finish(P.Search(cat, farming, farmingActual, farmingReference, nil, 2000))
 local drops = Finish(P.Search(cat, farming, farmingActual, farmingReference, { exotic = true }, 2000))
-local _, acquisition = P.Changes(cat, farming.pieces, drops.pieces, { exotic = true })
+local _, acquisition = P.Changes(cat, farming.pieces, drops.pieces, { exotic = true }, "warlock")
 assert(stars.complete and stars.after > 100 and drops.complete and drops.after <= 100 and drops.gold == 0 and acquisition.acquisition)
 
 -- Oracle for a mixed-tier plan. Use one reachable and one unreachable target,
@@ -233,6 +276,15 @@ for _, factor in ipairs({ 1.08, 1.8 }) do
 	if not expected.reached then near(first.after, expected.after) end
 	assert(Eval(first.pieces).sets.legendary[1].pieces == 4)
 end
+local knownText = AZS_GEN.setBonuses[1].text
+AZS_GEN.setBonuses[1].text = "Unquantified combat"
+local twoSets = Eval(mixed.pieces)
+local twoSetsRef = assert(P.Reference(mixed, twoSets))
+local bothProtected = Finish(P.Search(cat, mixed, twoSets, twoSetsRef, { exotic = true }, 12000))
+assert(bothProtected.complete)
+local kept = Eval(bothProtected.pieces).sets
+assert(kept.legendary[1].pieces == 4 and kept.common[1].pieces == 4, "both competing protected tiers survive")
+AZS_GEN.setBonuses[1].text = knownText
 table.remove(AZS_GEN.setBonuses)
 cat.pieces.scale.top = savedTop
 
@@ -276,27 +328,39 @@ function time() return 1234 end
 AZS = { ServerBuild = "v0.7.4", On = function(event, fn) assert(not handlers[event]); handlers[event] = fn end }
 SurvivorUIDB = { rebornGear = { mapReference = { zone = "naxx", tier = 3 }, wornSnapshots = { warlock = { pieces = armor } } } }
 local dollSlot = { slot = 0, hooks = 0 }
+local secondSlot = { slot = 1, hooks = 0 }
 function dollSlot:HookScript(event, fn)
-	assert(event == "OnEnter")
-	self.hooks, self.afterEnter = self.hooks + 1, fn
+	if event == "OnEnter" then self.hooks, self.afterEnter = self.hooks + 1, fn
+	else assert(event == "OnLeave"); self.afterLeave = fn end
 end
 GameTooltip = {
+	SetOwner = function(self, owner) self.owner = owner end,
+	SetText = function(self, text) self.lines = { text } end,
 	IsOwned = function(self, owner) return self.owner == owner end,
 	AddLine = function(self, text) table.insert(self.lines, text) end,
-	Show = function() end,
+	Show = function(self) self.shown = true end,
+	Hide = function(self) self.shown = false; self.owner = nil end,
 }
 function dollSlot:Hover()
 	GameTooltip.owner, GameTooltip.lines = self, { "Native tooltip" }
+	GameTooltip:Show()
 	if self.afterEnter then self.afterEnter(self) end
 	return table.concat(GameTooltip.lines, "\n")
 end
+secondSlot.HookScript, secondSlot.Hover = dollSlot.HookScript, dollSlot.Hover
 AZSInspectGear = CreateFrame("Frame")
 AZSInspect = { unit = "player", shown = true }
 function AZSInspect:IsShown() return self.shown end
-function AZSInspect:Hide() self.shown = false end
+function AZSInspect:HookScript(key, fn) assert(key == "OnHide"); self.onHide = fn end
+function AZSInspect:Hide() self.shown = false; if self.onHide then self.onHide() end end
 function AZSInspect:RefreshDoll(armor)
 	AZSInspectSlot0 = { GetParent = function() return dollSlot end }
-	dollSlot.piece = armor[1]
+	AZSInspectSlot1 = { GetParent = function() return secondSlot end }
+	dollSlot.piece, secondSlot.piece = nil, nil
+	for _, item in ipairs(armor) do
+		if tonumber(item.slot) == 0 then dollSlot.piece = item end
+		if tonumber(item.slot) == 1 then secondSlot.piece = item end
+	end
 end
 function hooksecurefunc(target, method, callback)
 	local original = target[method]
@@ -325,8 +389,8 @@ local function Click(text)
 	assert(not button.disabled, text)
 	button.scripts.OnClick()
 end
-local function Zone(key, level, class, run)
-	AZS_ZONE = { hub = 1, zone = key, dt = level, heroic = level, class = class, run = run, affixes = "weekly" }
+local function Zone(key, level, class, run, affixes)
+	AZS_ZONE = { hub = 1, zone = key, dt = level, heroic = level, class = class, run = run, affixes = affixes }
 	handlers.AZSZONE()
 end
 local function Armor(rows)
@@ -334,12 +398,20 @@ local function Armor(rows)
 	handlers.AZSARMOR()
 	AZSInspect:RefreshDoll(rows)
 end
-local function SlotMenu(slot, value)
+local function SlotMenu(slot, value, field)
 	for menu, open in pairs(menus) do
-		if menu.shown and menu.parent.shown and menu.parent.slot == slot and string.find(menu.name, "tier", 1, true) then
+		if menu.shown and menu.parent.shown and menu.parent.slot == slot and string.find(menu.name, field or "tier", 1, true) then
 			entries = {}
 			open()
 			for _, item in ipairs(entries) do if item.value == value then return item.func end end
+		end
+	end
+end
+local function HoverIcon(slot, planned)
+	for _, row in ipairs(widgets) do
+		if row.slot == slot and row.shown and row.iconButton.shown and (row.plan ~= nil) == planned then
+			row.iconButton.scripts.OnEnter()
+			return table.concat(GameTooltip.lines, "\n")
 		end
 	end
 end
@@ -372,19 +444,39 @@ assert(not Find("FontString", "100% reference:"))
 local tooltip = dollSlot:Hover()
 assert(dollSlot.hooks == 1 and string.find(tooltip, "Native tooltip", 1, true))
 assert(string.find(tooltip, "408 gold", 1, true) and string.find(tooltip, "Next tier", 1, true))
+assert(dollSlot:Hover() == tooltip, "repeat hover rebuilds the same native extension once")
+Armor({ head, { slot = 1, rarity = 4, stars = 2 } })
+assert(string.find(secondSlot:Hover(), "6882 gold", 1, true) and not string.find(secondSlot:Hover(), "408 gold", 1, true))
+dollSlot.afterLeave(dollSlot)
+assert(GameTooltip:IsOwned(secondSlot), "leaving another slot does not clear the active tooltip")
+AZSInspect:Hide()
+assert(not GameTooltip.shown)
+AZSInspect.shown = true
+Armor({ head })
 Click("Set Current Configuration")
 local saved = assert(SurvivorUIDB.rebornGear.baselines.warlock)
-assert(saved.zone == "elwynn" and saved.level == 0 and saved.at == 1234 and saved.modifiers.affixes == "weekly")
+assert(saved.zone == "elwynn" and saved.level == 0 and saved.at == 1234 and saved.modifiers.affixes == "")
 assert(saved.pieces[1].name == "Test item" and saved.pieces[1].stars == 0 and Find("FontString", "Estimated difficulty 100.0%"))
 assert(Find("FontString", "No upgrades required"))
-assert(string.find(dollSlot:Hover(), "Difficulty 100.0% →", 1, true))
+assert(string.find(dollSlot:Hover(), "Modeled pressure 100.0% →", 1, true))
+assert(Find("FontString", "Output uses gear Damage") and Find("FontString", "calibration is pending"))
 Click("Equipment Simulator")
 local edit = assert(SlotMenu("head", "legendary"))
 edit()
+assert(string.find(HoverIcon("head", false), "Simulated item · Legendary", 1, true))
+local changeStar = assert(SlotMenu("head", 2, "stars"))
+changeStar()
+assert(not GameTooltip.shown, "simulator edits clear tooltips")
+assert(string.find(HoverIcon("head", false), "★2 → ★3", 1, true))
+assert(string.find(HoverIcon("shoulders", false), "Empty slot", 1, true))
 assert(Find("FontString", "Compared with actual gear") and Find("FontString", "Replacement gear is hypothetical"))
 assert(saved.pieces[1].stars == 0 and saved.pieces[1].tier == "common" and head.rarity == "0")
 Armor({ head })
 assert(Find("FontString", "Replacement gear is hypothetical"), "duplicate native gear updates preserve the simulation")
+AZS_ZONE = P.Copy(AZS_ZONE)
+AZS_ZONE.aff = 2
+handlers.AZSZONE()
+assert(Find("FontString", "Replacement gear is hypothetical"), "replaced equivalent zone and legacy affix metadata keep state")
 Click("Load Plan B")
 assert(not Find("FontString", "Replacement gear is hypothetical"))
 Click("Difficulty & Upgrade Planner")
@@ -394,6 +486,7 @@ assert(not Find("FontString", "Replacement gear is hypothetical"), "stale dropdo
 
 Zone("naxx", 1, "warlock", "b")
 assert(Find("FontString", "Naxxramas · Heroic I") and Find("FontString", "Current equipment unavailable"))
+assert(Find("FontString", "Additional difficulty rules are omitted for the target"))
 assert(Find("Button", "Set Current Configuration").disabled)
 Armor({ head })
 assert(VisiblePanel().scripts.OnUpdate, "both plans are event-triggered, then sliced")
@@ -402,13 +495,41 @@ assert(not VisiblePanel().scripts.OnUpdate, "simulator editing suspends optimize
 Click("Difficulty & Upgrade Planner")
 DrainSearch()
 assert(Find("FontString", "Plan A") and Find("FontString", "Plan B"))
+local planned = assert(HoverIcon("head", true))
+assert(string.find(planned, "Planned item Common ★0 →", 1, true))
+assert(string.find(planned, "Isolated item pressure", 1, true) and string.find(planned, "Full plan modeled pressure", 1, true))
 Click("Equipment Simulator")
+assert(not GameTooltip.shown)
 Click("Load Plan A")
 assert(Find("FontString", "Calculable upgrade gold:") and not VisiblePanel().scripts.OnUpdate)
 Click("Reset to Actual Equipment")
 assert(Find("FontString", "Calculable upgrade gold: 0") and not Find("FontString", "Changes and acquisition"))
 Click("Difficulty & Upgrade Planner")
 assert(saved == SurvivorUIDB.rebornGear.baselines.warlock)
+AZS_ZONE.affixes = { "Sanguine", "Explosive" }
+handlers.AZSZONE()
+assert(Find("FontString", "Current equipment unavailable"), "in-place modifier changes invalidate gear")
+Armor({ head })
+AZS_ZONE.affixes = { "explosive", "sanguine" }
+handlers.AZSZONE()
+assert(not Find("FontString", "Current equipment unavailable"), "equivalent affix lists preserve gear")
+AZS_ZONE.mode = "swarm"
+handlers.AZSZONE()
+Armor({ head })
+assert(Find("FontString", "Campaign pressure and plans are unavailable in this mode"))
+assert(not VisiblePanel().scripts.OnUpdate and Find("Button", "Set Current Configuration").disabled)
+AZS_ZONE.zone, AZS_ZONE.dt, AZS_ZONE.heroic = "elwynn", 0, 0
+Armor({ head })
+assert(Find("FontString", "Waiting for the game's world snapshot"), "armor before an announced zone is rejected")
+Zone("elwynn", 0, "warlock", "changed-run", "sanguine")
+Armor({ head })
+assert(string.find(dollSlot:Hover(), "Next star", 1, true))
+local foreign = {}
+GameTooltip:SetOwner(foreign)
+GameTooltip:SetText("Unrelated tooltip")
+Zone("elwynn", 0, "warlock", "later-run", "sanguine")
+assert(GameTooltip:IsOwned(foreign) and GameTooltip.shown)
+assert(Find("FontString", "Current equipment unavailable"), "a replaced run ID invalidates the inherited gear")
 Zone("naxx", 0, "paladin", "c")
 Armor({})
 Click("Set Current Configuration")
@@ -427,7 +548,10 @@ assert(dollSlot:Hover() == "Native tooltip")
 AZSInspect.unit = "player"
 AZSInspect:RefreshDoll({ head })
 assert(dollSlot.hooks == 1 and Find("Button", "Upgrades", AZSInspectGear))
+dollSlot:Hover()
+assert(GameTooltip.shown)
 SurvivorUI_RebornGearToggle()
+assert(not GameTooltip.shown)
 assert(not SurvivorUI_RebornGearEnabled() and not VisiblePanel():IsShown() and not VisiblePanel().scripts.OnUpdate)
 assert(dollSlot:Hover() == "Native tooltip" and not SurvivorUI_RebornGearOpen() and #commands == 0)
 SurvivorUI_RebornGearToggle()
@@ -440,4 +564,13 @@ Zone("elwynn", 0, "warlock", "f")
 Armor({ head })
 assert(SurvivorUI_RebornGearOpen("show") and Find("FontString", "预计难度 100.0%"))
 assert(string.find(dollSlot:Hover(), "408 金币", 1, true) and string.find(dollSlot:Hover(), "下一品质", 1, true))
+Click("装备模拟器")
+assert(string.find(HoverIcon("head", false), "模拟装备", 1, true))
+VisiblePanel():Hide()
+assert(not GameTooltip.shown, "closing the analyzer clears only its own tip")
+Zone("elwynn", 0, "warlock", "late", "explosive")
+Armor({ head })
+dollSlot:Hover()
+WorldEvent()
+assert(not GameTooltip.shown, "world entry clears the tracked native extension")
 print("PASS: gear arithmetic, both constraints, oracle, snapshot isolation, previews, and runtime lifecycle")

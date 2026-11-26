@@ -7,6 +7,7 @@ local WIDTH = 686
 local panel, scroll, content, plannerTab, simulatorTab, baselineButton, loadButtons
 local view, rows, used, y = "planner", {}, 0, 0
 local observedZone, worn, state, draft, searches, rendering
+local previewOwner, previewIsNative
 local render, updateSearch, showView
 local ROMAN = { "I", "II", "III", "IV", "V" }
 local SLOT = { head = "Head", shoulders = "Shoulders", chest = "Chest", waist = "Waist", legs = "Legs",
@@ -42,7 +43,7 @@ function SurvivorUI_RebornGearEnabled()
 end
 
 local function MapTitle(key, level, live)
-	if not key or not level then return T("Selected map or difficulty unavailable") end
+	if type(key) ~= "string" or type(level) ~= "number" then return T("Selected map or difficulty unavailable") end
 	local name = live
 	for _, zone in ipairs(AZS_GEN and AZS_GEN.zones or {}) do
 		if zone.key == key then name = L(zone.name); break end
@@ -50,12 +51,35 @@ local function MapTitle(key, level, live)
 	return (name or key) .. " · " .. (level == 0 and T("Normal") or F("Heroic %s", ROMAN[level] or tostring(level)))
 end
 
-local function ZoneKey(zone)
-	-- The stable server ID protects against reused or replaced zone tables.
+local function Snapshot(zone)
+	if type(zone) ~= "table" then return end
 	local run = SurvivorUI_RebornStableRunId and SurvivorUI_RebornStableRunId(zone.run)
-	if not run then return zone end
-	return table.concat({ run, zone.class or "", zone.zone or "", tostring(zone.dt), tostring(zone.heroic),
-		tostring(zone.hub), tostring(zone.aff), tostring(zone.affixes), tostring(zone.challenge), tostring(zone.mode) }, "/")
+	local challenge = Planner.Token(zone.challenge)
+	return {
+		run = run or Planner.Token(zone.run), class = Planner.Token(zone.class),
+		zone = Planner.Token(zone.zone), dt = tonumber(zone.dt), heroic = Planner.Token(zone.heroic),
+		hub = tonumber(zone.hub) == 1, aff = Planner.Token(zone.aff), affixes = Planner.Affixes(zone.affixes),
+		challenge = challenge ~= "0" and challenge or nil,
+		mode = (AZS_PG and AZS_PG.active) and "proving-grounds" or Planner.Token(zone.mode),
+		zname = type(zone.zname) == "string" and zone.zname or nil,
+	}
+end
+
+local function SameZone(a, b)
+	if not a or not b then return false end
+	local function RuleMode(mode)
+		if mode ~= "campaign" and mode ~= "standard" and mode ~= "hub" then return mode end
+	end
+	return a.run == b.run and a.class == b.class and a.zone == b.zone and a.dt == b.dt
+		and (a.heroic or tostring(a.dt)) == (b.heroic or tostring(b.dt)) and a.hub == b.hub and a.affixes == b.affixes
+		and a.challenge == b.challenge and RuleMode(a.mode) == RuleMode(b.mode)
+end
+
+local function ClearPreview(owner)
+	if not previewOwner or (owner and previewOwner ~= owner) then return end
+	local previous = previewOwner
+	previewOwner, previewIsNative = nil, nil
+	if GameTooltip and GameTooltip:IsOwned(previous) then GameTooltip:Hide() end
 end
 
 local function PieceListsEqual(a, b)
@@ -68,24 +92,32 @@ local function PieceListsEqual(a, b)
 end
 
 local function ClearState()
+	ClearPreview()
 	state, draft, searches = nil, nil, nil
 	if panel then panel:SetScript("OnUpdate", nil) end
 end
 
 local function Read()
-	if state then return state end
 	local zone = observedZone
-	if not zone or not AZS_ZONE or ZoneKey(zone) ~= ZoneKey(AZS_ZONE) then return nil end
+	if not zone then return end
+	if not SameZone(zone, Snapshot(AZS_ZONE)) then
+		observedZone, worn = nil, nil
+		ClearState()
+		return
+	end
+	if state then return state end
 	local catalog = Gear.Catalog(AZS_GEN)
-	local class = type(zone.class) == "string" and string.lower(zone.class) or nil
-	local level = tonumber(zone.dt)
+	local class, level = zone.class, zone.dt
 	local heroic = tonumber(zone.heroic)
 	local modifiers = { aff = zone.aff, affixes = zone.affixes, challenge = zone.challenge, mode = zone.mode }
+	local scope = Planner.Scope(level, modifiers)
 	local demand
-	if not (AZS_PG and AZS_PG.active) and (heroic == nil or heroic == level) then
+	local selected = Maps[zone.zone] and level and level >= 0 and level <= 5 and level == math.floor(level)
+		and (zone.heroic == nil or heroic == level)
+	if selected and scope ~= "unsupported" then
 		demand = SurvivorUI_RebornAnalysisModel.GearDemand(Maps[zone.zone], level)
 	end
-	local context = { class = class, zone = demand and zone.zone, level = demand and level, heroic = heroic,
+	local context = { class = class, zone = selected and zone.zone, level = selected and level, heroic = heroic, scope = scope,
 		modifiers = modifiers, build = AZS and AZS.ServerBuild, demand = demand,
 		pieces = worn, at = time and time() }
 	local actual = worn and catalog and class and Planner.Evaluate(catalog, class, worn)
@@ -95,7 +127,7 @@ local function Read()
 	state = { catalog = catalog, context = context, actual = actual, reference = reference, saved = saved,
 		issue = issue, current = Planner.Difficulty(demand, actual, reference) }
 	local map = Maps[context.zone]
-	state.drops = catalog and map and Planner.DropTiers(catalog, Maps, map[7])
+	state.drops = catalog and map and scope ~= "unsupported" and Planner.DropTiers(catalog, Maps, map[7])
 	return state
 end
 
@@ -180,63 +212,81 @@ local function QuoteText(quote)
 	return cost
 end
 
-local function AddPreview(current, slot)
-	local item = current and current.actual and Planner.BySlot(current.context.pieces)[slot]
-	if not item then return end
-	local catalog, context, actual = current.catalog, current.context, current.actual
+local function PreviewChange(current, pieces, base, before, after, caption, isolated)
+	local catalog, context = current.catalog, current.context
+	local slot = after and after.slot or before.slot
+	local setup = Planner.Replace(pieces, slot, after and after.tier, after and after.stars)
+	local evaluated = Planner.Evaluate(catalog, context.class, setup)
+	if not evaluated then return end
+	local quote = Planner.Quote(catalog, before, after, current.drops, context.class)
+	GameTooltip:AddLine(caption, 1, 0.82, 0.22, true)
+	local cost = QuoteText(quote)
+	GameTooltip:AddLine(quote.estimated and F("%s (estimated price)", cost) or cost, 1, 1, 1, true)
+	for _, change in ipairs(AttributeLines(base.stats, evaluated.stats)) do GameTooltip:AddLine(change, 0.55, 1, 0.65) end
+	if base.sets and evaluated.sets then
+		for _, change in ipairs(SetLines(catalog, base.sets, evaluated.sets)) do GameTooltip:AddLine(change, 1, 1, 1, true) end
+	end
+	local from = Planner.Difficulty(context.demand, base, current.reference).combined
+	local to = Planner.Difficulty(context.demand, evaluated, current.reference).combined
+	if from and to then
+		GameTooltip:AddLine(F(isolated and "Isolated item pressure %s → %s" or "Modeled pressure %s → %s",
+			ShortPercent(from), ShortPercent(to)), 1, 1, 1, true)
+	end
+	return quote
+end
+
+local function AddPreview(current, pieces, evaluated, item)
+	if not item then GameTooltip:AddLine(T("Empty slot")); return end
+	local catalog, context = current.catalog, current.context
 	local function Show(tier, star, caption)
-		local setup = Planner.Replace(context.pieces, slot, tier, star)
-		local evaluation = Planner.Evaluate(catalog, context.class, setup)
-		if not evaluation then return end
-		local quote = Planner.Quote(catalog, item, { slot = slot, tier = tier, stars = star }, current.drops)
-		GameTooltip:AddLine(caption, 1, 0.82, 0.22, true)
-		GameTooltip:AddLine(QuoteText(quote), 1, 1, 1, true)
-		if tier ~= item.tier then
+		local quote = PreviewChange(current, pieces, evaluated, item, { slot = item.slot, tier = tier, stars = star }, caption)
+		if quote and tier ~= item.tier then
 			GameTooltip:AddLine(T(quote.progression and "Direct ascension requires clearing the next expansion's final map; eligibility unknown."
 				or "Direct ascension eligibility, price and resulting stars are unavailable."), 0.9, 0.82, 0.65, true)
 		end
-		for _, change in ipairs(AttributeLines(actual.stats, evaluation.stats)) do GameTooltip:AddLine(change, 0.55, 1, 0.65) end
-		if actual.sets and evaluation.sets then
-			for _, change in ipairs(SetLines(catalog, actual.sets, evaluation.sets)) do GameTooltip:AddLine(change, 1, 1, 1, true) end
-		end
-		local pressure = Planner.Difficulty(context.demand, evaluation, current.reference)
-		if pressure.combined then
-			GameTooltip:AddLine(F("Difficulty %s → %s", ShortPercent(current.current.combined), ShortPercent(pressure.combined)), 1, 1, 1, true)
-		end
 	end
 	GameTooltip:AddLine(" ")
-	if item.stars < catalog.pieces.scale.top then
+	if Gear.ValidPiece(catalog, context.class, item.slot, item.tier, item.stars + 1) then
 		Show(item.tier, item.stars + 1, F("Next star · ★%d → ★%d", item.stars, item.stars + 1))
 	else
 		GameTooltip:AddLine(T("At maximum stars"), 0.85, 0.85, 0.85)
 	end
 	local tiers, nextTier = Planner.Tiers(catalog)
-	for i, tier in ipairs(tiers) do if tier == item.tier then nextTier = tiers[i + 1]; break end end
+	local rank = catalog.tiers[item.tier].rank
+	for _, tier in ipairs(tiers) do
+		if catalog.tiers[tier].rank > rank and Gear.ValidPiece(catalog, context.class, item.slot, tier, 0) then
+			nextTier = tier
+			break
+		end
+	end
 	if nextTier then
 		Show(nextTier, 0, F("Next tier · %s → %s ★0 (drop preview)", ItemText(catalog, item), TierText(catalog, nextTier)))
 	else
 		GameTooltip:AddLine(T("At maximum tier"), 0.85, 0.85, 0.85)
 	end
-	GameTooltip:Show()
 end
 
 local hookedInspect, inspectOverview, overviewParent
 local hookedSlots = setmetatable({}, { __mode = "k" })
 local function NativePreview(owner)
 	owner = owner or this
-	if not SurvivorUI_RebornGearEnabled() or not AZSInspect or AZSInspect.unit ~= "player" or not (owner and owner.piece)
+	if not SurvivorUI_RebornGearEnabled() or not AZSInspect or not AZSInspect:IsShown()
+		or AZSInspect.unit ~= "player" or not (owner and owner.piece)
 		or not (GameTooltip and GameTooltip:IsOwned(owner)) then return end
 	local current = Read()
 	local index = current and current.catalog and current.catalog.pieces.slots[owner.slot]
 	local item = index and current.actual and Planner.BySlot(current.context.pieces)[index.key]
 	local tier = item and current.catalog.tiers[item.tier]
 	if tier and tier.id == tonumber(owner.piece.rarity) and item.stars == tonumber(owner.piece.stars) then
-		AddPreview(current, index.key)
+		previewOwner, previewIsNative = owner, true
+		AddPreview(current, current.context.pieces, current.actual, item)
+		GameTooltip:Show()
 	end
 end
 
 local function InspectUpdated()
 	local inspect, gear = AZSInspect, AZSInspectGear
+	if previewIsNative then ClearPreview() end
 	if not SurvivorUI_RebornGearEnabled() or not (inspect and inspect.unit == "player" and inspect:IsShown()
 		and gear and gear:IsShown()) then
 		if inspectOverview then inspectOverview:Hide() end
@@ -247,6 +297,7 @@ local function InspectUpdated()
 		local owner = icon and icon:GetParent()
 		if owner and owner.slot == index and not hookedSlots[owner] and type(owner.HookScript) == "function" then
 			owner:HookScript("OnEnter", NativePreview)
+			owner:HookScript("OnLeave", function(owner) ClearPreview(owner or this) end)
 			hookedSlots[owner] = true
 		end
 	end
@@ -269,6 +320,9 @@ local function InstallInspectHook()
 	local inspect = AZSInspect
 	if inspect and inspect ~= hookedInspect and type(inspect.RefreshDoll) == "function" and type(hooksecurefunc) == "function" then
 		hooksecurefunc(inspect, "RefreshDoll", InspectUpdated)
+		if type(inspect.HookScript) == "function" then
+			inspect:HookScript("OnHide", function() if previewIsNative then ClearPreview() end end)
+		end
 		hookedInspect = inspect
 	end
 	InspectUpdated()
@@ -302,12 +356,25 @@ local function Row()
 			if not row.slot or not current or not GameTooltip then return end
 			GameTooltip:SetOwner(row.iconButton, "ANCHOR_RIGHT")
 			GameTooltip:SetText(L(SLOT[row.slot] or row.slot))
-			AddPreview(current, row.slot)
+			previewOwner, previewIsNative = row.iconButton, nil
+			if row.plan then
+				local change = row.change
+				PreviewChange(current, current.context.pieces, current.actual, change.before, change.after,
+					F("Planned item %s → %s", ItemText(current.catalog, change.before), ItemText(current.catalog, change.after)), true)
+				GameTooltip:AddLine(F("Full plan modeled pressure %s", ShortPercent(row.plan.after)), 1, 0.82, 0.22, true)
+			elseif row.simulated then
+				local evaluated = Planner.Evaluate(current.catalog, current.context.class, draft)
+				if evaluated then
+					GameTooltip:AddLine(F("Simulated item · %s", ItemText(current.catalog, row.item)), 1, 0.82, 0.22, true)
+					if row.item then
+						GameTooltip:AddLine(T("Preview costs start from this simulated item."), 1, 1, 1, true)
+						AddPreview(current, draft, evaluated, row.item)
+					end
+				end
+			end
 			GameTooltip:Show()
 		end)
-		row.iconButton:SetScript("OnLeave", function()
-			if GameTooltip and GameTooltip:IsOwned(row.iconButton) then GameTooltip:Hide() end
-		end)
+		row.iconButton:SetScript("OnLeave", function() ClearPreview(row.iconButton) end)
 		rows[used] = row
 	end
 	row:ClearAllPoints()
@@ -317,7 +384,7 @@ local function Row()
 	row.iconButton:Hide()
 	if row.tier then row.tier:Hide(); row.stars:Hide() end
 	if row.action then row.action:Hide() end
-	row.slot = nil
+	row.slot, row.item, row.simulated, row.plan, row.change = nil, nil, nil, nil, nil
 	return row
 end
 
@@ -340,11 +407,12 @@ end
 
 local function Gap() y = y + 9 end
 
-local function ChangeRows(current, changes)
+local function ChangeRows(current, changes, plan)
 	for _, row in ipairs(changes) do
 		local cat = current.catalog
-		Line(F("%s · %s → %s · %s", L(SLOT[row.slot]), ItemText(cat, row.before), ItemText(cat, row.after), QuoteText(row.quote)),
+		local widget = Line(F("%s · %s → %s · %s", L(SLOT[row.slot]), ItemText(cat, row.before), ItemText(cat, row.after), QuoteText(row.quote)),
 			false, ItemIcon(cat, current.context.class, row.after, row.before), row.slot)
+		widget.plan, widget.change, widget.simulated, widget.item = plan, row, not plan, row.after
 	end
 end
 
@@ -358,6 +426,7 @@ local function SearchFor(current)
 end
 
 local function LoadPlan(index)
+	if not Read() then return end
 	local selected = searches and searches[index]
 	if not selected or selected.worker or selected.error then return end
 	draft = Planner.Copy(selected.pieces)
@@ -384,8 +453,8 @@ local function OutputPlan(current, index)
 	head.action:SetText(T("Load in Simulator"))
 	head.action:SetScript("OnClick", function() LoadPlan(index) end)
 	head.action:Show()
-	local rows, quote = Planner.Changes(current.catalog, current.context.pieces, plan.pieces, current.drops)
-	Line(F("Difficulty %s → %s · %d gold in upgrades", ShortPercent(current.current.combined), ShortPercent(plan.after), quote.gold))
+	local rows, quote = Planner.Changes(current.catalog, current.context.pieces, plan.pieces, current.drops, current.context.class)
+	Line(F("Modeled pressure %s → %s · %d gold in upgrades", ShortPercent(current.current.combined), ShortPercent(plan.after), quote.gold))
 	if current.current.combined <= 100 then
 		Line(T("At or below 100%. No upgrades required."))
 		return
@@ -411,7 +480,7 @@ local function OutputPlan(current, index)
 	if quote.estimated then Line(T("Some star prices are model estimates.")) end
 	if plan.excluded then Line(T("Options with unavailable upgrade gold were excluded.")) end
 	if next(current.actual.opaque) then Line(T("Preserves active set effects whose combat value is unknown.")) end
-	ChangeRows(current, rows)
+	ChangeRows(current, rows, plan)
 end
 
 local function SaveBaseline()
@@ -420,6 +489,7 @@ local function SaveBaseline()
 	if not saved then return end
 	if time then saved.at = time() end
 	Settings().baselines[saved.class] = saved
+	ClearPreview()
 	state, searches = nil, nil
 	render()
 end
@@ -431,7 +501,7 @@ local function ContextLines(current)
 	Line((class and L(class.name) or T("Class unavailable")) .. " · "
 		.. MapTitle(context.zone, context.level, observedZone.zname), true)
 	if not current.actual then Line(T("Current equipment unavailable. Waiting for the game to send equipped items.")) end
-	if current.saved then
+	if type(current.saved) == "table" then
 		local saved = current.saved
 		local offset = SurvivorUI_TimeZone and SurvivorUI_TimeZone()
 		local captured = type(saved.at) == "number" and date and date("%Y-%m-%d %H:%M", saved.at + (offset or 0))
@@ -443,12 +513,22 @@ local function ContextLines(current)
 		Line(T("Set a 100% baseline for this class to compare difficulty."))
 	end
 	if current.issue == "incompatible" then Line(T("The saved baseline uses incompatible game data. Set a new one when ready.")) end
+	if current.issue == "updated" then Line(T("The saved setup was reevaluated using current model values.")) end
+	local target = context.scope == "standard-only"
+	local baseline = current.reference and current.reference.scope == "standard-only"
+	if target or baseline then
+		local side = target and baseline and "baseline and target" or target and "target" or "baseline"
+		Line(F("Standard Campaign comparison. Additional difficulty rules are omitted for the %s.", T(side)))
+	end
+	if context.scope == "unsupported" then Line(T("Campaign pressure and plans are unavailable in this mode.")) end
 end
 
 local function PlannerView(current)
 	if not current then return end
 	Line(DifficultyLine(current.current), true)
-	if not current.context.demand then Line(T("The game has not reported a supported selected Campaign map and difficulty.")) end
+	if not current.context.demand and current.context.scope ~= "unsupported" then
+		Line(T("The game has not reported a supported selected Campaign map and difficulty."))
+	end
 	if current.actual and not current.actual.survival then Line(T("Survival estimate unavailable for this class data.")) end
 	if current.reference and current.context.demand then
 		local map = current.context.demand
@@ -456,8 +536,9 @@ local function PlannerView(current)
 		Line(F("Map demand vs. baseline · enemy health %s · first boss hit %s",
 			ShortPercent(map.output and 100 * map.output / old.output), ShortPercent(map.survival and 100 * map.survival / old.survival)))
 	end
-	if current.actual and (current.current.output or current.current.survival) then
-		Line(T("Equipment-only estimate. Skills, talents, encounter mechanics and modifiers can change actual pressure."))
+	if current.context.demand then
+		Line(T("Output uses gear Damage. Survival uses class starting HP, gear HP and Damage Reduction capped at 60%."))
+		Line(T("Plans optimize modeled pressure. Gameplay calibration is pending. Critical chance and damage, cooldown, Echo, recovery, movement, area, talents, summons, density and encounter rules such as Rifts and Endless are excluded."))
 	end
 	Gap()
 	SearchFor(current)
@@ -472,6 +553,7 @@ local function Menu(row, field, width, offset, options, set)
 	UIDropDownMenu_SetWidth(menu, width)
 	UIDropDownMenu_Initialize(menu, function()
 		local context, slot = Read(), row.slot
+		if not context or not slot then return end
 		for _, entry in ipairs(options(row)) do
 			local value = entry[1]
 			local info = UIDropDownMenu_CreateInfo()
@@ -488,18 +570,23 @@ end
 local function EditSlot(row, tier, star)
 	local current = Read()
 	if not current or not draft or not row.slot then return end
+	if tier and not Gear.ValidPiece(current.catalog, current.context.class, row.slot, tier, star) then return end
 	draft = Planner.Replace(draft, row.slot, tier, star)
 	render()
 end
 
 local function EquipmentControls(current, slot, simulated, actual)
 	local row = Line(L(SLOT[slot]), false, ItemIcon(current.catalog, current.context.class, simulated, actual), slot, 260)
-	row.item = simulated
+	row.item, row.simulated = simulated, true
 	if not row.tier then
-		row.tier = Menu(row, "tier", 130, 222, function()
+		row.tier = Menu(row, "tier", 130, 222, function(widget)
 			local ctx = Read()
 			local options = { { false, T("Empty slot") } }
-			for _, key in ipairs(Planner.Tiers(ctx.catalog)) do table.insert(options, { key, TierText(ctx.catalog, key) }) end
+			for _, key in ipairs(Planner.Tiers(ctx.catalog)) do
+				if Gear.ValidPiece(ctx.catalog, ctx.context.class, widget.slot, key, 0) then
+					table.insert(options, { key, TierText(ctx.catalog, key) })
+				end
+			end
 			return options
 		end, function(widget, tier)
 			local real = Planner.BySlot(Read().context.pieces)[widget.slot]
@@ -538,7 +625,7 @@ local function SimulatorView(current)
 			simulated.combined - current.current.combined, simulated.output - current.current.output,
 			simulated.survival - current.current.survival))
 	end
-	local changes, quote = Planner.Changes(catalog, context.pieces, draft, current.drops)
+	local changes, quote = Planner.Changes(catalog, context.pieces, draft, current.drops, context.class)
 	Line(F("Calculable upgrade gold: %d", quote.gold))
 	if quote.unknown then Line(T("Some upgrade prices are unavailable.")) end
 	if quote.acquisition then Line(T("Replacement gear is hypothetical. Ownership and direct ascension are unavailable here.")) end
@@ -561,7 +648,7 @@ local function SimulatorView(current)
 	header.action:Show()
 	local previous, wanted = Planner.BySlot(context.pieces), Planner.BySlot(draft)
 	if UIDropDownMenu_Initialize then
-		for _, slot in ipairs(Planner.Slots(catalog, context.class, context.pieces)) do
+		for _, slot in ipairs(Planner.Slots(catalog, context.class)) do
 			EquipmentControls(current, slot, wanted[slot], previous[slot])
 		end
 	end
@@ -574,6 +661,7 @@ end
 
 render = function()
 	if rendering or not panel or not panel:IsShown() then return end
+	if not previewIsNative then ClearPreview() end
 	rendering, used, y = true, 0, 0
 	local current = Read()
 	ContextLines(current)
@@ -661,6 +749,7 @@ local function Build()
 	content:SetHeight(1)
 	scroll:SetScrollChild(content)
 	panel:SetScript("OnHide", function()
+		if not previewIsNative then ClearPreview() end
 		panel:SetScript("OnUpdate", nil)
 		if searches and ((searches[1] and searches[1].worker) or (searches[2] and searches[2].worker)) then searches = nil end
 	end)
@@ -690,21 +779,28 @@ local function InstallListeners()
 	if not SurvivorUI_RebornGearEnabled() or registered or not (AZS and type(AZS.On) == "function") then return end
 	registered = true
 	AZS.On("AZSZONE", function()
-		if not SurvivorUI_RebornGearEnabled() or type(AZS_ZONE) ~= "table" then return end
-		if not observedZone or ZoneKey(observedZone) ~= ZoneKey(AZS_ZONE) then
+		if not SurvivorUI_RebornGearEnabled() then return end
+		local snapshot = Snapshot(AZS_ZONE)
+		local changed = not SameZone(observedZone, snapshot)
+		if changed then
 			worn = nil
 			ClearState()
 		end
-		observedZone = AZS_ZONE
+		observedZone = snapshot
 		InstallInspectHook()
-		render()
+		if changed then render() end
 	end)
 	AZS.On("AZSARMOR", function()
-		if not SurvivorUI_RebornGearEnabled() or not observedZone or not AZS_ZONE
-			or ZoneKey(observedZone) ~= ZoneKey(AZS_ZONE) then return end
-		local class = type(observedZone.class) == "string" and string.lower(observedZone.class)
-		local pieces = class and Gear.Worn(Gear.Catalog(AZS_GEN), class, AZS_ARMOR)
-		if type(AZS_ARMOR) == "table" and next(AZS_ARMOR) == nil then pieces = {} end
+		if not SurvivorUI_RebornGearEnabled() or not observedZone then return end
+		if not SameZone(observedZone, Snapshot(AZS_ZONE)) then
+			observedZone, worn = nil, nil
+			ClearState()
+			render()
+			return
+		end
+		-- The armor wire has no run ID. Only accept it after the current zone
+		-- boundary, and never attach an earlier cached armor table at entry.
+		local pieces = Gear.Worn(Gear.Catalog(AZS_GEN), observedZone.class, AZS_ARMOR)
 		if not PieceListsEqual(worn, pieces) then
 			worn = pieces
 			ClearState()
@@ -713,10 +809,7 @@ local function InstallListeners()
 		InstallInspectHook()
 	end)
 	AZS.On("AZSHELLO", function()
-		if state and SurvivorUI_RebornGearEnabled() and AZS.ServerBuild ~= state.context.build then
-			state, searches = nil, nil
-			render()
-		end
+		if state and SurvivorUI_RebornGearEnabled() then state.context.build = AZS.ServerBuild end
 	end)
 end
 

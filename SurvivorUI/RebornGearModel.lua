@@ -5,6 +5,8 @@ local Gear = {}
 SurvivorUI_RebornGearModel = Gear
 local BASE = { "common", "uncommon", "rare", "epic", "legendary", "pvp" }
 local ORDER = { common = 1, uncommon = 2, rare = 3, epic = 4, pvp = 5, legendary = 6 }
+local STOCK_MAIN = { warrior = true, paladin = true, priest = true, deathknight = true,
+	mage = true, warlock = true, druid = true }
 local EPS = 0.000000001
 -- From the November 16, 2026 armor price chart. The numbers already include
 -- the price reduction. Integer tenths of each factor avoid floating-point rounding.
@@ -17,9 +19,19 @@ local function Integer(value, maximum)
 	return n and n >= 0 and n <= maximum and n == math.floor(n) and n or nil
 end
 
+function Gear.ListSize(list, maximum)
+	if type(list) ~= "table" then return end
+	local count, last = 0, 0
+	for key in pairs(list) do
+		if type(key) ~= "number" or not Integer(key, maximum) or key < 1 then return end
+		count, last = count + 1, math.max(last, key)
+	end
+	if count == last then return count end
+end
+
 function Gear.Catalog(gen)
 	if type(gen) ~= "table" or type(gen.pieces) ~= "table" then return nil end
-	local p, tiers = gen.pieces, {}
+	local p, tiers, classes, layouts = gen.pieces, {}, {}, {}
 	local scale = p.scale
 	if type(scale) ~= "table" or not Integer(scale.top, 20) or not Integer(scale.steps, scale.top)
 		or type(scale.factor) ~= "number" or scale.factor <= 0
@@ -32,6 +44,7 @@ function Gear.Catalog(gen)
 	end
 	for index, raw in ipairs(gen.gearTiers or {}) do
 		tiers[raw.key] = { id = index + 5, rank = raw.rank, slot = raw.slot_scale, profile = raw.profile_scale,
+			weaponIcons = raw.weapon_icons,
 			step = raw.star_step, last = raw.star_last, starFactor = tonumber(raw.star_factor), pair = raw.pair, name = raw.name }
 	end
 	for _, tier in pairs(tiers) do
@@ -44,13 +57,59 @@ function Gear.Catalog(gen)
 		if not slot or not slot.key then return nil end
 		slots[slot.key] = { data = slot, index = i }
 	end
-	return { native = gen, pieces = p, tiers = tiers, slots = slots }
+	for _, class in ipairs(gen.classes or {}) do
+		local key = class.key
+		classes[key] = class
+		local layout = class.weaponLayout or class.weapon_layout
+		if not layout then
+			-- The stock Hunter uses ranged gear. Pack-native weapon lists provide
+			-- positive evidence for the other classes' off-hand gear.
+			local weapons = class.gear and class.gear.weapons
+			local main = weapons and weapons[1]
+			local dual = weapons and weapons[2]
+			for _, tier in pairs(tiers) do
+				local icons = tier.weaponIcons and tier.weaponIcons[key]
+				main = main or (icons and icons[1])
+				dual = dual or (icons and icons[2])
+			end
+			layout = key == "hunter" and "ranged" or dual and "dual_wield"
+				or (main or STOCK_MAIN[key]) and "main_hand" or nil
+		end
+		layouts[key] = layout
+	end
+	return { native = gen, pieces = p, tiers = tiers, slots = slots, classes = classes, layouts = layouts }
+end
+
+function Gear.ValidSlot(catalog, class, slot)
+	local s = catalog.slots[slot]
+	local profile = catalog.pieces.classProfiles[class]
+	if not s or not profile or not catalog.classes[class] then return false end
+	if s.index < 8 then return catalog.pieces.profiles[profile[s.index + 1]] ~= nil end
+	local layout = catalog.layouts[class]
+	return (s.index == 8 and (layout == "main_hand" or layout == "dual_wield"))
+		or (s.index == 9 and layout == "dual_wield") or (s.index == 10 and layout == "ranged")
+end
+
+function Gear.ValidPiece(catalog, class, slot, tier, stars)
+	return Gear.ValidSlot(catalog, class, slot) and catalog.tiers[tier] ~= nil
+		and type(stars) == "number" and Integer(stars, catalog.pieces.scale.top) ~= nil
+end
+
+function Gear.DropSlot(catalog, class, slot, tier)
+	if not Gear.ValidPiece(catalog, class, slot, tier, 0) then return false end
+	local index = catalog.slots[slot].index
+	if index < 8 then return true end
+	-- An absent class override falls back to Legendary weapon appearance.
+	-- An explicit but incomplete override does not establish a second drop.
+	local icons = catalog.tiers[tier].weaponIcons
+	local weapons = icons and icons[class]
+	return not weapons or weapons[index == 9 and 2 or 1] ~= nil
 end
 
 function Gear.StarQuote(catalog, slot, tier, targetStar)
 	local s, t = catalog.slots[slot], catalog.tiers[tier]
 	local base, factor = STAR_BASE_GOLD[targetStar], STAR_FACTORS[tier]
-	if not s or not t or not base or not factor then return end
+	if not s or not t or not base or not factor or targetStar > catalog.pieces.scale.top then return end
 	if t.starFactor and math.abs(t.starFactor * 10 - factor) > EPS then return end
 	local estimated = tier == "exotic" or tier == "elementium" or (tier == "legendary" and targetStar == 5)
 	return math.floor((base * factor + 5) / 10), estimated and "estimated" or (s.index < 8 and "table" or "weapon")
@@ -60,7 +119,7 @@ function Gear.Piece(catalog, class, slot, tier, stars)
 	local s, t = catalog.slots[slot], catalog.tiers[tier]
 	local p = catalog.pieces
 	local profiles = p.classProfiles[class]
-	if not s or not t or not profiles or not Integer(stars, p.scale.top) then return nil end
+	if not Gear.ValidPiece(catalog, class, slot, tier, stars) then return end
 	local profile = s.data.profile and p.profiles[profiles[s.index + 1]]
 	local result = {}
 	local gain = (1 + math.min(stars, p.scale.steps) * t.step + (stars == p.scale.top and t.last or 0)) * p.scale.factor
@@ -72,23 +131,23 @@ end
 -- AZSARMOR sends numeric slot and rarity IDs. Record the entire worn list or
 -- reject the snapshot if a row cannot be mapped.
 function Gear.Worn(catalog, class, rows)
-	if not catalog or not catalog.pieces.classProfiles[class] or type(rows) ~= "table" then return end
+	if not catalog or not catalog.classes[class] or not Gear.ListSize(rows, 11) then return end
 	local byId, used, pieces = {}, {}, {}
 	for key, tier in pairs(catalog.tiers) do byId[tier.id] = key end
 	for _, row in ipairs(rows) do
 		if type(row) ~= "table" then return end
+		local index = Integer(row.slot, 10)
+		local slot = index and catalog.pieces.slots[index].key
+		if not slot or used[slot] or not Gear.ValidSlot(catalog, class, slot) then return end
+		used[slot] = true
 		if row.rarity ~= nil and row.rarity ~= "" then
-			local index = Integer(row.slot, 10)
-			local slot = index and catalog.pieces.slots[index].key
 			local tier = byId[Integer(row.rarity, 9)]
 			local stars = Integer(row.stars, catalog.pieces.scale.top)
-			if not slot or not tier or not stars or used[slot] then return end
-			used[slot] = true
+			if not Gear.ValidPiece(catalog, class, slot, tier, stars) then return end
 			table.insert(pieces, { slot = slot, tier = tier, stars = stars, icon = row.icon,
 				name = row.name, set = row.set, observed = row.stats })
 		end
 	end
-	if not pieces[1] then return end
 	table.sort(pieces, function(a, b) return catalog.slots[a.slot].index < catalog.slots[b.slot].index end)
 	return pieces
 end
