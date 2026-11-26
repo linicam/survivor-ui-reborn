@@ -289,6 +289,53 @@ function PutFile($path, $contentText, $message) {
     if ($null -eq $res) { throw "Upload failed for $path. Check your connection and run the script again." }
 }
 
+function ConvertTo-SortedValue($value) {
+    if ($null -eq $value) { return $null }
+    if ($value -is [System.Collections.IDictionary]) {
+        $sorted = [ordered]@{}
+        foreach ($key in @($value.Keys | Sort-Object)) {
+            $sorted[[string]$key] = ConvertTo-SortedValue $value[$key]
+        }
+        return $sorted
+    }
+    if ($value -is [pscustomobject]) {
+        $sorted = [ordered]@{}
+        foreach ($prop in @($value.PSObject.Properties | Sort-Object Name)) {
+            $sorted[$prop.Name] = ConvertTo-SortedValue $prop.Value
+        }
+        return $sorted
+    }
+    if ($value -is [System.Collections.IEnumerable] -and $value -isnot [string]) {
+        $items = @()
+        foreach ($item in $value) { $items += ,(ConvertTo-SortedValue $item) }
+        return ,$items
+    }
+    return $value
+}
+function New-EventChunks($events, $maxBytes) {
+    $chunks = @()
+    $current = @()
+    $currentBytes = 2
+    foreach ($event in $events) {
+        $json = ConvertTo-SortedValue $event | ConvertTo-Json -Depth 30 -Compress
+        $bytes = [System.Text.Encoding]::UTF8.GetByteCount($json)
+        $extra = $bytes
+        if ($current.Count -gt 0) { $extra += 1 }
+        if ($current.Count -gt 0 -and ($currentBytes + $extra) -gt $maxBytes) {
+            $chunks += ,("[" + ($current -join ",") + "]")
+            $current = @()
+            $currentBytes = 2
+            $extra = $bytes
+        }
+        $current += ,$json
+        $currentBytes += $extra
+    }
+    if ($current.Count -gt 0 -or $chunks.Count -eq 0) {
+        $chunks += ,("[" + ($current -join ",") + "]")
+    }
+    return ,$chunks
+}
+
 # ---------- Main ----------
 $BaseDir = "sessions"
 if ($SelfTest) { $BaseDir = "test" }
@@ -368,6 +415,19 @@ if ($SelfTest) {
     AssertSelfTest ($events[2].data["items"][0]["name"] -eq "埃库利亚指环") "Chinese jewelry name was not preserved"
     AssertSelfTest ($events[3].data["lines"].Count -eq 1) "tooltip lines must remain a single-element array"
     AssertSelfTest ($events[3].data["lines"][0] -eq "Upgrades: +10% damage") "tooltip line was not preserved"
+    $bigPayload = "x" * 12000
+    $bigEvents = @()
+    for ($i = 1; $i -le 200; $i++) {
+        $bigEvents += ,@{ seq = $i; type = "synthetic"; data = @{ text = $bigPayload } }
+    }
+    $bigChunks = New-EventChunks $bigEvents 524288
+    AssertSelfTest ($bigChunks.Count -gt 1) "payload over 1 MB must produce multiple chunks"
+    $bigParsed = @()
+    foreach ($chunk in $bigChunks) {
+        AssertSelfTest ([System.Text.Encoding]::UTF8.GetByteCount($chunk) -le 524288) "chunk must not exceed 512 KiB"
+        $bigParsed += @($chunk | ConvertFrom-Json)
+    }
+    AssertSelfTest ($bigParsed.Count -eq 200) "all synthetic events must survive chunking"
 }
 
 function Process-DiagnosticSession($sessionId, $recoveredActive) {
