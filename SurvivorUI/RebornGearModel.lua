@@ -163,7 +163,7 @@ function Gear.Parse(catalog, class, text)
 				cost = cost + (steps[i] or 0)
 				local stats = Gear.Piece(catalog, class, slot, tier, star + i)
 				table.insert(entry.choices, { slot = slot, tier = tier, stars = star + i, cost = cost,
-					kind = kind, stats = stats, power = stats.damage or 0 })
+					kind = kind, stats = stats, power = stats.damage or 0, armor = catalog.slots[slot].index < 8 })
 			end
 		end
 	end
@@ -201,15 +201,58 @@ local function Better(candidate, existing)
 		or (math.abs(candidate.power - existing.power) <= EPS and candidate.changes < existing.changes)
 end
 
+-- Each tier only needs its strongest active threshold. Preserving it also
+-- preserves the lower thresholds on that tier. Unknown combat effects need
+-- no numeric ranking for this comparison.
+function Gear.SetRequirements(sets, rules)
+	local requirements = {}
+	for tier, bonuses in pairs(sets or {}) do
+		local need, stars = 0, 0
+		for _, bonus in ipairs(bonuses) do
+			local level = bonus.strong and rules.empowerStars
+				or (bonus.pieces == rules.pieces[2] and rules.stars[2] or rules.stars[1])
+			if level > stars then
+				need = bonus.strong and rules.pieces[2] or bonus.pieces
+				stars = level
+			end
+		end
+		if stars > 0 then table.insert(requirements, { tier = tier, stars = stars, count = need }) end
+	end
+	table.sort(requirements, function(a, b) return a.tier < b.tier end)
+	return requirements
+end
+
+local function StateCode(requirements, state, piece)
+	local nextState, code = {}, 0
+	for index, req in ipairs(requirements) do
+		local count = state[index] or 0
+		if piece.armor and piece.tier == req.tier and piece.stars >= req.stars then
+			count = math.min(req.count, count + 1)
+		end
+		nextState[index], code = count, code * 9 + count
+	end
+	return code, nextState
+end
+
+function Gear.KeepsSets(pieces, requirements)
+	local progress = {}
+	for _, piece in ipairs(pieces) do local _, nextState = StateCode(requirements, progress, piece); progress = nextState end
+	for index, req in ipairs(requirements) do if progress[index] ~= req.count then return false end end
+	return true
+end
+
 -- Exact only for the scalar gear-damage scenario and declared, priced candidates.
 -- Unknown set effects are evaluated and disclosed alongside the resulting configurations.
-function Gear.Optimize(plan, needed, farm, limit)
+function Gear.Optimize(plan, needed, farm, limit, requirements)
+	requirements = requirements or {}
 	local currentPower = 0
 	for _, piece in ipairs(plan.current) do currentPower = currentPower + piece.power end
-	if currentPower + EPS >= needed then
+	if currentPower + EPS >= needed and (not requirements[1] or Gear.KeepsSets(plan.current, requirements)) then
 		return { cost = 0, pieces = plan.current, power = currentPower, reached = true }
 	end
-	local states, evaluations = { { cost = 0, power = 0, changes = 0 } }, 0
+	local states, evaluations = { { cost = 0, power = 0, changes = 0, progress = {}, code = 0 } }, 0
+	local full = 0
+	for _, req in ipairs(requirements) do full = full * 9 + req.count end
 	for _, group in ipairs(plan.groups) do
 		local current = group.worn and group.worn.choices[1]
 		local options = {}
@@ -219,32 +262,48 @@ function Gear.Optimize(plan, needed, farm, limit)
 				for _, option in ipairs(entry.choices) do table.insert(options, option) end
 			end
 		end
-		local best, costs = {}, {}
+		local partitions, codes = {}, {}
 		for _, prior in ipairs(states) do
 			for _, option in ipairs(options) do
 				evaluations = evaluations + 1
 				if evaluations > (limit or 24000) then return nil, "limit" end
 				local cost, power = prior.cost + option.cost, prior.power + option.power
 				local change = (option.slot and option ~= current) and 1 or 0
-				local candidate = { cost = cost, power = power, changes = prior.changes + change, prior = prior, piece = option }
-				if not best[cost] then table.insert(costs, cost) end
-				if Better(candidate, best[cost]) then best[cost] = candidate end
+				local code, progress = 0, prior.progress
+				if full > 0 then code, progress = StateCode(requirements, prior.progress, option) end
+				local partition = partitions[code]
+				if not partition then
+					partition = { best = {}, costs = {} }
+					partitions[code] = partition
+					table.insert(codes, code)
+				end
+				local candidate = { cost = cost, power = power, changes = prior.changes + change,
+					prior = prior, piece = option, progress = progress, code = code }
+				if not partition.best[cost] then table.insert(partition.costs, cost) end
+				if Better(candidate, partition.best[cost]) then partition.best[cost] = candidate end
 			end
 		end
-		table.sort(costs)
 		states = {}
-		local power = -1
-		for _, cost in ipairs(costs) do
-			if best[cost].power > power + EPS then
-				power = best[cost].power
-				table.insert(states, best[cost])
+		table.sort(codes)
+		for _, code in ipairs(codes) do
+			local partition, power = partitions[code], -1
+			table.sort(partition.costs)
+			for _, cost in ipairs(partition.costs) do
+				if partition.best[cost].power > power + EPS then
+					power = partition.best[cost].power
+					table.insert(states, partition.best[cost])
+				end
 			end
 		end
 	end
-	local chosen = states[table.getn(states)]
+	local chosen
 	for _, result in ipairs(states) do
-		if result.power + EPS >= needed then chosen = result; break end
+		if result.code == full then
+			chosen = result
+			if result.power + EPS >= needed then break end
+		end
 	end
+	if not chosen then return nil, "sets" end
 	local pieces, node = {}, chosen
 	while node.piece do
 		if node.piece.slot then table.insert(pieces, 1, node.piece) end

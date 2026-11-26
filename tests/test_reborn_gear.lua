@@ -64,15 +64,32 @@ near(G.Pressure(SurvivorUI_RebornMapReference, "naxx", 5), 2.72)
 local ratio, target = G.Scenario(1.2, { pressure = 1, damage = 0.2 }, 0.2, 0.1)
 near(ratio, 1.2); near(target, 0.46)
 
+local four = assert(G.Parse(cat, "warlock", table.concat({
+	"head common 1 worn 60", "shoulders common 1 worn 1", "chest common 1 worn 100",
+	"waist common 1 worn 90", "head legendary 0 farm", "main_hand common 0 worn"
+}, "\n")))
+local _, active = G.Totals(cat, "warlock", four.current)
+local protection = G.SetRequirements(active, cat.native.setRules)
+assert(protection[1].stars == 1 and protection[1].count == 4)
+local free = assert(G.Optimize(four, 0.65, true))
+assert(free.cost == 0 and not G.KeepsSets(free.pieces, protection))
+local careful = assert(G.Optimize(four, 0.65, true, nil, protection))
+assert(careful.cost == 1 and G.KeepsSets(careful.pieces, protection))
+assert(not G.Optimize(four, 99, true, nil, protection).reached)
+
 -- An independent exhaustive enumerator checks the frontier and both tie breaks.
 math.randomseed(8245)
-local function Exhaustive(options, target)
+local function Exhaustive(options, target, protected)
 	local best
-	local function Visit(i, cost, power)
+	local function Visit(i, cost, power, eligible)
 		if i <= #options then
-			for _, choice in ipairs(options[i]) do Visit(i + 1, cost + choice.cost, power + choice.power) end
+			for _, choice in ipairs(options[i]) do
+				local counts = choice.armor and choice.tier == "common" and choice.stars >= 1
+				Visit(i + 1, cost + choice.cost, power + choice.power, eligible + (counts and 1 or 0))
+			end
 			return
 		end
+		if eligible < protected then return end
 		local reaches = power >= target
 		if not best or (reaches and not best.reached)
 			or (reaches and best.reached and (cost < best.cost or (cost == best.cost and power > best.power)))
@@ -80,20 +97,27 @@ local function Exhaustive(options, target)
 			best = { cost = cost, power = power, reached = reaches }
 		end
 	end
-	Visit(1, 0, 0)
+	Visit(1, 0, 0, 0)
 	return best
 end
 for _ = 1, 400 do
 	local slots, choices, worn = {}, {}, {}
 	for i = 1, 4 do
-		local options = { { slot = keys[i], cost = 0, power = 0 } }
-		for _ = 1, 4 do table.insert(options, { slot = keys[i], cost = math.random(0, 10), power = math.random(0, 10) }) end
+		local options = { { slot = keys[i], cost = 0, power = 0, armor = true, tier = "common", stars = i - 1 } }
+		for j = 1, 4 do
+			table.insert(options, { slot = keys[i], cost = math.random(0, 10), power = math.random(0, 10),
+				armor = true, tier = j <= 2 and "common" or "rare", stars = math.random(0, 5) })
+		end
 		local entry = { choices = options }
 		slots[i], choices[i], worn[i] = { worn = entry, entries = { entry } }, options, options[1]
 	end
 	local threshold = math.random(1, 45)
-	local expected = Exhaustive(choices, threshold)
+	local expected = Exhaustive(choices, threshold, 0)
 	local got = assert(G.Optimize({ groups = slots, current = worn }, threshold, true))
+	assert(got.cost == expected.cost and got.power == expected.power and got.reached == expected.reached)
+	expected = Exhaustive(choices, threshold, 3)
+	got = assert(G.Optimize({ groups = slots, current = worn }, threshold, true, nil,
+		{ { tier = "common", stars = 1, count = 3 } }))
 	assert(got.cost == expected.cost and got.power == expected.power and got.reached == expected.reached)
 end
 
@@ -151,6 +175,12 @@ AZS_GEN.pieces.scale.factor = 0.71
 buttons.Difficulty.scripts.OnClick()
 assert(string.find(table.concat(output.messages, "\n"), "Save a reference", 1, true), "changed catalog invalidates reference")
 AZS_GEN.pieces.scale.factor = 0.7
+input:SetText("warlock naxx 1 0 main_hand")
+items:SetText("main_hand common 0 worn\nmain_hand rare 0 farm")
+buttons["Gear preview"].scripts.OnClick()
+local previews = table.concat(output.messages, "\n")
+assert(string.find(previews, "rare ★3 · price unknown", 1, true))
+assert(string.find(previews, "common ★5 · price unknown", 1, true))
 SurvivorUI_RebornGearOpen("toggle planner")
 buttons["Farm & Upgrade"].scripts.OnClick()
 assert(logs[#logs] == "This gear analysis feature is disabled.")

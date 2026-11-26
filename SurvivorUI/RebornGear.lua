@@ -110,7 +110,7 @@ local function UpgradePreview(s, ref)
 			for _, entry in ipairs(group.entries) do
 				local indices, seen = {}, {}
 				local function Include(index)
-					if entry.choices[index] and not seen[index] then
+					if index >= 1 and entry.start + index - 1 <= 5 and not seen[index] then
 						seen[index] = true
 						table.insert(indices, index)
 					end
@@ -122,18 +122,16 @@ local function UpgradePreview(s, ref)
 				end
 				for _, index in ipairs(indices) do
 					local option = entry.choices[index]
-					local cost = option.cost
-					Add(string.format(T("%s ★%d · %s · %d extra gold"), option.tier, option.stars, T(option.kind), cost))
+					if option then
+						Add(string.format(T("%s ★%d · %s · %d extra gold"), option.tier, option.stars, T(option.kind), option.cost))
+					else
+						local stars = entry.start + index - 1
+						option = { slot = entry.slot, tier = entry.tier, stars = stars,
+							stats = Gear.Piece(s.catalog, s.class, entry.slot, entry.tier, stars) }
+						Add(string.format(T("%s ★%d · price unknown"), option.tier, option.stars))
+					end
 					Add(Delta(current and current.stats or {}, option.stats))
 					local totals, sets = Replacement(s, option)
-					local ratio = Gear.Scenario(s.pressure, ref, totals.damage or 0, s.background)
-					if ratio then Add(string.format(T("Modeled opening output pressure %.1f%%"), ratio * 100)) end
-					CompareSets(s.sets, sets)
-				end
-				if entry == group.worn and entry.start < 5 and not entry.choices[2] then
-					local stats = Gear.Piece(s.catalog, s.class, entry.slot, entry.tier, entry.start + 1)
-					Add(T("Next star · price unknown") .. " · " .. Delta(current.stats, stats))
-					local totals, sets = Replacement(s, { slot = entry.slot, tier = entry.tier, stars = entry.start + 1, stats = stats })
 					local ratio = Gear.Scenario(s.pressure, ref, totals.damage or 0, s.background)
 					if ratio then Add(string.format(T("Modeled opening output pressure %.1f%%"), ratio * 100)) end
 					CompareSets(s.sets, sets)
@@ -152,10 +150,14 @@ local function Reference(s, settings)
 	return ref
 end
 
-local function ShowPlan(s, needed, farm, ref)
-	Add(T(farm and "Farm & Upgrade" or "Stars Only"))
-	local plan = Gear.Optimize(s.pieces, needed, farm)
-	if not plan then Add(T("Search limit reached. Narrow the candidate list.")); return end
+local function ShowPlan(s, needed, farm, ref, requirements)
+	Add(T(requirements and "Keep currently active sets" or (farm and "Farm & Upgrade" or "Stars Only")))
+	local plan, reason = Gear.Optimize(s.pieces, needed, farm, nil, requirements)
+	if not plan then
+		Add(T(reason == "sets" and "No listed setup keeps these set thresholds."
+			or "Search limit reached. Narrow the candidate list."))
+		return
+	end
 	local ratio = Gear.Scenario(s.pressure, ref, plan.power, s.background)
 	Add(string.format(T("%d extra gold · modeled pressure %.1f%%"), plan.cost, ratio * 100))
 	Add(T(plan.reached and "Target met in the listed damage scenario." or "Best listed damage still leaves a gap."))
@@ -189,6 +191,7 @@ local function ShowPlan(s, needed, farm, ref)
 	Add(T("Total attribute change") .. " · " .. Delta(s.stats, stats))
 	CompareSets(s.sets, sets)
 	Add(T("Preview set changes before equipping replacements together."))
+	return plan
 end
 
 local function Calculate(action)
@@ -252,7 +255,14 @@ local function Calculate(action)
 	if ratio > 1 then Add(string.format(T("Additional modeled damage required %.1f%%"), 100 * (ratio - 1))) end
 	Add(T("Scenario uses listed damage only. Set effects, spawn patterns, crit and cooldown stay separate."))
 	if state.tier >= 3 or ref.tier >= 3 then Add(T("Heroic affixes can change the actual workload.")) end
-	if action == "stars" or action == "farm" then ShowPlan(state, needed, action == "farm", ref) end
+	if action == "stars" or action == "farm" then
+		local farm = action == "farm"
+		local result = ShowPlan(state, needed, farm, ref)
+		if farm and result and state.sets and next(state.sets) then
+			local requirements = Gear.SetRequirements(state.sets, state.catalog.native.setRules)
+			if not Gear.KeepsSets(result.pieces, requirements) then ShowPlan(state, needed, true, ref, requirements) end
+		end
+	end
 end
 
 local function RunAction(action)
