@@ -29,6 +29,8 @@ database, bounded by event count and approximate serialized size;
 low-priority events drop first and drops are counted per type.
 Owner identifiers are replaced with stable session-local pseudonyms
 (`player-1`, ...). Recording is off by default.
+Native card payloads, spell descriptions, and manual marks can contain
+free-form text. Review any data you choose to share.
 
 ## Upload
 
@@ -38,6 +40,8 @@ verifies the destination repository is private, uploads
 hash, and updates `latest.json` only for the newest verified
 session. Identical re-uploads create no commits; conflicting
 contents for an existing session ID are refused.
+New exports include per-event `dropped` counts in `metadata.json` when
+available. Existing complete uploads keep their original manifests.
 
 ## Replay
 

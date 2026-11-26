@@ -425,7 +425,8 @@ if ($SelfTest) {
     $bigParsed = @()
     foreach ($chunk in $bigChunks) {
         AssertSelfTest ([System.Text.Encoding]::UTF8.GetByteCount($chunk) -le 524288) "chunk must not exceed 512 KiB"
-        $bigParsed += @($chunk | ConvertFrom-Json)
+        $decoded = ConvertFrom-Json -InputObject $chunk
+        $bigParsed += @($decoded)
     }
     AssertSelfTest ($bigParsed.Count -eq 200) "all synthetic events must survive chunking"
 }
@@ -449,6 +450,9 @@ function Process-DiagnosticSession($sessionId, $recoveredActive) {
         gameLanguage = $session.gameLanguage; class = $session.class
         startedAt = $session.startedAt; endedAt = $session.endedAt
         truncated = [bool]$session.truncated; eventCount = $events.Count; runCount = $runs
+    }
+    if ($session.dropped -is [System.Collections.IDictionary] -and $session.dropped.Count -gt 0) {
+        $meta.dropped = ConvertTo-SortedValue $session.dropped
     }
     $files["metadata.json"] = $meta | ConvertTo-Json -Depth 10 -Compress
     $chunks = New-EventChunks $events 524288
@@ -484,7 +488,8 @@ function Process-DiagnosticSession($sessionId, $recoveredActive) {
                 break
             }
             if ($name -like "events-*.json") {
-                $remoteEvents += @($remoteText | ConvertFrom-Json)
+                $decoded = ConvertFrom-Json -InputObject $remoteText
+                $remoteEvents += @($decoded)
             }
         }
         if ($remoteComplete) {
