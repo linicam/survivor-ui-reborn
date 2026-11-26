@@ -1501,6 +1501,23 @@ local function CurseEffectText(text)
 	return CurseEffectDisplay(id, pct)
 end
 
+-- Native banners are drawn before the public banner observer runs.
+-- Translate the matching raid-warning text without changing the raw event.
+if hooksecurefunc and RaidNotice_AddMessage then
+	hooksecurefunc("RaidNotice_AddMessage", function(frame, text)
+		if not (frame and frame == RaidWarningFrame and type(text) == "string"
+			and SurvivorUI_RebornActive()) then return end
+		local _, _, seconds = string.find(text,
+			"^Проклятие тяготеет над тобой: враги движутся на %d+%% быстрее %((%d+) с%)!$")
+		if not seconds then return end
+		local localized = string.format(T("Curse: %s (%d sec)!"), CurseEffectText(text), tonumber(seconds))
+		for index = 1, 2 do
+			local slot = getglobal("RaidWarningFrameSlot" .. index) or frame["slot" .. index]
+			if slot and slot.GetText and slot:GetText() == text then slot:SetText(localized) end
+		end
+	end)
+end
+
 -- Explicit ending banners observed in game: "涌动平息了。" ends the
 -- horde surge; "你的脆弱消退了。" ends damage taken. Endings clear
 -- the matching tracked curse immediately; the duration estimate is

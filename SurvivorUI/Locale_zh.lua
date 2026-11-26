@@ -424,6 +424,7 @@ SurvivorUI_WORDS.zh = {
 	["Damage taken increased "] = "受到伤害增加",
 	["Elite ambush"] = "精英伏击",
 	["Enemy speed increased "] = "敌人移动速度提高",
+	["Curse: %s (%d sec)!"] = "诅咒降临：%s（%d秒）！",
 	["Damage reduced "] = "伤害降低",
 	["Movement speed reduced "] = "移动速度降低",
 	["Cooldowns increased "] = "冷却时间延长",

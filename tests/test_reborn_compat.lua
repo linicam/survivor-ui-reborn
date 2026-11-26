@@ -70,6 +70,11 @@ end
 local scriptDir = arg and arg[0] or "tests/test_reborn_compat.lua"
 local repoRoot = string.gsub(scriptDir, "tests/test_reborn_compat%.lua$", "")
 if repoRoot == "" then repoRoot = "." end
+local raidNoticeHook
+RaidNotice_AddMessage = function() end
+hooksecurefunc = function(name, callback)
+	if name == "RaidNotice_AddMessage" then raidNoticeHook = callback end
+end
 local chunk = assert(loadfile(repoRoot .. "/SurvivorUI/RebornCompat.lua"))
 chunk()
 
@@ -900,6 +905,19 @@ locale, localeTime, curseClock = "zh", 1006, 307
 speedCurse = EnemySpeedCurse()
 eq("curse: enemy movement Chinese", speedCurse and speedCurse.text, "敌人移动速度提高50%")
 eq("curse: enemy movement counts down on run clock", speedCurse and speedCurse.left, 13)
+local warningText = AZS_BANNERS[1].text
+local bossText = "Rift boss appeared"
+RaidWarningFrame = {
+	slot1 = { GetText = function() return warningText end, SetText = function(_, value) warningText = value end },
+	slot2 = { GetText = function() return bossText end, SetText = function(_, value) bossText = value end },
+}
+raidNoticeHook(RaidWarningFrame, warningText)
+eq("curse: native raid warning in Chinese", warningText, "诅咒降临：敌人移动速度提高50%（20秒）！")
+eq("curse: adjacent warning stays intact", bossText, "Rift boss appeared")
+locale, localeTime = "en", 1008
+warningText = AZS_BANNERS[1].text
+raidNoticeHook(RaidWarningFrame, warningText)
+eq("curse: native raid warning in English", warningText, "Curse: Enemy speed increased 50% (20 sec)!")
 curseClock = 320
 eq("curse: enemy movement expires", EnemySpeedCurse(), nil)
 
