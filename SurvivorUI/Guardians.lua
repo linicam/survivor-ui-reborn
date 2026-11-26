@@ -505,10 +505,10 @@ local function Draw()
 		end
 		if entry.state == "empty" then
 			row.name:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
-			if entry.left and entry.left > 0 then
+			if entry.left and (entry.left > 0 or (reborn and entry.left == 0)) then
 				row.state:SetText(Clock(entry.left))
 			else
-				row.state:SetText(SurvivorUI_T("soon"))
+				row.state:SetText(reborn and "—" or SurvivorUI_T("soon"))
 			end
 			row.state:SetTextColor(RESPAWN[1], RESPAWN[2], RESPAWN[3])
 			row.color = MUTED

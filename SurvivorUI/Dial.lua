@@ -576,6 +576,12 @@ local function Point(texture, angle)
 	end
 end
 
+local function LairTimeText(left)
+	local reborn = SurvivorUI_RebornActive and SurvivorUI_RebornActive()
+	if left and (left > 0 or (reborn and left == 0)) then return Clock(left + 0.5) end
+	return reborn and "—" or SurvivorUI_T("soon")
+end
+
 local function TileTip()
 	local lair = this.lair
 	if not lair then
@@ -584,7 +590,7 @@ local function TileTip()
 	GameTooltip:SetOwner(this, "ANCHOR_BOTTOMLEFT")
 	GameTooltip:SetText(lair.name or SurvivorUI_T("Guardians"), 1, 0.82, 0)
 	if lair.state == "empty" then
-		GameTooltip:AddLine(lair.left and lair.left > 0 and Clock(lair.left + 0.5) or SurvivorUI_T("soon"), C.red[1], C.red[2], C.red[3])
+		GameTooltip:AddLine(LairTimeText(lair.left), C.red[1], C.red[2], C.red[3])
 	elseif lair.state == "awake" then
 		GameTooltip:AddLine(lair.share and string.format("%d%%", lair.share * 100 + 0.5) or SurvivorUI_T("AWAKE"), C.orange[1], C.orange[2], C.orange[3])
 	else
@@ -686,7 +692,7 @@ local function PaintTile(tile, lair, tall)
 		local left = lair.left or -1
 		S.full[lair.place] = math.max(S.full[lair.place] or 0, left)
 		local full = S.full[lair.place]
-		local wait = left > 0 and Clock(left + 0.5) or SurvivorUI_T("soon")
+		local wait = LairTimeText(lair.left)
 		if tall then
 			PaintRing(tile.clock, full > 0 and left / full or 0, C.red, C.clockTrack)
 			foot = wait

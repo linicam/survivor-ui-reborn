@@ -557,6 +557,8 @@ local curses3 = SurvivorUI_RebornCurses()
 check("pr4 curse: unknown effect keeps raw text", string.find(curses3.items[table.getn(curses3.items)].text, "странное", 1, true) ~= nil)
 
 -- Diagnostic recorder: disabled by default, bounded, sanitized.
+local nativeDiagnosticHandlers = {}
+AZS = { On = function(prefix, callback) nativeDiagnosticHandlers[prefix] = callback end }
 dofile("SurvivorUI/RebornDiagnostics.lua")
 SurvivorUI_RebornRecord("test_event", { x = 1 })
 local st = SurvivorUI_RebornRecordStatus()
@@ -689,6 +691,19 @@ SurvivorUI_RebornAbilities()
 eq("racial cd: spells-only update keeps sample time", (SurvivorUI_RebornRacialCooldown(20549)), 6)
 AZS_GetRunTime = function() return 110 end
 eq("racial cd: reaches zero", (SurvivorUI_RebornRacialCooldown(20549)), 0)
+local previousAbilityRequest = AZS_RequestAbilities
+local renderRequests = 0
+AZS_RequestAbilities = function() renderRequests = renderRequests + 1 end
+SurvivorUI_RebornRequestAbilities(true)
+AZS_RUN.ph = "paused"
+fakeTime = fakeTime + 5
+SurvivorUI_RebornRacialCooldown(20549, true)
+eq("racial cd: overlay does not request while paused", renderRequests, 1)
+AZS_RUN.ph = "playing"
+SurvivorUI_RebornRacialCooldown(20549, true)
+SurvivorUI_RebornRacialCooldown(20549, true)
+eq("racial cd: overlay refreshes once without the Build panel", renderRequests, 2)
+AZS_RequestAbilities = previousAbilityRequest
 AZS_ABILITIES = { { key = "war_stomp", spell = 20549, rank = 1, passive = false, kind = "racial", cd = 12, cdmax = 15, name = "War Stomp", icon = "i", text = "t" } }
 AZS_ABILITIES_UPDATED = (AZS_ABILITIES_UPDATED or 0) + 1
 SurvivorUI_RebornAbilities()
@@ -729,7 +744,17 @@ eq("rift boss: identity", riftBosses[1].id, 777)
 AZS_UNITS = {}
 eq("rift boss: transient disappearance is not death", SurvivorUI_RebornRiftBosses()[1].state, "up")
 AZS_RUN = { ph = "playing", bk = 6 }
-eq("rift boss: bk increase confirms death", SurvivorUI_RebornRiftBosses()[1].state, "dead")
+eq("rift boss: unrelated boss count does not confirm death", SurvivorUI_RebornRiftBosses()[1].state, "up")
+eq("rift boss: missing row remains unlocated", SurvivorUI_RebornRiftBosses()[1].missing, true)
+AZS_RIFT = { st = "boss" }
+AZS_UNITS = { { kind = "rift", id = 777, name = "Rift boss", hp = 50, hpm = 100 } }
+eq("rift boss: reappearing row restores live health", SurvivorUI_RebornRiftBosses()[1].healthShare, 0.5)
+AZS_UNITS[1].hp = nil
+eq("rift boss: missing health stays unknown", SurvivorUI_RebornRiftBosses()[1].healthShare, nil)
+AZS_UNITS = {}
+AZS_RIFT.st = "done"
+eq("rift boss: observed portal completion confirms death", SurvivorUI_RebornRiftBosses()[1].state, "dead")
+AZS_RIFT = nil
 AZS_UNITS = nil
 -- Guardian countdown model (synthetic AZS_LAIRS; no runtime samples yet).
 AZS_GetRunTime = function() return 100 end
@@ -835,6 +860,7 @@ locale, localeTime = "zh", 1002
 local zhJewelry = SurvivorUI_RebornJewelry(true).items[1]
 eq("jewelry locale: Chinese fallback", zhJewelry.name, "短暂能量护符")
 eq("jewelry locale: instance unchanged", zhJewelry.instanceKey, "gear:trinket:tep")
+eq("jewelry locale: meter attribution retained", zhJewelry.sourceKey, "jewel:trinket")
 eq("jewelry locale: shared source rank ignored", zhJewelry.rank, nil)
 
 AZS_RequestAbilities = function() end
@@ -920,6 +946,28 @@ raidNoticeHook(RaidWarningFrame, warningText)
 eq("curse: native raid warning in English", warningText, "Curse: Enemy speed increased 50% (20 sec)!")
 curseClock = 320
 eq("curse: enemy movement expires", EnemySpeedCurse(), nil)
+
+AZS_SPELLTIPS = {}
+local nativeSessionId = SurvivorUI_RebornRecordStart()
+AZS_CARDS = { kind = "jewel", cards = { { mode = "grow", detail = "Crit chance=1%=2%=+" } } }
+nativeDiagnosticHandlers.AZSCARDS()
+nativeDiagnosticHandlers.AZSSPELLTIP("key=war_stomp;text=Stun nearby enemies")
+nativeDiagnosticHandlers.AZSSPELLTIP("key=war_stomp;text=Stun nearby enemies")
+AZS_LAIRS = { { index = 1, state = "empty", x = 10, y = 20, left = 30 } }
+nativeDiagnosticHandlers.AZSLAIRS()
+nativeDiagnosticHandlers.AZSLAIRS()
+AZS_LAIRS[1] = { index = 1, id = 80, state = "asleep", x = 34, y = 22 }
+nativeDiagnosticHandlers.AZSLAIRS()
+SurvivorUI_RebornRecordStop()
+local nativeEvents = {}
+for _, event in ipairs(SurvivorUIRebornDiagnostics.sessions[nativeSessionId].events) do
+	nativeEvents[event.type] = nativeEvents[event.type] or {}
+	table.insert(nativeEvents[event.type], event.data)
+end
+eq("diag native: offer logged", nativeEvents.card_offer[1].hand.kind, "jewel")
+eq("diag native: unchanged spell tip deduplicated", table.getn(nativeEvents.native_spell_tip), 1)
+eq("diag native: empty and respawn recorded without duplicates", table.getn(nativeEvents.guardian_lairs), 2)
+eq("diag native: guardian's new position captured", nativeEvents.guardian_lairs[2].rows[1].x, 34)
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

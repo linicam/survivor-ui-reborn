@@ -342,6 +342,15 @@ unchanged in substance); the full audit is in the research notes
 - Reborn keeps defeated guardians and available respawn timers in its
   panels. Empty lairs have no world marker, minimap pin, or compass
   bearing because their last coordinates cannot locate the next spawn.
+- A Rift Portal boss can be confirmed by its own zero-health sample or
+  by portal completion after observing a single portal boss. A missing
+  unit has no live health or target. The global boss counter is not
+  encounter-specific.
+- Opt-in recordings capture native card offers and the player's read-only
+  action observations, native spell tips, gear and Hex changes, Guardian
+  state and position changes, and Rift unit transitions. Guardian timers
+  have periodic samples. Card actions are intent until corroborated by
+  later server data.
 
 ### Native snapshots and Stats tooltip
 

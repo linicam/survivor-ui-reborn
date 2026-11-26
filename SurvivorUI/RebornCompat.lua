@@ -125,6 +125,7 @@ local abilitiesStamp = nil     -- AZS_ABILITIES_UPDATED last seen
 local spellsStamp = nil        -- AZS_SPELLS_UPDATED last seen
 local abilitiesSeen = {}       -- [key] = true, keys already merged
 local lastAbilityRequest = 0
+local nextRacialRenderCheck = 0
 local lastRequestSignature = nil
 local lastRecordedSignature = nil
 local lastRecordedTexts = {}
@@ -269,6 +270,7 @@ local function ResetOwnCaches()
 	spellsStamp = nil
 	abilitiesSeen = {}
 	lastAbilityRequest = 0
+	nextRacialRenderCheck = 0
 	lastRequestSignature = nil
 	lastRequestCardsStamp = nil
 	requestRunId = nil
@@ -1280,7 +1282,7 @@ local function NormaliseJewelryEntry(entry, source)
 	return {
 		name = name, icon = icon, slot = slotLabel,
 		slotRaw = slot, key = key, rank = rank, rarity = rarity,
-		sourceKey = key, count = 1,
+		sourceKey = sourceKey or key, count = 1,
 		instanceKey = entry and entry.itemInstanceKey or nil,
 		dedupKey = DedupKeyOf(sourceKey, key, name, slotLabel),
 	}
@@ -1511,9 +1513,16 @@ if hooksecurefunc and RaidNotice_AddMessage then
 			"^Проклятие тяготеет над тобой: враги движутся на %d+%% быстрее %((%d+) с%)!$")
 		if not seconds then return end
 		local localized = string.format(T("Curse: %s (%d sec)!"), CurseEffectText(text), tonumber(seconds))
+		local changed
 		for index = 1, 2 do
 			local slot = getglobal("RaidWarningFrameSlot" .. index) or frame["slot" .. index]
-			if slot and slot.GetText and slot:GetText() == text then slot:SetText(localized) end
+			if slot and slot.GetText and slot:GetText() == text then
+				slot:SetText(localized)
+				changed = true
+			end
+		end
+		if SurvivorUI_RebornRecording and SurvivorUI_RebornRecording() then
+			SurvivorUI_RebornRecord("curse_warning", { effectId = "enemy_speed", displayed = changed == true, text = localized })
 		end
 	end)
 end
@@ -1783,7 +1792,7 @@ function SurvivorUI_RebornRiftBosses()
 		return {}
 	end
 	local runNow = AZS_GetRunTime and AZS_GetRunTime() or 0
-	local bk = type(AZS_RUN) == "table" and tonumber(AZS_RUN.bk) or nil
+	local riftState = type(AZS_RIFT) == "table" and AZS_RIFT.st
 	local present = {}
 	if type(AZS_UNITS) == "table" then
 		for i = 1, table.getn(AZS_UNITS) do
@@ -1794,7 +1803,7 @@ function SurvivorUI_RebornRiftBosses()
 				present[key] = true
 				local boss = riftBosses[key]
 				if not boss then
-					boss = { id = id, name = Field(unit, "name", 3), state = "up", bkAtSeen = bk }
+					boss = { id = id, name = Field(unit, "name", 3), state = "up" }
 					riftBosses[key] = boss
 					table.insert(riftBossOrder, key)
 					if SurvivorUI_RebornRecord then
@@ -1803,31 +1812,51 @@ function SurvivorUI_RebornRiftBosses()
 				end
 				boss.hp = tonumber(Field(unit, "hp", 4))
 				boss.hpm = tonumber(Field(unit, "hpm", 5))
+				boss.healthShare = boss.hp and boss.hpm and boss.hpm > 0
+					and math.max(0, math.min(1, boss.hp / boss.hpm)) or nil
+				if riftState == "boss" then boss.seenDuringPortal = true end
 				boss.enraged = tonumber(Field(unit, "state", 6)) == 1 or nil
+				if boss.hp and boss.hp > 0 then
+					if (boss.missing or boss.state == "dead") and SurvivorUI_RebornRecord then
+						SurvivorUI_RebornRecord("boss_unit", { transition = "reappeared", kind = "rift", id = id, hp = boss.hp, hpm = boss.hpm, rift = AZS_RIFT, runTime = runNow })
+					end
+					boss.state, boss.fell = "up", nil
+				end
 				boss.missing = nil
 				if boss.hp and boss.hp <= 0 and boss.state ~= "dead" then
 					boss.state = "dead"
 					boss.fell = runNow
 					if SurvivorUI_RebornRecord then
-						SurvivorUI_RebornRecord("boss_unit", { transition = "died", kind = "rift", id = id, name = boss.name })
+						SurvivorUI_RebornRecord("boss_unit", { transition = "died", kind = "rift", id = id, name = boss.name, via = "unit_hp", hp = boss.hp, rift = AZS_RIFT, runTime = runNow })
 					end
 				end
 			end
 		end
 	end
 	local out = {}
+	local portalBoss
+	local portalCandidates = 0
+	for _, boss in pairs(riftBosses) do
+		if boss.seenDuringPortal then
+			portalBoss = boss
+			portalCandidates = portalCandidates + 1
+		end
+	end
 	for i = 1, table.getn(riftBossOrder) do
 		local boss = riftBosses[riftBossOrder[i]]
 		if boss then
 			if not present[riftBossOrder[i]] and boss.state == "up" then
-				if bk and boss.bkAtSeen and bk > boss.bkAtSeen then
+			if riftState == "done" and portalCandidates == 1 and boss == portalBoss then
 					boss.state = "dead"
 					boss.fell = runNow
 					if SurvivorUI_RebornRecord then
-						SurvivorUI_RebornRecord("boss_unit", { transition = "died", kind = "rift", id = boss.id, name = boss.name, via = "bk" })
+					SurvivorUI_RebornRecord("boss_unit", { transition = "died", kind = "rift", id = boss.id, name = boss.name, via = "portal_done", rift = AZS_RIFT, runTime = runNow })
 					end
-				else
+			elseif not boss.missing then
 					boss.missing = true
+				if SurvivorUI_RebornRecord then
+					SurvivorUI_RebornRecord("boss_unit", { transition = "missing", kind = "rift", id = boss.id, hp = boss.hp, hpm = boss.hpm, rift = AZS_RIFT, runTime = runNow })
+				end
 				end
 			end
 			table.insert(out, boss)
@@ -1864,21 +1893,12 @@ function SurvivorUI_RebornGuardianLeft(lair)
 	local sample = guardianSamples[identity]
 	if not sample or sample.stamp ~= stamp then
 		local rawLeft = tonumber(Field(lair, "left", 5))
-		local previous = sample
 		sample = {
 			stamp = stamp, atRun = runNow,
 			left = (rawLeft and rawLeft >= 0) and rawLeft or nil,
 			state = Field(lair, "state", 2),
 		}
 		guardianSamples[identity] = sample
-		if SurvivorUI_RebornRecord and (not previous or previous.state ~= sample.state or previous.left ~= sample.left) then
-			SurvivorUI_RebornRecord("guardian_lair", {
-				index = index, identity = identity, state = sample.state,
-				rawLeft = rawLeft, stamp = stamp, runTime = runNow,
-				id = Field(lair, "id", 4), name = Field(lair, "name", 3),
-				active = Field(lair, "active", 14),
-			})
-		end
 	end
 	if sample.left == nil then
 		return nil
@@ -1896,7 +1916,7 @@ end
 -- cover the auto-cast racial (it is not a spellbook spell), so the
 -- overlay interpolates locally from the latest sample on the run
 -- clock. Activation between snapshots resyncs at the next snapshot.
-function SurvivorUI_RebornRacialCooldown(spell)
+function SurvivorUI_RebornRacialCooldown(spell, refresh)
 	local sample = racialCooldownSample
 	if not sample or (spell and sample.spell ~= spell) then
 		return nil, nil
@@ -1911,6 +1931,13 @@ function SurvivorUI_RebornRacialCooldown(spell)
 	end
 	if remaining > sample.cdmax then
 		remaining = sample.cdmax
+	end
+	if refresh and remaining <= 1 and type(AZS_RUN) == "table" and AZS_RUN.ph == "playing" then
+		local at = Now()
+		if at >= nextRacialRenderCheck and at - lastAbilityRequest >= 5 then
+			nextRacialRenderCheck = at + 5
+			SurvivorUI_RebornRequestAbilities(false)
+		end
 	end
 	return remaining, sample.cdmax
 end

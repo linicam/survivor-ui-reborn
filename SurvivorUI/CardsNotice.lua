@@ -16,6 +16,7 @@ local function HookCardCapHints()
 		if button and type(button.Fit) == "function" and button.detail then
 			local slot = index
 			local original, annotated, refitting
+			local loggedHand
 			hooksecurefunc(button, "Fit", function()
 				if refitting or button.saved then return end
 				local display = button.detail:GetText()
@@ -29,6 +30,11 @@ local function HookCardCapHints()
 					button.detail:SetText(updated)
 					button.Fit()
 					refitting = false
+				end
+				if card and updated ~= base and loggedHand ~= hand and SurvivorUI_RebornRecording
+					and SurvivorUI_RebornRecording() then
+					loggedHand = hand
+					SurvivorUI_RebornRecord("card_cap_hint", { slot = slot, mode = card.mode, text = updated })
 				end
 			end)
 		end

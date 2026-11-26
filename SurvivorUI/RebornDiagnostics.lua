@@ -17,6 +17,7 @@ local CRITICAL = {
 	session_start = true, session_stop = true, run_transition = true,
 	rank_change = true, tooltip = true, curse_banner = true,
 	jewelry_update = true, error = true, mark = true,
+	boss_unit = true, guardian_lairs = true, card_offer = true, card_action = true,
 }
 
 local recording = false
@@ -28,6 +29,9 @@ local tooltipBaselines = {}
 local tooltipLegacyInvalid = {}
 local lastExtraButtonSignature = nil
 local lastCaptureNote = nil
+local guardianSignature, guardianSampleAt
+local nativeSeen, nativeRun = {}, nil
+local nativeSpellTips
 local pseudonyms = {}
 local pseudonymCount = 0
 
@@ -53,6 +57,29 @@ end
 
 local function CurrentRunId()
 	return SurvivorUI_RebornRunId and SurvivorUI_RebornRunId() or nil
+end
+
+local function ObserveGuardianLairs()
+	if not recording or type(AZS_LAIRS) ~= "table" then return end
+	local zone = AZS_ZONE or {}
+	local area = GetRealZoneText and GetRealZoneText() or nil
+	local runTime = AZS_GetRunTime and AZS_GetRunTime()
+	local signature = { tostring(CurrentRunId()), tostring(zone.map), tostring(area) }
+	local rows, counting = {}, false
+	for _, lair in ipairs(AZS_LAIRS) do
+		local left = tonumber(lair.left)
+		counting = counting or (lair.state == "empty" and left and left >= 0)
+		table.insert(signature, table.concat({ tostring(lair.index), tostring(lair.state),
+			tostring(lair.id), tostring(lair.x), tostring(lair.y) }, "|"))
+		table.insert(rows, { index = lair.index, state = lair.state, id = lair.id, name = lair.name,
+			x = lair.x, y = lair.y, z = lair.z, left = left })
+	end
+	signature = table.concat(signature, ";")
+	local now = Now()
+	if signature ~= guardianSignature or (counting and now - guardianSampleAt >= 15) then
+		guardianSignature, guardianSampleAt = signature, now
+		SurvivorUI_RebornRecord("guardian_lairs", { map = zone.map, area = area, runTime = runTime, rows = rows })
+	end
 end
 
 local function BaselineKey(key, run)
@@ -179,6 +206,8 @@ function SurvivorUI_RebornRecordStart()
 	tooltipBaselines = {}
 	lastExtraButtonSignature = nil
 	lastCaptureNote = nil
+	guardianSignature, guardianSampleAt = nil, 0
+	nativeSeen, nativeRun = {}, nil
 	pseudonyms = {}
 	pseudonymCount = 0
 	session = {
@@ -214,7 +243,7 @@ function SurvivorUI_RebornRecordStart()
 			rawAbilities = AZS_ABILITIES, rawSpells = AZS_SPELLS,
 			normalized = data.all, source = data.source,
 		})
-		if SurvivorUI_RebornTooltipRead then
+		if SurvivorUI_RebornTooltipRead and not (nativeSpellTips and type(AZS_SPELLTIPS) == "table") then
 			local run = CurrentRunId()
 			for i = 1, table.getn(data.all) do
 				-- The native tooltip source is established legacy
@@ -232,6 +261,10 @@ function SurvivorUI_RebornRecordStart()
 			end
 		end
 	end
+	if nativeSpellTips and type(AZS_SPELLTIPS) == "table" and next(AZS_SPELLTIPS) then
+		SurvivorUI_RebornRecord("native_spell_tips_initial", { tips = AZS_SPELLTIPS })
+	end
+	ObserveGuardianLairs()
 	if SurvivorUI_RebornJewelry then
 		local jew = SurvivorUI_RebornJewelry(true)
 		SurvivorUI_RebornRecord("jewelry_initial", { source = jew.source, items = jew.items })
@@ -298,7 +331,7 @@ function SurvivorUI_RebornRecordTooltipSoon(key, phase)
 	if not recording or not session then
 		return
 	end
-	if tooltipLegacyInvalid[key] then
+	if tooltipLegacyInvalid[key] or (nativeSpellTips and type(AZS_SPELLTIPS) == "table") then
 		return
 	end
 	local run = CurrentRunId()
@@ -395,6 +428,7 @@ if timer then
 				end
 				p.tries = p.tries + 1
 				if p.tries >= 2 then
+					if not tooltipBaselines[BaselineKey(p.key, p.run)] then tooltipLegacyInvalid[p.key] = true end
 					table.remove(pendingTooltips, i)
 				else
 					p.at = now + 2
@@ -418,6 +452,8 @@ if timer then
 			if SurvivorUI_RebornCheckRun then SurvivorUI_RebornCheckRun() end
 			if SurvivorUI_RebornAbilities then SurvivorUI_RebornAbilities() end
 			if SurvivorUI_RebornJewelry then SurvivorUI_RebornJewelry() end
+			if SurvivorUI_RebornRiftBosses then SurvivorUI_RebornRiftBosses() end
+			ObserveGuardianLairs()
 			if SurvivorUI_RebornNextBoss then
 				local nb = SurvivorUI_RebornNextBoss()
 				local key = nb and (tostring(nb.mode) .. "|" .. tostring(nb.state) .. "|" .. tostring(nb.number)) or "none"
@@ -426,6 +462,60 @@ if timer then
 					SurvivorUI_RebornRecord("boss_transition", { nextBoss = nb, run = AZS_RUN, rift = AZS_RIFT })
 				end
 			end
+		end
+	end)
+end
+
+-- Native listeners are registered after the game's snapshot parsers.
+local function ObserveNative(key, value, eventType, data)
+	if not recording then return end
+	local run = CurrentRunId()
+	if nativeRun ~= run then nativeSeen, nativeRun = {}, run end
+	if nativeSeen[key] == value then return end
+	nativeSeen[key] = value
+	SurvivorUI_RebornRecord(eventType, data)
+end
+
+if AZS and type(AZS.On) == "function" then
+	nativeSpellTips = true
+	AZS.On("AZSSPELLTIP", function(msg)
+		if not recording or type(msg) ~= "string" then return end
+		local key, value = string.match(msg, "^key=([^;]+);text=(.*)$")
+		if key then ObserveNative("spell:" .. key, value, "native_spell_tip", { key = key, text = value }) end
+	end)
+	AZS.On("AZSCARDS", function()
+		if not recording or type(AZS_CARDS) ~= "table" then return end
+		local hand = AZS_CARDS
+		SurvivorUI_RebornRecord("card_offer", { hand = hand, stats = AZS_RUNSTATS, caps = AZS_CAPS })
+	end)
+	AZS.On("AZSCARDTIP", function(msg)
+		if recording then SurvivorUI_RebornRecord("native_card_tip", { payload = msg }) end
+	end)
+	AZS.On("AZSGEAR", function(msg)
+		if recording then ObserveNative("gear", msg, "native_gear", { rows = AZS_GEAR }) end
+	end)
+	AZS.On("AZSHEX", function(msg)
+		if recording then ObserveNative("hex", msg, "native_hex", { rows = AZS_HEXES }) end
+	end)
+	AZS.On("AZSLAIRS", ObserveGuardianLairs)
+	local function ObserveRift()
+		if not recording or not SurvivorUI_RebornRiftBosses then return end
+		if SurvivorUI_RebornCheckRun then SurvivorUI_RebornCheckRun() end
+		SurvivorUI_RebornRiftBosses()
+	end
+	AZS.On("AZSUNITS", ObserveRift)
+	AZS.On("AZSRIFT", ObserveRift)
+end
+
+if hooksecurefunc and SendAddonMessage then
+	hooksecurefunc("SendAddonMessage", function(prefix, command)
+		if not recording or prefix ~= "AZSCMD" or type(command) ~= "string" then return end
+		local hand = AZS_CARDS
+		if type(hand) ~= "table" or (hand.kind ~= "spell" and hand.kind ~= "jewel") then return end
+		local action, index = string.match(command, "^(%a+) (%d+)$")
+		if action == "pick" or action == "banish" or command == "reroll" or command == "skip" then
+			SurvivorUI_RebornRecord("card_action", { action = action or command, index = tonumber(index), kind = hand.kind,
+				remainingBanishes = hand.bn, remainingRerolls = hand.rr })
 		end
 	end)
 end

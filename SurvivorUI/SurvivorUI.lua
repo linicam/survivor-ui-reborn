@@ -970,7 +970,7 @@ function SurvivorUI_RenderExtraCooldown(frame)
 		-- stale verified data clears the sweep instead.
 		local remaining, cdmax
 		if SurvivorUI_RebornRacialCooldown then
-			remaining, cdmax = SurvivorUI_RebornRacialCooldown(frame.spell)
+			remaining, cdmax = SurvivorUI_RebornRacialCooldown(frame.spell, true)
 		end
 		if remaining ~= nil and cdmax and cdmax > 0 and remaining > 0 and GetTime then
 			CooldownFrame_SetTimer(frame.cooldown, GetTime() - (cdmax - remaining), cdmax, 1)
