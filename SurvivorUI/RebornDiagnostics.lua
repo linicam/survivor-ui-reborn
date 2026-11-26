@@ -18,6 +18,7 @@ local CRITICAL = {
 	rank_change = true, tooltip = true, curse_banner = true,
 	jewelry_update = true, error = true, mark = true,
 	boss_unit = true, guardian_lairs = true, card_offer = true, card_action = true,
+	analysis_pick_before = true, analysis_pick_result = true,
 }
 
 local recording = false
@@ -229,6 +230,7 @@ function SurvivorUI_RebornRecordStart()
 	}
 	sessionStart = Now()
 	recording = true
+	if SurvivorUI_RebornAnalysis then SurvivorUI_RebornAnalysis.ClearCapture() end
 	db.sessions[session.id] = session
 	table.insert(db.order, session.id)
 	while table.getn(db.order) > MAX_SESSIONS do
@@ -282,6 +284,7 @@ function SurvivorUI_RebornRecordStop()
 	session.status = session.truncated and "truncated" or "completed"
 	session.endedAt = time and time() or nil
 	recording = false
+	if SurvivorUI_RebornAnalysis then SurvivorUI_RebornAnalysis.ClearCapture() end
 	local id = session.id
 	session = nil
 	return id
@@ -516,6 +519,9 @@ if hooksecurefunc and SendAddonMessage then
 		if action == "pick" or action == "banish" or command == "reroll" or command == "skip" then
 			SurvivorUI_RebornRecord("card_action", { action = action or command, index = tonumber(index), kind = hand.kind,
 				remainingBanishes = hand.bn, remainingRerolls = hand.rr })
+			if action == "pick" and SurvivorUI_RebornAnalysis then
+				pcall(SurvivorUI_RebornAnalysis.RecordPick, hand, tonumber(index))
+			end
 		end
 	end)
 end

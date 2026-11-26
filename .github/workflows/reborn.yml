@@ -38,6 +38,7 @@ jobs:
         run: |
           lua tests/test_reborn_compat.lua
           lua tests/test_run_history.lua
+          lua tests/test_reborn_analysis.lua
 
       - name: Replay fixtures
         run: |

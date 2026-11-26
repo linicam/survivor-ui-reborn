@@ -1790,6 +1790,7 @@ head:SetScript("OnEnter", function()
 			end
 		end
 	end
+	if SurvivorUI_RebornAnalysis then SurvivorUI_RebornAnalysis.AddTrackerTooltip(GameTooltip) end
 	GameTooltip:AddLine(SurvivorUI_MoveHint().." "..SurvivorUI_T("/sui tracker hides it."), 0.7, 0.7, 0.7, 1)
 	GameTooltip:Show()
 end)

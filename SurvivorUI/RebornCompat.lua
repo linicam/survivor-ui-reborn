@@ -193,6 +193,10 @@ local CARD_STAT_KEYS = {
 	["damage reduction"] = "red", ["伤害减免"] = "red",
 }
 
+function SurvivorUI_RebornCardStatKey(label)
+	return CARD_STAT_KEYS[string.lower(label)]
+end
+
 -- The item's before/after numbers identify an increase. The current
 -- global run sheet determines whether the affected stat is capped.
 function SurvivorUI_RebornCardCapLines(card, display)
@@ -203,7 +207,7 @@ function SurvivorUI_RebornCardCapLines(card, display)
 	local capped = {}
 	for row in string.gmatch(card.detail, "[^%^]+") do
 		local label, from, to = string.match(row, "^(.-)=([%d.]+)%%=([%d.]+)%%=%+$")
-		local key = label and CARD_STAT_KEYS[string.lower(label)]
+		local key = label and SurvivorUI_RebornCardStatKey(label)
 		from, to = tonumber(from), tonumber(to)
 		if key and from and to and to > from then
 			local _, remaining = SurvivorUI_RebornStatCap(key)

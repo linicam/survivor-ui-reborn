@@ -5138,6 +5138,23 @@ Swatches(page, "Color", SurvivorUI_LEVELUP_COLORS or {},
 	function(key) DB().levelUpColor = key end)
 Note(page, "The levels waiting also show by your level on the XP bar: Lv. 12 +3. While this tab is open the button shows, to be placed.")
 
+if SurvivorUI_RebornAnalysis and SurvivorUI_RebornActive() then
+	Subheader(page, "Reborn analysis")
+	local analysisOptions = {
+		{ "enabled", "Enable Reborn analysis", "Show read-only estimates in native cards and the run tracker." },
+		{ "cards", "Card values", "Show supported skill previews, jewelry changes and cap room on cards." },
+		{ "map", "Campaign pressure reference", "Show map factors and boss templates in the tracker tooltip." },
+		{ "live", "Live Build observations", "Show recent damage, health, kills and growth in the tracker tooltip." },
+		{ "advisor", "Experimental growth advice", "Flag a supported option when recent samples show rising enemy counts or sustained low health." },
+		{ "diagnostics", "Research diagnostics", "Add analysis observations to an explicitly enabled Reborn recording." },
+	}
+	for _, option in ipairs(analysisOptions) do
+		local key = option[1]
+		Check(page, option[2], function() return SurvivorUI_RebornAnalysis.IsSet(key) end,
+			function() SurvivorUI_RebornAnalysis.Toggle(key) end, option[3])
+	end
+end
+
 ------------------------------------------------------------------------------
 -- Loot list (LootLog.lua).
 

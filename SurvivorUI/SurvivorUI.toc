@@ -39,6 +39,9 @@ Effects.lua
 Jumps.lua
 Marks.lua
 Affixes.lua
+RebornMapReference.lua
+RebornAnalysisModel.lua
+RebornAnalysis.lua
 Tracker.lua
 AbilityTooltip.lua
 BossBars.lua

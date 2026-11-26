@@ -11,32 +11,69 @@ if SurvivorUI_Standby then return end
 -- Shift comparison. Refit only when an attribute label actually changes.
 local function HookCardCapHints()
 	if not (AZSCardsFrame and hooksecurefunc and SurvivorUI_RebornCardCapLines) then return end
+	local clearAnalysis, refreshAnalysis = {}, {}
 	for index = 1, 4 do
 		local button = getglobal("AZSCard" .. index)
 		if button and type(button.Fit) == "function" and button.detail then
 			local slot = index
-			local original, annotated, refitting
+			local original, annotated, annotatedHand, refitting
+			local capDisplay
 			local loggedHand
+			local function SetDetail(text)
+				refitting = true
+				button.detail:SetText(text)
+				local ok, err = pcall(button.Fit)
+				refitting = false
+				if not ok then error(err) end
+			end
+			clearAnalysis[slot] = function()
+				if not annotated or annotated == capDisplay then return end
+				if button.saved and button.saved[1] == annotated then
+					button.saved[1] = capDisplay
+				elseif button.detail:GetText() == annotated then
+					SetDetail(capDisplay)
+				end
+				annotated = capDisplay
+			end
+			refreshAnalysis[slot] = function()
+				if annotatedHand and annotatedHand == AZS_CARDS and AZSCardsFrame:IsShown()
+					and button:IsShown() and not button.saved then button.Fit() end
+			end
 			hooksecurefunc(button, "Fit", function()
 				if refitting or button.saved then return end
 				local display = button.detail:GetText()
 				local base = display == annotated and original or display
 				local hand = AZS_CARDS
 				local card = hand and hand.kind == "jewel" and hand.cards and hand.cards[slot]
-				local updated = SurvivorUI_RebornCardCapLines(card, base)
-				original, annotated = base, updated
-				if updated ~= display then
-					refitting = true
-					button.detail:SetText(updated)
-					button.Fit()
-					refitting = false
+				capDisplay = SurvivorUI_RebornCardCapLines(card, base)
+				local updated = capDisplay
+				local analysis = SurvivorUI_RebornAnalysis
+				-- A replaced hand may still be animating out. Do not attach the
+				-- successor's estimate to already annotated outgoing text.
+				if analysis and analysis.WantsCardHints() and (display ~= annotated or hand == annotatedHand) then
+					local ok, hint = pcall(analysis.CardText, slot)
+					if ok and hint and hint ~= "" then
+						updated = (updated and updated ~= "" and updated .. "\n" or "") .. "|cff92dce5" .. hint .. "|r"
+					end
 				end
-				if card and updated ~= base and loggedHand ~= hand and SurvivorUI_RebornRecording
+				original, annotated, annotatedHand = base, updated, hand
+				if updated ~= display then
+					SetDetail(updated)
+				end
+				if card and capDisplay ~= base and loggedHand ~= hand and SurvivorUI_RebornRecording
 					and SurvivorUI_RebornRecording() then
 					loggedHand = hand
-					SurvivorUI_RebornRecord("card_cap_hint", { slot = slot, mode = card.mode, text = updated })
+					SurvivorUI_RebornRecord("card_cap_hint", { slot = slot, mode = card.mode, text = capDisplay })
 				end
 			end)
+		end
+	end
+	if SurvivorUI_RebornAnalysis then
+		SurvivorUI_RebornAnalysis.ClearCardDisplay = function()
+			for _, clear in pairs(clearAnalysis) do pcall(clear) end
+		end
+		SurvivorUI_RebornAnalysis.RefreshCardDisplay = function()
+			for _, refresh in pairs(refreshAnalysis) do pcall(refresh) end
 		end
 	end
 	return true

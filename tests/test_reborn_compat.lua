@@ -915,6 +915,39 @@ AZS_CARDS = { kind = "spell", cards = {} }
 button.Fit()
 eq("cards: next offer clears the old hint", rendered, display)
 
+local hintsEnabled = true
+SurvivorUI_RebornAnalysis = {
+	WantsCardHints = function() return hintsEnabled end,
+	CardText = function(index) assert(index == 1); return "Ideal CD 1.40s → 1.20s" end,
+}
+button.IsShown = function() return true end
+AZSCardsFrame.IsShown = function() return true end
+-- Reload this mock's Fit from a fresh native function to avoid hooking twice.
+button.Fit = function() end
+dofile("SurvivorUI/CardsNotice.lua")
+AZS_CARDS = { kind = "jewel", cards = { card } }
+rendered = display
+button.Fit()
+local analyzed = marked .. "\n|cff92dce5Ideal CD 1.40s → 1.20s|r"
+eq("cards: analysis appends after native cap", rendered, analyzed)
+button.Fit()
+eq("cards: repeated analysis Fit does not duplicate", rendered, analyzed)
+button.saved = { rendered }
+rendered = "Equipped item comparison"
+hintsEnabled = false
+SurvivorUI_RebornAnalysis.ClearCardDisplay()
+eq("cards: clearing analysis preserves Shift comparison", rendered, "Equipped item comparison")
+eq("cards: clearing analysis removes it from restored text", button.saved[1], marked)
+rendered = button.saved[1]
+button.saved = nil
+hintsEnabled = true
+SurvivorUI_RebornAnalysis.RefreshCardDisplay()
+eq("cards: refresh reattaches analysis to the same hand", rendered, analyzed)
+SurvivorUI_RebornAnalysis.CardText = function() error("simulated analysis failure") end
+button.Fit()
+eq("cards: analysis failure leaves the native cap hint", rendered, marked)
+SurvivorUI_RebornAnalysis = nil
+
 local curseClock = 300
 AZS_GetRunTime = function() return curseClock end
 AZS_BANNERS = { {
