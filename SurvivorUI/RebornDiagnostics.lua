@@ -32,6 +32,7 @@ local lastExtraButtonSignature = nil
 local lastCaptureNote = nil
 local guardianSignature, guardianSampleAt
 local nativeSeen, nativeRun = {}, nil
+local gearSeen = {}
 local nativeSpellTips
 local pseudonyms = {}
 local pseudonymCount = 0
@@ -191,6 +192,141 @@ function SurvivorUI_RebornRecording()
 	return recording
 end
 
+-- Only selection fields cross the analyzer diagnostic boundary. Keep raw
+-- wire values separate from the native parsed globals and discard free text.
+local GEAR_ZONE_FIELDS = {
+	run = true, zone = true, map = true, dt = true, diff = true, heroic = true,
+	hub = true, class = true, mode = true, aff = true, affixes = true, challenge = true,
+}
+local GEAR_CVARS = { "azsZone", "azsMenuMapZone", "azsDifficulty", "azsMode", "azsModeShown" }
+
+local function GearScalar(key, value)
+	local kind = type(value)
+	if kind == "nil" then return end
+	if kind == "number" then return math.abs(value) < 10000000000 and value or "<number>" end
+	if kind == "boolean" then return value end
+	if kind ~= "string" then return "<" .. kind .. ">" end
+	if key == "run" then
+		if string.match(value, "^r%x%x%x%x%x%x%x%x$") or string.match(value, "^azs:r%x%x%x%x%x%x%x%x$")
+			or value == "1" or value == "" then return value end
+		return "<non-stable run>"
+	end
+	if string.len(value) <= 96 and string.match(value, "^[%w_., %+-]*$") then return value end
+	return "<text omitted>"
+end
+
+local function GearExtraField(key)
+	if type(key) ~= "string" or not string.match(key, "^[%a][%w_]*$") or string.len(key) > 32
+		or SanitizeKey(key) then return false end
+	local name = string.lower(key)
+	if string.find(name, "player", 1, true) or string.find(name, "account", 1, true)
+		or string.find(name, "session", 1, true) or string.find(name, "credential", 1, true) then return false end
+	for _, word in ipairs({ "zone", "map", "difficulty", "heroic", "campaign", "tier", "mode", "challenge", "affix", "modifier" }) do
+		if string.find(name, word, 1, true) then return true end
+	end
+	return false
+end
+
+local function GearZoneFields(values)
+	if type(values) ~= "table" then return end
+	local safe, extra, candidates = {}, {}, {}
+	for key in pairs(GEAR_ZONE_FIELDS) do safe[key] = GearScalar(key, values[key]) end
+	local count = 0
+	for key in pairs(values) do
+		count = count + 1
+		if count > 64 then break end
+		if not GEAR_ZONE_FIELDS[key] and GearExtraField(key) then table.insert(extra, key) end
+	end
+	table.sort(extra)
+	for i = table.getn(extra), 17, -1 do extra[i] = nil end
+	for _, key in ipairs(extra) do
+		local value = values[key]
+		local map = type(value) == "string" and SurvivorUI_RebornMapReference and SurvivorUI_RebornMapReference[value]
+		candidates[key] = (tonumber(value) or map) and GearScalar(key, value) or "<" .. type(value) .. ">"
+	end
+	return { fields = safe, extraKeys = extra, candidates = candidates, capped = count > 64 }
+end
+
+local function GearZoneWire(msg)
+	if type(msg) ~= "string" then return end
+	local fields = {}
+	-- Read the native line without using its parser so spelling, empty
+	-- entries and numeric strings remain distinguishable in the capture.
+	for entry in string.gmatch(string.sub(msg, 1, 4096), "[^;]+") do
+		local key, value = string.match(entry, "^([%a][%w_]*)=(.*)$")
+		if key and (GEAR_ZONE_FIELDS[key] or GearExtraField(key)) then fields[key] = value end
+	end
+	local result = GearZoneFields(fields)
+	result.capped = result.capped or string.len(msg) > 4096
+	return result
+end
+
+local function GearArmorRows()
+	local result = { source = "AZS_ARMOR", present = type(AZS_ARMOR) == "table", rows = {} }
+	if not result.present then return result end
+	for i = 1, 11 do
+		local row = AZS_ARMOR[i]
+		if type(row) == "table" then
+			table.insert(result.rows, { index = i, slot = tonumber(row.slot), rarity = tonumber(row.rarity),
+				stars = tonumber(row.stars), slotType = type(row.slot), rarityType = type(row.rarity), starsType = type(row.stars) })
+		elseif row ~= nil then
+			table.insert(result.rows, { index = i, rowType = type(row) })
+		end
+	end
+	local entries = 0
+	for _ in pairs(AZS_ARMOR) do
+		entries = entries + 1
+		if entries > 11 then break end
+	end
+	result.entryCount, result.capped = entries, entries > 11
+	return result
+end
+
+local function GearSignature(value, parts)
+	if type(value) ~= "table" then
+		local item = tostring(value)
+		table.insert(parts, type(value) .. string.len(item) .. ":" .. item)
+		return
+	end
+	local keys = {}
+	for key in pairs(value) do
+		if key ~= "ordering" then table.insert(keys, key) end
+	end
+	table.sort(keys)
+	table.insert(parts, "{")
+	for _, key in ipairs(keys) do
+		GearSignature(key, parts)
+		GearSignature(value[key], parts)
+	end
+	table.insert(parts, "}")
+end
+
+function SurvivorUI_RebornRecordGearState(data, zone, wire)
+	if not recording then return end
+	data.rawZone = GearZoneFields(AZS_ZONE)
+	data.wireZone = GearZoneWire(wire)
+	data.context = GearZoneFields(zone)
+	data.armor = GearArmorRows()
+	local rawHub = data.rawZone and tonumber(data.rawZone.fields.hub) == 1
+	if ((zone and zone.hub) or rawHub or data.trigger == "open" or data.trigger == "sync_request")
+		and GetCVar and data.resolution
+		and (data.resolution.map ~= "ready" or data.resolution.difficulty ~= "ready") then
+		local cvars = {}
+		for _, name in ipairs(GEAR_CVARS) do
+			local ok, value = pcall(GetCVar, name)
+			cvars[name] = { status = not ok and "query_error" or value == nil and "absent" or "read",
+				value = ok and GearScalar(name, value) or nil }
+		end
+		data.cvarCandidates = cvars
+	end
+	local parts = {}
+	GearSignature(data, parts)
+	local signature = table.concat(parts)
+	if gearSeen[data.trigger] == signature then return end
+	gearSeen[data.trigger] = signature
+	SurvivorUI_RebornRecord("gear_analyzer", data)
+end
+
 local function NewSessionId(db)
 	db.counter = (db.counter or 0) + 1
 	local stamp = date and date("%Y-%m-%d-%H%M%S") or ("t" .. tostring(math.floor(Now())))
@@ -209,6 +345,7 @@ function SurvivorUI_RebornRecordStart()
 	lastCaptureNote = nil
 	guardianSignature, guardianSampleAt = nil, 0
 	nativeSeen, nativeRun = {}, nil
+	gearSeen = {}
 	pseudonyms = {}
 	pseudonymCount = 0
 	session = {
@@ -271,6 +408,7 @@ function SurvivorUI_RebornRecordStart()
 		local jew = SurvivorUI_RebornJewelry(true)
 		SurvivorUI_RebornRecord("jewelry_initial", { source = jew.source, items = jew.items })
 	end
+	if SurvivorUI_RebornGearRecordStart then SurvivorUI_RebornGearRecordStart() end
 	return session.id
 end
 
@@ -495,7 +633,7 @@ if AZS and type(AZS.On) == "function" then
 		if recording then SurvivorUI_RebornRecord("native_card_tip", { payload = msg }) end
 	end)
 	AZS.On("AZSGEAR", function(msg)
-		if recording then ObserveNative("gear", msg, "native_gear", { rows = AZS_GEAR }) end
+		if recording then ObserveNative("gear", msg, "native_gear", { source = "AZS_GEAR", rows = AZS_GEAR }) end
 	end)
 	AZS.On("AZSHEX", function(msg)
 		if recording then ObserveNative("hex", msg, "native_hex", { rows = AZS_HEXES }) end

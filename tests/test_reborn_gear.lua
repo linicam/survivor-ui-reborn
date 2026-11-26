@@ -573,4 +573,107 @@ Armor({ head })
 dollSlot:Hover()
 WorldEvent()
 assert(not GameTooltip.shown, "world entry clears the tracked native extension")
+
+-- Load the real recorder for the native feed and late-start integration.
+dofile("SurvivorUI/RebornDiagnostics.lua")
+local function GearEvents(trigger)
+	local db = SurvivorUIRebornDiagnostics
+	local results = {}
+	if not db or not db.order[1] then return results end
+	for _, event in ipairs(db.sessions[db.order[#db.order]].events) do
+		if event.type == "gear_analyzer" and (not trigger or event.data.trigger == trigger) then
+			table.insert(results, event.data)
+		end
+	end
+	return results
+end
+local function Last(trigger)
+	local events = GearEvents(trigger)
+	return assert(events[#events], trigger)
+end
+local cvarReads = 0
+function GetCVar(key)
+	cvarReads = cvarReads + 1
+	if key == "azsZone" then return "12" end
+	if key == "azsDifficulty" then return "1" end
+	if key == "azsModeShown" then error("PrivateCVarError") end
+end
+local rawArmor = { { slot = "0", rarity = "4", stars = "1", name = "PrivateItemText", icon = "PrivateIcon" } }
+AZS_ZONE, AZS_ARMOR = {}, rawArmor
+handlers.AZSARMOR()
+Zone("dalaran", 0, "warlock", "azs:r00000001")
+AZS_ZONE.map, AZS_ZONE.hero = 571, "PrivateHeroText"
+Armor(rawArmor)
+assert(#GearEvents() == 0 and cvarReads == 0, "recording off avoids diagnostic projection and CVar reads")
+
+local priorCommands = #commands
+local session = assert(SurvivorUI_RebornRecordStart())
+assert(#commands == priorCommands + 1 and commands[#commands] == "sync")
+assert(SurvivorUI_RebornRecordStart() == session and #commands == priorCommands + 1)
+local initial = Last("record_start")
+assert(initial.ordering.world < initial.ordering.zone and initial.ordering.zone < initial.ordering.armor)
+assert(initial.ordering.associatedArmor == initial.ordering.armor)
+assert(initial.resolution.map == "unknown_campaign_key" and initial.resolution.difficulty == "ready")
+assert(initial.resolution.equipment == "ready" and not initial.resolution.saveBaseline)
+assert(initial.resolution.planA == "unknown_campaign_key" and initial.resolution.planB == "unknown_campaign_key")
+assert(initial.armor.source == "AZS_ARMOR" and initial.armor.rows[1].stars == 1)
+assert(initial.rawZone.fields.map == 571 and not initial.rawZone.fields.hero)
+assert(initial.cvarCandidates.azsDifficulty.value == "1")
+assert(initial.cvarCandidates.azsMenuMapZone.status == "absent")
+assert(initial.cvarCandidates.azsModeShown.status == "query_error" and not initial.cvarCandidates.azsModeShown.value)
+assert(Last("sync_request").resolution.pressure == "unknown_campaign_key")
+
+handlers.AZSZONE("zone=dalaran;dt=0;heroic=0;hub=1;selected_zone=naxx;selected_tier=1;owner_token=PrivateTokenText")
+local zoneEvent = Last("AZSZONE")
+assert(zoneEvent.wireZone.fields.dt == "0" and zoneEvent.rawZone.fields.dt == 0, "wire and parsed representations are independent")
+assert(zoneEvent.wireZone.candidates.selected_zone == "naxx" and zoneEvent.wireZone.candidates.selected_tier == "1")
+assert(not zoneEvent.wireZone.candidates.owner_token and zoneEvent.resolution.map == "unknown_campaign_key")
+Armor(rawArmor)
+local armorCount = #GearEvents("AZSARMOR")
+Armor(rawArmor)
+assert(#GearEvents("AZSARMOR") == armorCount, "equivalent replays do not grow the recorder")
+AZS_GEAR = {}
+handlers.AZSGEAR("")
+local native = SurvivorUIRebornDiagnostics.sessions[session].events
+local jewelry = native[#native]
+assert(jewelry.type == "native_gear" and jewelry.data.source == "AZS_GEAR" and #jewelry.data.rows == 0)
+assert(SurvivorUI_RebornGearOpen("show") and Last("open").resolution.equipment == "ready")
+
+WorldEvent()
+local boundary = Last("world_enter")
+assert(boundary.invalidation == "world_enter" and not boundary.resolution.armorAssociated)
+Armor(rawArmor)
+assert(Last("AZSARMOR").resolution.armorDisposition == "armor_before_zone")
+Zone("naxx", 1, "warlock", "azs:r00000002")
+Armor({})
+local empty = Last("AZSARMOR")
+assert(empty.resolution.equipment == "known_empty" and empty.resolution.pressure == "ready" and empty.resolution.saveBaseline)
+assert(empty.resolution.planA == "ready" and empty.resolution.planB == "ready")
+assert(empty.ordering.zone > empty.ordering.world and empty.ordering.armor > empty.ordering.zone)
+AZS_ZONE.dt = nil
+handlers.AZSZONE()
+assert(Last("AZSZONE").resolution.difficulty == "missing_dt")
+AZS_ZONE.dt = "Normal"
+handlers.AZSZONE()
+assert(Last("AZSZONE").resolution.difficulty == "invalid_dt")
+AZS_ZONE.dt, AZS_ZONE.heroic = 1, 2
+handlers.AZSZONE()
+assert(Last("AZSZONE").resolution.difficulty == "heroic_mismatch")
+local function AssertNoPrivate(value)
+	if type(value) == "table" then
+		for key, item in pairs(value) do AssertNoPrivate(key); AssertNoPrivate(item) end
+	elseif type(value) == "string" then
+		assert(not string.find(value, "Private", 1, true))
+	end
+end
+AssertNoPrivate(GearEvents())
+assert(SurvivorUI_RebornRecordStop() == session)
+local controlsBefore = #commands
+WorldEvent()
+AZS_ZONE = {}
+assert(SurvivorUI_RebornRecordStart())
+assert(#commands == controlsBefore, "auto recording before zone arrival leaves native entry sync alone")
+assert(SurvivorUI_RebornGearOpen("show") and #commands == controlsBefore + 1)
+assert(SurvivorUI_RebornGearOpen("show") and #commands == controlsBefore + 1)
+SurvivorUI_RebornRecordStop()
 print("PASS: gear arithmetic, both constraints, oracle, snapshot isolation, previews, and runtime lifecycle")

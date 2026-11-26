@@ -32,6 +32,33 @@ Owner identifiers are replaced with stable session-local pseudonyms
 Native card payloads, spell descriptions, and manual marks can contain
 free-form text. Review any data you choose to share.
 
+### Dalaran Gear & Difficulty investigation
+
+One Dalaran entry is enough for the targeted check. Select a known Campaign
+map and, if already unlocked, a non-Normal tier in the lobby. In Dalaran,
+use `/sui reborn record start` and `/sui gear show`. Exit normally and upload
+with the existing private diagnostics helper. A record already running in
+auto mode can be reused.
+
+`gear_analyzer` events distinguish the wire fields of `AZSZONE` from
+the native parsed fields, the analyzer's normalized context, and
+its map, tier, equipment, baseline and plan reason codes. Ordering
+numbers show world entry, latest zone and armor observations, and which
+armor event was associated. A late start also captures the current
+snapshot and can make one documented read-only `sync` request if the
+selection is unresolved and the recorder has missed the zone wire.
+Direct reads of selected CVar candidates are diagnostic observations.
+The analyzer does not use their values to resolve a map or tier.
+
+Armor evidence consists of slot, rarity and star numbers from
+`AZS_ARMOR` (`AZSARMOR`), with availability and association reported
+separately. The existing `native_gear` event describes `AZS_GEAR`
+(`AZSGEAR`), the run's jewelry feed. An empty jewelry event says
+nothing about worn armor. The targeted event omits item and hero names,
+icons, free-text payloads and unrelated native fields. Candidate
+selection field names and numeric or known-map values are bounded.
+Repeated equivalent evidence is deduplicated within the recording.
+
 ## Upload
 
 The helper parses SavedVariables as data (never executes Lua),

@@ -8,6 +8,10 @@ local panel, scroll, content, plannerTab, simulatorTab, baselineButton, loadButt
 local view, rows, used, y = "planner", {}, 0, 0
 local observedZone, worn, state, draft, searches, rendering
 local previewOwner, previewIsNative
+local observationOrder, worldEpoch = 0, 0
+local worldOrder, zoneOrder, armorOrder, associatedArmorOrder
+local armorDisposition = "waiting_armor"
+local diagnosticSyncRequested, diagnosticZoneWireSeen
 local render, updateSearch, showView
 local ROMAN = { "I", "II", "III", "IV", "V" }
 local SLOT = { head = "Head", shoulders = "Shoulders", chest = "Chest", waist = "Waist", legs = "Legs",
@@ -58,6 +62,7 @@ local function Snapshot(zone)
 	return {
 		run = run or Planner.Token(zone.run), class = Planner.Token(zone.class),
 		zone = Planner.Token(zone.zone), dt = tonumber(zone.dt), heroic = Planner.Token(zone.heroic),
+		hasDifficulty = zone.dt ~= nil,
 		hub = tonumber(zone.hub) == 1, aff = Planner.Token(zone.aff), affixes = Planner.Affixes(zone.affixes),
 		challenge = challenge ~= "0" and challenge or nil,
 		mode = (AZS_PG and AZS_PG.active) and "proving-grounds" or Planner.Token(zone.mode),
@@ -97,23 +102,29 @@ local function ClearState()
 	if panel then panel:SetScript("OnUpdate", nil) end
 end
 
-local function Read()
-	local zone = observedZone
-	if not zone then return end
-	if not SameZone(zone, Snapshot(AZS_ZONE)) then
-		observedZone, worn = nil, nil
-		ClearState()
-		return
+local function ResolveSelection(zone)
+	if not zone then return "waiting_zone", "waiting_zone" end
+	local map = not Maps and "map_catalog_unavailable"
+		or not zone.zone and "missing_zone_key"
+		or (Maps[zone.zone] and "ready" or "unknown_campaign_key")
+	local level, heroic = zone.dt, tonumber(zone.heroic)
+	if level == nil then return map, zone.hasDifficulty and "invalid_dt" or "missing_dt" end
+	if level < 0 or level > 5 or level ~= math.floor(level) then return map, "invalid_dt" end
+	if zone.heroic ~= nil and heroic ~= level then
+		return map, heroic and "heroic_mismatch" or "invalid_heroic"
 	end
-	if state then return state end
+	return map, "ready"
+end
+
+local function EvaluateState(zone)
 	local catalog = Gear.Catalog(AZS_GEN)
 	local class, level = zone.class, zone.dt
 	local heroic = tonumber(zone.heroic)
 	local modifiers = { aff = zone.aff, affixes = zone.affixes, challenge = zone.challenge, mode = zone.mode }
 	local scope = Planner.Scope(level, modifiers)
 	local demand
-	local selected = Maps[zone.zone] and level and level >= 0 and level <= 5 and level == math.floor(level)
-		and (zone.heroic == nil or heroic == level)
+	local mapStatus, difficultyStatus = ResolveSelection(zone)
+	local selected = mapStatus == "ready" and difficultyStatus == "ready"
 	if selected and scope ~= "unsupported" then
 		demand = SurvivorUI_RebornAnalysisModel.GearDemand(Maps[zone.zone], level)
 	end
@@ -123,12 +134,108 @@ local function Read()
 	local actual = worn and catalog and class and Planner.Evaluate(catalog, class, worn)
 	local saved = class and Settings().baselines[class]
 	local reference, issue
-	if catalog and class then reference, issue = Planner.CheckReference(saved, context, catalog, Maps) end
-	state = { catalog = catalog, context = context, actual = actual, reference = reference, saved = saved,
+	if catalog and class and Maps then reference, issue = Planner.CheckReference(saved, context, catalog, Maps) end
+	local evaluated = { catalog = catalog, context = context, actual = actual, reference = reference, saved = saved,
 		issue = issue, current = Planner.Difficulty(demand, actual, reference) }
-	local map = Maps[context.zone]
-	state.drops = catalog and map and scope ~= "unsupported" and Planner.DropTiers(catalog, Maps, map[7])
+	local map = Maps and Maps[context.zone]
+	evaluated.drops = catalog and map and scope ~= "unsupported" and Planner.DropTiers(catalog, Maps, map[7])
+	return evaluated
+end
+
+local function NoteObservation()
+	observationOrder = observationOrder + 1
+	return observationOrder
+end
+
+local function TraceGear(trigger, wire, invalidation)
+	if not SurvivorUI_RebornRecordGearState or not SurvivorUI_RebornRecording() then return end
+	if trigger == "AZSZONE" and type(wire) == "string" and wire ~= "" then diagnosticZoneWireSeen = true end
+	local enabled = SurvivorUI_RebornGearEnabled()
+	local matched = observedZone and SameZone(observedZone, Snapshot(AZS_ZONE))
+	local zone = matched and observedZone or nil
+	local current = enabled and zone and (state or EvaluateState(zone)) or nil
+	local map, difficulty = ResolveSelection(zone)
+	local context = current and current.context
+	local equipment
+	if not enabled then equipment = "feature_disabled"
+	elseif not zone then equipment = observedZone and "context_changed" or "waiting_zone"
+	elseif not current.catalog then equipment = "catalog_unavailable"
+	elseif not Planner.Class(current.catalog, zone.class) then equipment = "class_unavailable"
+	elseif current.actual then equipment = table.getn(worn) == 0 and "known_empty" or "ready"
+	elseif worn then equipment = "evaluation_unavailable"
+	else equipment = armorDisposition end
+	local baseline
+	if not current then baseline = equipment
+	elseif not current.catalog then baseline = "catalog_unavailable"
+	elseif not Planner.Class(current.catalog, zone.class) then baseline = "class_unavailable"
+	else baseline = current.issue or (current.reference and "ready" or "missing") end
+	local pressure
+	if not context then pressure = equipment
+	elseif map ~= "ready" then pressure = map
+	elseif difficulty ~= "ready" then pressure = difficulty
+	elseif context.scope == "unsupported" then pressure = "unsupported_mode"
+	elseif not context.demand then pressure = "demand_unavailable"
+	elseif not current.actual then pressure = equipment
+	elseif not current.reference then pressure = "baseline_" .. baseline
+	elseif not current.current.combined then pressure = "partial_pressure"
+	else pressure = "ready" end
+
+	local demand = context and context.demand
+	local plans = pressure
+	if pressure == "ready" and not current.actual.sets then plans = "sets_unavailable" end
+	SurvivorUI_RebornRecordGearState({
+		trigger = trigger, worldEpoch = worldEpoch, invalidation = invalidation,
+		ordering = { world = worldOrder, zone = zoneOrder, armor = armorOrder, associatedArmor = associatedArmorOrder },
+		catalog = { native = type(AZS_GEN) == "table", maps = type(Maps) == "table",
+			equipment = current and current.catalog ~= nil or false },
+		resolution = { enabled = enabled, map = map, difficulty = difficulty, scope = context and context.scope,
+			equipment = equipment, armorDisposition = armorDisposition, armorAssociated = associatedArmorOrder ~= nil,
+			acceptedArmorCount = associatedArmorOrder and table.getn(worn) or nil,
+			baseline = baseline, pressure = pressure,
+			planA = plans == "ready" and not current.drops and "drop_scope_unavailable" or plans, planB = plans,
+			saveBaseline = demand and demand.output ~= nil and demand.survival ~= nil
+				and current.actual ~= nil and current.actual.sets ~= nil and current.actual.survival ~= nil or false },
+	}, observedZone, wire)
+end
+
+local function InvalidateGear()
+	worn, associatedArmorOrder = nil, nil
+	armorDisposition = "waiting_armor"
+	ClearState()
+end
+
+local function Read()
+	local zone = observedZone
+	if not zone then return end
+	if not SameZone(zone, Snapshot(AZS_ZONE)) then
+		observedZone = nil
+		InvalidateGear()
+		TraceGear("read", nil, "native_context_changed")
+		return
+	end
+	if not state then state = EvaluateState(zone) end
 	return state
+end
+
+local function RequestDiagnosticSync(fromOpen)
+	if diagnosticSyncRequested or diagnosticZoneWireSeen or not SurvivorUI_RebornRecording
+		or not SurvivorUI_RebornRecording() or not SurvivorUI_RebornGearEnabled() or not AZS_SendCommand then return end
+	local zone = Snapshot(AZS_ZONE)
+	if not fromOpen and not (zone and zone.hub and observedZone) then return end
+	local map, difficulty = ResolveSelection(zone)
+	if map == "ready" and difficulty == "ready" and observedZone and SameZone(observedZone, zone) then return end
+	-- Auto recording sees the native entry sync. An unresolved selection
+	-- in a late-start recording gets one documented read-only resync.
+	diagnosticSyncRequested = true
+	TraceGear("sync_request")
+	if not pcall(AZS_SendCommand, "sync") then TraceGear("sync_failed") end
+end
+
+function SurvivorUI_RebornGearRecordStart()
+	if not SurvivorUI_RebornActive() then return end
+	diagnosticSyncRequested, diagnosticZoneWireSeen = nil, nil
+	TraceGear("record_start")
+	RequestDiagnosticSync(false)
 end
 
 local function ShortPercent(value)
@@ -492,6 +599,7 @@ local function SaveBaseline()
 	ClearPreview()
 	state, searches = nil, nil
 	render()
+	TraceGear("baseline_saved")
 end
 
 local function ContextLines(current)
@@ -765,12 +873,19 @@ function SurvivorUI_RebornGearOpen(argument)
 	end
 	panel:Show()
 	showView(argument == "simulator" and "simulator" or "planner")
+	TraceGear("open")
+	RequestDiagnosticSync(true)
 	return true
 end
 
-local function WorldChanged()
-	observedZone, worn = nil, nil
-	ClearState()
+local function WorldChanged(reason)
+	observedZone = nil
+	InvalidateGear()
+	if reason == "world_enter" then
+		worldEpoch, worldOrder = worldEpoch + 1, NoteObservation()
+		diagnosticZoneWireSeen = nil
+	end
+	TraceGear(reason, nil, reason)
 	if panel then panel:Hide() end
 end
 
@@ -778,35 +893,47 @@ local registered
 local function InstallListeners()
 	if not SurvivorUI_RebornGearEnabled() or registered or not (AZS and type(AZS.On) == "function") then return end
 	registered = true
-	AZS.On("AZSZONE", function()
+	AZS.On("AZSZONE", function(msg)
 		if not SurvivorUI_RebornGearEnabled() then return end
 		local snapshot = Snapshot(AZS_ZONE)
 		local changed = not SameZone(observedZone, snapshot)
 		if changed then
-			worn = nil
-			ClearState()
+			InvalidateGear()
 		end
+		zoneOrder = NoteObservation()
 		observedZone = snapshot
 		InstallInspectHook()
 		if changed then render() end
+		TraceGear("AZSZONE", msg, changed and "zone_changed" or nil)
 	end)
 	AZS.On("AZSARMOR", function()
-		if not SurvivorUI_RebornGearEnabled() or not observedZone then return end
+		if not SurvivorUI_RebornGearEnabled() then return end
+		armorOrder = NoteObservation()
+		if not observedZone then
+			armorDisposition = "armor_before_zone"
+			TraceGear("AZSARMOR")
+			return
+		end
 		if not SameZone(observedZone, Snapshot(AZS_ZONE)) then
-			observedZone, worn = nil, nil
-			ClearState()
+			observedZone = nil
+			InvalidateGear()
+			armorDisposition = "armor_context_mismatch"
 			render()
+			TraceGear("AZSARMOR", nil, "native_context_changed")
 			return
 		end
 		-- The armor wire has no run ID. Only accept it after the current zone
 		-- boundary, and never attach an earlier cached armor table at entry.
 		local pieces = Gear.Worn(Gear.Catalog(AZS_GEN), observedZone.class, AZS_ARMOR)
+		associatedArmorOrder = pieces and armorOrder or nil
+		armorDisposition = pieces and "associated" or "armor_rejected"
 		if not PieceListsEqual(worn, pieces) then
 			worn = pieces
 			ClearState()
 			render()
 		end
 		InstallInspectHook()
+		TraceGear("AZSARMOR")
 	end)
 	AZS.On("AZSHELLO", function()
 		if state and SurvivorUI_RebornGearEnabled() then state.context.build = AZS.ServerBuild end
@@ -816,7 +943,7 @@ end
 local lifecycle = CreateFrame("Frame")
 lifecycle:SetScript("OnEvent", function(_, name)
 	name = name or event
-	if name == "PLAYER_ENTERING_WORLD" then WorldChanged() end
+	if name == "PLAYER_ENTERING_WORLD" then WorldChanged("world_enter") end
 	InstallListeners()
 	if name == "PLAYER_LOGIN" then
 		lifecycle:UnregisterEvent("PLAYER_LOGIN")
@@ -835,7 +962,7 @@ function SurvivorUI_RebornGearToggle()
 	Settings().enabled = not enabled
 	if enabled then
 		lifecycle:UnregisterEvent("PLAYER_ENTERING_WORLD")
-		WorldChanged()
+		WorldChanged("feature_disabled")
 		InspectUpdated()
 	else
 		lifecycle:RegisterEvent("PLAYER_ENTERING_WORLD")
