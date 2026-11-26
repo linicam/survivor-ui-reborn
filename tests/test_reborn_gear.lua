@@ -124,9 +124,9 @@ end
 -- World-UI lifecycle with mock widgets. The module creates no frame until requested.
 local widgets, buttons, logs = {}, {}, {}
 local count = 0
-function CreateFrame(kind, name)
+function CreateFrame(kind, name, parent)
 	count = count + 1
-	local w = { name = name, kind = kind, scripts = {}, shown = true, messages = {} }
+	local w = { name = name, kind = kind, parent = parent, scripts = {}, shown = true, messages = {} }
 	function w:CreateFontString() return CreateFrame("FontString") end
 	function w:SetText(text)
 		self.text = text
@@ -144,6 +144,7 @@ function CreateFrame(kind, name)
 	return setmetatable(w, { __index = function() return function() end end })
 end
 function SurvivorUI_T(string) return string end
+function SurvivorUI_TF(text, value) return (string.gsub(text, "{1}", value)) end
 local reborn, phase = false, "playing"
 function SurvivorUI_RebornActive() return reborn end
 function AZS_GetPhase() return phase end
@@ -153,31 +154,75 @@ assert(count == 0)
 SurvivorUI_RebornGearOpen()
 assert(count == 0)
 reborn = true
-assert(not SurvivorUI_RebornGearOpen("show"))
-assert(count == 0 and #logs == 1)
-phase = nil -- The native API returns nil in the Hub.
+AZS_ZONE = { zone = "naxx", dt = 1, zname = "Naxxramas" }
+phase = "ready"
 assert(SurvivorUI_RebornGearOpen("show"))
-local input, items, output, gearPanel
+local input, items, output, gearPanel, gearView
 for _, w in ipairs(widgets) do
-	if w.kind == "EditBox" then if not input then input = w else items = w end end
+	if w.kind == "EditBox" then
+		if not input then input = w; gearView = w.parent else items = w end
+	end
 	if w.kind == "ScrollingMessageFrame" then output = w end
 	if w.name == "SurvivorUIRebornGearPanel" then gearPanel = w end
 end
-assert(gearPanel and gearPanel:IsShown() and #output.messages == 1)
-assert(SurvivorUI_RebornGearOpen("show") and #output.messages == 1, "opening from options is idempotent")
+local function Shows(text)
+	return string.find(table.concat(output.messages, "\n"), text, 1, true) ~= nil
+end
+local saveMap = buttons["Set current map to 100%"].scripts.OnClick
+assert(gearPanel and gearPanel:IsShown() and not gearView:IsShown() and Shows("179.0%"))
+local messageCount = #output.messages
+assert(SurvivorUI_RebornGearOpen("show") and #output.messages == messageCount, "opening from options is idempotent")
+saveMap()
+local mapRef = SurvivorUIDB.rebornGear.mapReference
+assert(mapRef.zone == "naxx" and mapRef.tier == 1 and Shows("100.0%") and Shows("Naxxramas · Heroic I"))
 assert(not SurvivorUI_RebornGearOpen() and not gearPanel:IsShown(), "slash command still toggles the panel")
+gearPanel.scripts.OnEvent()
 assert(SurvivorUI_RebornGearOpen("show"))
-buttons.Difficulty.scripts.OnClick()
-assert(string.find(table.concat(output.messages, "\n"), "100.0%", 1, true))
+saveMap()
+assert(SurvivorUIDB.rebornGear.mapReference == mapRef and Shows("Your reference was kept"), "prior world snapshot is rejected")
+AZS_ZONE = { zone = "elwynn", dt = "2", zname = "Elwynn Forest" }
+phase = "playing"
+buttons["Refresh current map"].scripts.OnClick()
+local expected = 100 * G.Pressure(SurvivorUI_RebornMapReference, "elwynn", 2) / G.Pressure(SurvivorUI_RebornMapReference, "naxx", 1)
+assert(Shows(string.format("%.1f%%", expected)))
+saveMap()
+mapRef = SurvivorUIDB.rebornGear.mapReference
+assert(mapRef.zone == "elwynn" and mapRef.tier == 2 and Shows("100.0%"), "map can be saved during a run")
+AZS_ZONE = { zone = "naxx", dt = 0, hub = 1 }
+phase = nil -- The native API returns nil in the Hub.
+saveMap()
+assert(SurvivorUIDB.rebornGear.mapReference == mapRef and Shows("Your reference was kept"))
+AZS_ZONE = { zone = "naxx" }
+phase = "ready"
+saveMap()
+assert(SurvivorUIDB.rebornGear.mapReference == mapRef and Shows("Your reference was kept"), "missing difficulty cannot default to Normal")
+AZS_ZONE = { zone = "naxx", dt = 6 }
+saveMap()
+assert(SurvivorUIDB.rebornGear.mapReference == mapRef and Shows("Your reference was kept"), "unmodeled tiers cannot replace the reference")
+AZS_ZONE = { zone = "naxx", dt = 0 }
+AZS_PG = { active = true }
+saveMap()
+assert(SurvivorUIDB.rebornGear.mapReference == mapRef and Shows("Your reference was kept"))
+AZS_PG = nil
+phase = "playing"
+buttons["Gear planner"].scripts.OnClick()
+assert(gearView:IsShown())
+buttons["Gear preview"].scripts.OnClick()
+assert(logs[#logs] == "Open gear analysis from the hub or outside active combat.")
+phase = nil
+assert(SurvivorUI_RebornGearOpen("show"))
+assert(not gearView:IsShown())
+buttons["Gear planner"].scripts.OnClick()
 items:SetText("main_hand common 4 worn 100")
-buttons["Save 100%"].scripts.OnClick()
+buttons["Save gear setup"].scripts.OnClick()
 assert(SurvivorUIDB.rebornGear.references.warlock.gear[1].stars == 4)
+assert(SurvivorUIDB.rebornGear.mapReference == mapRef, "gear scenarios keep their own references")
 input:SetText("warlock naxx 1 0")
 assert(#output.messages == 0, "edited input invalidates displayed output")
 buttons["Stars Only"].scripts.OnClick()
 assert(string.find(table.concat(output.messages, "\n"), "100 extra gold", 1, true))
 AZS_GEN.pieces.scale.factor = 0.71
-buttons.Difficulty.scripts.OnClick()
+buttons["Compare gear"].scripts.OnClick()
 assert(string.find(table.concat(output.messages, "\n"), "Save a reference", 1, true), "changed catalog invalidates reference")
 AZS_GEN.pieces.scale.factor = 0.7
 input:SetText("warlock naxx 1 0 main_hand")
@@ -189,4 +234,8 @@ assert(string.find(previews, "common ★5 · price unknown", 1, true))
 SurvivorUI_RebornGearOpen("toggle planner")
 buttons["Farm & Upgrade"].scripts.OnClick()
 assert(logs[#logs] == "This gear analysis feature is disabled.")
+GetLocale = function() return "zhCN" end
+dofile("SurvivorUI/Locale_zh.lua")
+assert(SurvivorUI_WORDS.zh["Set current map to 100%"] == "将当前地图设为 100%")
+assert(string.format(SurvivorUI_WORDS.zh["100%% reference: %s"], "纳克萨玛斯") == "100% 基准：纳克萨玛斯")
 print("PASS: gear arithmetic, sets, exhaustive solver comparison, and panel lifecycle")

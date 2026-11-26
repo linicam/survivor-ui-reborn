@@ -2,8 +2,10 @@
 if SurvivorUI_Standby or not SurvivorUI_RebornGearModel then return end
 
 local Gear = SurvivorUI_RebornGearModel
-local WIDTH, HEIGHT = 590, 510
-local panel, context, entries, results
+local WIDTH, MAP_HEIGHT, GEAR_HEIGHT = 590, 245, 510
+local panel, mapView, advanced, viewButton, context, entries, results
+local blockedZone
+local ROMAN = { "I", "II", "III", "IV", "V" }
 local function T(key) return SurvivorUI_T(key) end
 
 local function Settings()
@@ -40,6 +42,54 @@ end
 
 local function Add(text)
 	results:AddMessage(text, 0.9, 0.93, 0.96)
+end
+
+local function MapTitle(zone, tier, liveName)
+	local name = type(liveName) == "string" and liveName ~= "" and liveName or nil
+	if not name then
+		for _, row in ipairs(AZS_GEN and AZS_GEN.zones or {}) do
+			if row.key == zone then
+				name = row.name and (AZS_L and AZS_L[row.name] or row.name)
+				break
+			end
+		end
+	end
+	local difficulty = tier == 0 and T("Normal") or SurvivorUI_TF("Heroic {1}", ROMAN[tier])
+	return (name or (zone == "naxx" and T("Naxxramas")) or zone) .. " · " .. difficulty
+end
+
+local function CurrentMap()
+	local zone = AZS_ZONE
+	if type(zone) ~= "table" or zone == blockedZone or tonumber(zone.hub) == 1
+		or (AZS_PG and AZS_PG.active) or not (AZS_GetPhase and AZS_GetPhase()) then return end
+	local tier = tonumber(zone.dt)
+	local pressure = Gear.Pressure(SurvivorUI_RebornMapReference, zone.zone, tier)
+	if pressure then return zone.zone, tier, pressure, zone.zname end
+end
+
+local function ShowMap(save)
+	local settings = Settings()
+	local key, tier, pressure, name = CurrentMap()
+	results:Clear()
+	if save and pressure then settings.mapReference = { zone = key, tier = tier } end
+	local ref = settings.mapReference
+	local refKey, refTier, base = "naxx", 0, nil
+	if type(ref) == "table" then
+		base = Gear.Pressure(SurvivorUI_RebornMapReference, ref.zone, ref.tier)
+		if base then refKey, refTier = ref.zone, ref.tier end
+	end
+	base = base or Gear.Pressure(SurvivorUI_RebornMapReference, refKey, refTier)
+	if save and pressure then Add(T("Current map saved as 100%.")) end
+	Add(string.format(T("100%% reference: %s"), MapTitle(refKey, refTier, key == refKey and name or nil)))
+	if pressure then
+		Add(string.format(T("Current map: %s"), MapTitle(key, tier, name)))
+		Add(string.format(T("Map health scaling vs reference %.1f%%"), 100 * pressure / base))
+		Add(T("This comparison uses standard Campaign enemy health scaling."))
+		if tier >= 3 or refTier >= 3 then Add(T("Heroic affixes can change the actual workload.")) end
+	else
+		Add(T("Enter a Campaign map to read its difficulty and set it as 100%."))
+		if save then Add(T("Current map data unavailable. Your reference was kept.")) end
+	end
 end
 
 local function ActiveSets(sets)
@@ -196,7 +246,7 @@ end
 
 local function Calculate(action)
 	results:Clear()
-	local state, err = Read(action == "map" or action == "reference")
+	local state, err = Read(action == "compare" or action == "reference")
 	if not state then Add(err); return end
 	local settings = Settings()
 	settings.context, settings.entries = context:GetText(), entries:GetText()
@@ -213,10 +263,10 @@ local function Calculate(action)
 	if not state.pieces then
 		local ref = Reference(state, settings)
 		local base = ref and ref.pressure or Gear.Pressure(SurvivorUI_RebornMapReference, "naxx", 0)
-		Add(T("Map / tier") .. " · " .. state.zone .. " / " .. state.tier)
-		Add(ref and string.format(T("Reference %s / %d · %d pieces"), ref.zone, ref.tier, table.getn(ref.gear)) or "Naxxramas Normal")
+		Add(T("Map / tier") .. " · " .. MapTitle(state.zone, state.tier))
+		Add(string.format(T("100%% reference: %s"), MapTitle(ref and ref.zone or "naxx", ref and ref.tier or 0)))
 		Add(string.format(T("Map health scaling vs reference %.1f%%"), 100 * state.pressure / base))
-		if state.tier >= 3 then Add(T("Heroic affixes can change the actual workload.")) end
+		if state.tier >= 3 or (ref and ref.tier >= 3) then Add(T("Heroic affixes can change the actual workload.")) end
 		Add(T("Enter gear to calculate equipment-adjusted pressure."))
 		return
 	end
@@ -267,22 +317,36 @@ end
 
 local function RunAction(action)
 	local settings = Settings()
-	local feature = action == "map" and "difficulty" or action == "gear" and "preview"
+	local mapAction = action == "map" or action == "save_map"
+	local feature = mapAction and "difficulty" or action == "gear" and "preview"
 		or (action == "stars" or action == "farm") and "planner" or action == "record" and "diagnostics"
 	if feature and (settings[feature] == false or (feature == "diagnostics" and settings[feature] ~= true)) then
 		Say("This gear analysis feature is disabled.")
 		return
 	end
-	local phase = AZS_GetPhase and AZS_GetPhase()
+	local phase = not mapAction and AZS_GetPhase and AZS_GetPhase()
 	if phase == "playing" or phase == "choosing" or phase == "paused" then
 		Say("Open gear analysis from the hub or outside active combat.")
 		return
 	end
-	local ok = pcall(Calculate, action)
+	local ok
+	if mapAction then ok = pcall(ShowMap, action == "save_map") else ok = pcall(Calculate, action) end
 	if not ok then
 		results:Clear()
 		Add(T("Gear analysis is unavailable for these game data."))
 	end
+end
+
+local function ShowView(equipment)
+	if equipment then mapView:Hide(); advanced:Show() else advanced:Hide(); mapView:Show() end
+	panel:SetHeight(equipment and GEAR_HEIGHT or MAP_HEIGHT)
+	viewButton:SetText(T(equipment and "Map difficulty" or "Gear planner"))
+	results:Clear()
+	results:ClearAllPoints()
+	results:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, equipment and -272 or -118)
+	results:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -20, 17)
+	if not equipment then RunAction("map") end
+	results:ScrollToTop()
 end
 
 local function Label(parent, text, x, y)
@@ -294,26 +358,52 @@ end
 local function Build()
 	panel = CreateFrame("Frame", "SurvivorUIRebornGearPanel", UIParent)
 	panel:Hide()
-	panel:SetWidth(WIDTH); panel:SetHeight(HEIGHT)
+	panel:SetWidth(WIDTH); panel:SetHeight(MAP_HEIGHT)
 	panel:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
 	panel:SetFrameStrata("DIALOG"); panel:EnableMouse(true)
 	panel:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
 		edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12 })
 	panel:SetBackdropColor(0.05, 0.06, 0.08, 0.98)
 	panel:RegisterEvent("PLAYER_ENTERING_WORLD")
-	panel:SetScript("OnEvent", function() panel:Hide() end)
+	panel:SetScript("OnEvent", function()
+		blockedZone = AZS_ZONE
+		panel:Hide()
+	end)
 	local close = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
 	close:SetPoint("TOPRIGHT", panel, "TOPRIGHT", 0, 0)
 	Label(panel, "Gear & Difficulty", 16, -16)
-	Label(panel, "class map tier background% [slot]", 16, -46)
-	context = CreateFrame("EditBox", nil, panel, "InputBoxTemplate")
+	viewButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+	viewButton:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -34, -12)
+	viewButton:SetWidth(122); viewButton:SetHeight(22)
+	viewButton:SetScript("OnClick", function()
+		context:ClearFocus(); entries:ClearFocus()
+		ShowView(not advanced:IsShown())
+	end)
+	mapView = CreateFrame("Frame", nil, panel)
+	mapView:SetAllPoints(panel)
+	advanced = CreateFrame("Frame", nil, panel)
+	advanced:SetAllPoints(panel)
+	Label(mapView, "Enter the map you want to use as your reference. No gear entry is needed.", 16, -48)
+	for index, row in ipairs({ { "save_map", "Set current map to 100%" }, { "map", "Refresh current map" } }) do
+		local action = row[1]
+		local button = CreateFrame("Button", nil, mapView, "UIPanelButtonTemplate")
+		button:SetPoint("TOPLEFT", mapView, "TOPLEFT", 16 + (index - 1) * 204, -76)
+		button:SetWidth(196); button:SetHeight(24)
+		button:SetText(T(row[2]))
+		button:SetScript("OnClick", function()
+			RunAction(action)
+			results:ScrollToTop()
+		end)
+	end
+	Label(advanced, "class map tier background% [slot]", 16, -46)
+	context = CreateFrame("EditBox", nil, advanced, "InputBoxTemplate")
 	context:SetWidth(WIDTH - 38); context:SetHeight(23); context:SetMaxLetters(125)
-	context:SetPoint("TOPLEFT", panel, "TOPLEFT", 20, -62)
+	context:SetPoint("TOPLEFT", advanced, "TOPLEFT", 20, -62)
 	context:SetAutoFocus(false)
 	context:SetScript("OnEscapePressed", function() context:ClearFocus() end)
-	Label(panel, "slot quality stars worn/owned/farm [next prices: 100,200]", 16, -95)
-	local scroll = CreateFrame("ScrollFrame", "SurvivorUIRebornGearInput", panel, "UIPanelScrollFrameTemplate")
-	scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -112)
+	Label(advanced, "slot quality stars worn/owned/farm [next prices: 100,200]", 16, -95)
+	local scroll = CreateFrame("ScrollFrame", "SurvivorUIRebornGearInput", advanced, "UIPanelScrollFrameTemplate")
+	scroll:SetPoint("TOPLEFT", advanced, "TOPLEFT", 16, -112)
 	scroll:SetWidth(WIDTH - 52); scroll:SetHeight(112)
 	entries = CreateFrame("EditBox", nil, scroll)
 	entries:SetWidth(WIDTH - 58); entries:SetMultiLine(true); entries:SetMaxLetters(8192)
@@ -322,8 +412,6 @@ local function Build()
 	entries:SetScript("OnEscapePressed", function() entries:ClearFocus() end)
 	scroll:SetScrollChild(entries)
 	results = CreateFrame("ScrollingMessageFrame", nil, panel)
-	results:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -272)
-	results:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -20, 17)
 	results:SetFontObject(GameFontHighlightSmall)
 	results:SetJustifyH("LEFT"); results:SetFading(false); results:SetMaxLines(160)
 	results:EnableMouseWheel(true)
@@ -334,14 +422,14 @@ local function Build()
 	context:SetScript("OnTextChanged", ClearResults)
 	entries:SetScript("OnTextChanged", ClearResults)
 	local actions = {
-		{ "save", "Save 100%" }, { "map", "Difficulty" }, { "gear", "Gear preview" },
+		{ "save", "Save gear setup" }, { "compare", "Compare gear" }, { "gear", "Gear preview" },
 		{ "stars", "Stars Only" }, { "farm", "Farm & Upgrade" },
 	}
 	for index, row in ipairs(actions) do
 		local action = row[1]
-		local button = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+		local button = CreateFrame("Button", nil, advanced, "UIPanelButtonTemplate")
 		button:SetWidth(108); button:SetHeight(22)
-		button:SetPoint("TOPLEFT", panel, "TOPLEFT", 15 + (index - 1) * 112, -236)
+		button:SetPoint("TOPLEFT", advanced, "TOPLEFT", 15 + (index - 1) * 112, -236)
 		button:SetText(T(row[2]))
 		button:SetScript("OnClick", function()
 			context:ClearFocus(); entries:ClearFocus()
@@ -370,13 +458,9 @@ function SurvivorUI_RebornGearOpen(argument)
 		if panel then panel:Hide() end
 		return
 	end
-	local phase = AZS_GetPhase and AZS_GetPhase()
-	if phase == "playing" or phase == "choosing" or phase == "paused" then
-		Say("Open gear analysis from the hub or outside active combat.")
-		return
-	end
 	if not panel then Build() end
 	if argument == "keys" then
+		ShowView(true)
 		results:Clear()
 		local catalog = Gear.Catalog(AZS_GEN)
 		if catalog then
@@ -389,16 +473,18 @@ function SurvivorUI_RebornGearOpen(argument)
 		results:ScrollToTop()
 		panel:Show()
 	elseif argument == "reference" then
+		ShowView(true)
 		RunAction("reference")
 		panel:Show()
 	elseif argument == "capture" then
+		ShowView(true)
 		RunAction("record")
 		panel:Show()
-	elseif panel:IsShown() then
-		if argument ~= "show" then panel:Hide() end
+	elseif panel:IsShown() and argument ~= "show" then
+		panel:Hide()
 	else
+		if not panel:IsShown() or advanced:IsShown() then ShowView(false) end
 		panel:Show()
-		if entries:GetText() == "" then Add(T("Enter values from the game menu. Upgrade prices are optional.")) end
 	end
 	return panel:IsShown()
 end

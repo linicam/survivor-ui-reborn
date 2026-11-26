@@ -1,8 +1,12 @@
 # Gear & Difficulty Analyzer
 
-From the Reborn character menu, choose **Game Modes → Hub**, then enter the Hub. Click the Survivor UI button beside the minimap and choose **Global → Open Gear & Difficulty**. `/sui gear` also opens the panel in the Hub or another non-combat world. The character menu uses a separate Glue Lua environment. Its AddOns menu manages addon enablement. The world panel never reads the last `AZS_ZONE` as a menu selection. It does not access the account save, invoke the native upgrade button, or send gameplay commands.
+Enter the Campaign map and difficulty you want to use as a reference. Click the Survivor UI button beside the minimap, choose **Global → Open Gear & Difficulty**, then click **Set current map to 100%**. The map page reads the current run's map and tier from `AZS_ZONE`. Opening it in another map shows the new comparison automatically. If the snapshot is still pending, click **Refresh current map**. The map reference is shared across classes and defaults to Naxxramas Normal. The Hub can display an existing reference. It supplies no map to save. This percentage uses standard Campaign enemy health factors.
 
-## Inputs
+`/sui gear` also opens the panel in the world. The character menu uses a separate Glue Lua environment and its AddOns menu manages addon enablement. The analyzer does not access the account save, invoke the native upgrade button, or send gameplay commands.
+
+## Optional gear planner
+
+Use **Gear planner** for manual equipment scenarios outside active combat. These scenarios keep their own references.
 
 The first field is `class map tier background% [slot]`. For example, `warlock naxx 0 0 main_hand` represents Warlock, Naxxramas Normal, an illustrative zero non-gear addition, and a preview restricted to the main hand. Enter Heroic I through V as 1–5. `/sui gear keys` lists zone and slot keys.
 
@@ -20,7 +24,7 @@ head rare 1 worn
 - `farm` declares a legal, verified drop for this class, slot, and progression. It starts at zero stars with no acquisition gold. If the slot is occupied, its quality must be above the worn piece.
 - Prices are consecutive incremental amounts from the next star. Existing stars are sunk cost. An unpriced star is excluded from the search. The Gear preview can still show its attribute change, including three- and five-star previews when a slot is specified.
 
-Choose **Save 100%** on the reference map and loadout before editing the target fields. References are stored per class with gear rows, attributes, active sets, map and tier, model version, and fixed background. Changing the background, reference map multiplier, or relevant native gear values invalidates comparison. View with `/sui gear reference`. With a blank loadout, **Difficulty** shows the map scale alone.
+Choose **Save gear setup** on the reference map and loadout before editing the target fields. Gear scenario references are stored per class with gear rows, attributes, active sets, map and tier, model version, and fixed background. Changing the background, reference map multiplier, or relevant native gear values invalidates the gear calculation. View with `/sui gear reference`. With a blank loadout, **Compare gear** shows the entered map scale alone.
 
 ## Models and controls
 

@@ -1648,7 +1648,7 @@ if SurvivorUI_RebornGearOpen and SurvivorUI_RebornActive() then
 		if SurvivorUI_RebornGearOpen("show") then panel:Hide() end
 	end)
 	page.y = page.y - 28
-	Note(page, "Use the analyzer in the Hub game mode or outside active combat.")
+	Note(page, "Enter a Campaign map to read its difficulty and set it as 100%.")
 end
 Subheader(page, "Font")
 FontPicker(page, "Global font",
