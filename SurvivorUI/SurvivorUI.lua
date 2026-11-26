@@ -4619,6 +4619,8 @@ SlashCmdList["SURVIVORUI"] = function(msg)
 		else
 			DEFAULT_CHAT_FRAME:AddMessage("Survivor UI: Reborn diagnostics are not loaded (RebornCompat.lua).")
 		end
+	elseif command == "gear" then
+		if SurvivorUI_RebornGearOpen then SurvivorUI_RebornGearOpen(argument) end
 	elseif msg == "damage" then
 		SurvivorUI_ToggleDamage()
 	elseif msg == "damage side" then
@@ -4657,6 +4659,9 @@ SlashCmdList["SURVIVORUI"] = function(msg)
 		DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Survivor UI: /sui hover  switches the white outline around what the mouse is on"))
 		DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Survivor UI: /sui scale 0.85  sizes the panels, 0.6 to 1.4, for smaller screens"))
 		DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Reborn diagnostics: /sui reborn probe | record status | record auto on/off"))
+		if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+			DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Reborn gear: /sui gear opens the analyzer; /sui gear keys lists input keys."))
+		end
 		DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Survivor UI: /sui meter  switches between SurvivorUI's damage meter, with the crits, and Default"))
 		DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Survivor UI: /sui meter now  opens or closes the meter now: the last 30 seconds, since its Reset or the boss fight"))
 	end
