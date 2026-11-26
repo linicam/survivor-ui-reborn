@@ -180,6 +180,40 @@ function SurvivorUI_RebornStatCap(key)
 	return cap
 end
 
+local CARD_STAT_KEYS = {
+	["crit chance"] = "crit", ["critical chance"] = "crit", ["critical strike chance"] = "crit",
+	["暴击几率"] = "crit", ["暴击率"] = "crit",
+	["cooldown reduction"] = "cdr", ["冷却缩减"] = "cdr",
+	["echo"] = "echo", ["回响"] = "echo",
+	["damage reduction"] = "red", ["伤害减免"] = "red",
+}
+
+-- The item's before/after numbers identify an increase. The current
+-- global run sheet determines whether the affected stat is capped.
+function SurvivorUI_RebornCardCapLines(card, display)
+	if type(card) ~= "table" or (card.mode ~= "grow" and card.mode ~= "empower")
+		or type(card.detail) ~= "string" or type(display) ~= "string" then
+		return display
+	end
+	local capped = {}
+	for row in string.gmatch(card.detail, "[^%^]+") do
+		local label, from, to = string.match(row, "^(.-)=([%d.]+)%%=([%d.]+)%%=%+$")
+		local key = label and CARD_STAT_KEYS[string.lower(label)]
+		from, to = tonumber(from), tonumber(to)
+		if key and from and to and to > from then
+			local _, remaining = SurvivorUI_RebornStatCap(key)
+			if remaining == 0 then capped[label] = true end
+		end
+	end
+	if not next(capped) then return display end
+	local suffix = " |cffffc04c(" .. T("At cap") .. ")|r"
+	return (string.gsub(display, "[^\n]+", function(line)
+		local plain = string.gsub(string.gsub(line, "|c%x%x%x%x%x%x%x%x", ""), "|r", "")
+		local label = string.match(plain, "^(.-)  ")
+		return label and capped[label] and line .. suffix or line
+	end))
+end
+
 -- The run id, or nil when the game has not told it yet. Older servers
 -- saying run=1 are handled by the clock-rewind fallback in callers; here
 -- we only report what the game actually says.

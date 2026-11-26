@@ -832,5 +832,55 @@ eq("jewelry locale: Chinese fallback", zhJewelry.name, "短暂能量护符")
 eq("jewelry locale: instance unchanged", zhJewelry.instanceKey, "gear:trinket:tep")
 eq("jewelry locale: shared source rank ignored", zhJewelry.rank, nil)
 
+AZS_RequestAbilities = function() end
+AZS_RUNSTATS = { crit = 100, cdr = 79 }
+AZS_CAPS = { crit = 100, cdr = 80 }
+local card = { mode = "grow", detail = "暴击几率=76.9%=83.7%=+^冷却缩减=10%=11%=+" }
+local display = "|cff999999暴击几率|r  76.9% » |cff1eff0083.7%|r\n冷却缩减  10% » 11%"
+eq("cards: annotate only capped global stat in Chinese",
+	SurvivorUI_RebornCardCapLines(card, display),
+	"|cff999999暴击几率|r  76.9% » |cff1eff0083.7%|r |cffffc04c(已达上限)|r\n冷却缩减  10% » 11%")
+locale, localeTime = "en", 1004
+card.detail = "Critical strike chance=76.9%=83.7%=+"
+display = "Critical strike chance  76.9% » 83.7%"
+eq("cards: capped English label", SurvivorUI_RebornCardCapLines(card, display),
+	display .. " |cffffc04c(At cap)|r")
+AZS_RUNSTATS.crit = nil
+eq("cards: unknown global stat", SurvivorUI_RebornCardCapLines(card, display), display)
+AZS_RUNSTATS.crit = 100
+card.detail = "Critical strike chance=83.7%=76.9%=-"
+eq("cards: decrease carries no hint", SurvivorUI_RebornCardCapLines(card, display), display)
+card.mode = "new"
+card.detail = "Critical strike chance=76.9%=83.7%=+"
+eq("cards: new item is not an upgrade comparison", SurvivorUI_RebornCardCapLines(card, display), display)
+
+local rendered = display
+local button = { Fit = function() end, detail = {
+	GetText = function() return rendered end,
+	SetText = function(_, value) rendered = value end,
+} }
+AZSCardsFrame = {}
+getglobal = function(name) return name == "AZSCard1" and button or nil end
+hooksecurefunc = function(object, method, after)
+	local native = object[method]
+	object[method] = function() native(); after() end
+end
+card.mode = "grow"
+AZS_CARDS = { kind = "jewel", cards = { card } }
+dofile("SurvivorUI/CardsNotice.lua")
+button.Fit()
+local marked = rendered
+button.Fit()
+eq("cards: repeated native layout adds one hint", rendered, marked)
+button.saved = { marked }
+rendered = "Equipped item comparison"
+button.Fit()
+eq("cards: Shift comparison left intact", rendered, "Equipped item comparison")
+button.saved = nil
+rendered = marked
+AZS_CARDS = { kind = "spell", cards = {} }
+button.Fit()
+eq("cards: next offer clears the old hint", rendered, display)
+
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

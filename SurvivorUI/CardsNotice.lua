@@ -7,6 +7,43 @@
 
 if SurvivorUI_Standby then return end
 
+-- The native hand fits its content after filling the cards and changing
+-- Shift comparison. Refit only when an attribute label actually changes.
+local function HookCardCapHints()
+	if not (AZSCardsFrame and hooksecurefunc and SurvivorUI_RebornCardCapLines) then return end
+	for index = 1, 4 do
+		local button = getglobal("AZSCard" .. index)
+		if button and type(button.Fit) == "function" and button.detail then
+			local slot = index
+			local original, annotated, refitting
+			hooksecurefunc(button, "Fit", function()
+				if refitting or button.saved then return end
+				local display = button.detail:GetText()
+				local base = display == annotated and original or display
+				local hand = AZS_CARDS
+				local card = hand and hand.kind == "jewel" and hand.cards and hand.cards[slot]
+				local updated = SurvivorUI_RebornCardCapLines(card, base)
+				original, annotated = base, updated
+				if updated ~= display then
+					refitting = true
+					button.detail:SetText(updated)
+					button.Fit()
+					refitting = false
+				end
+			end)
+		end
+	end
+	return true
+end
+
+if not HookCardCapHints() and hooksecurefunc then
+	local cardWatch = CreateFrame("Frame")
+	cardWatch:RegisterEvent("PLAYER_ENTERING_WORLD")
+	cardWatch:SetScript("OnEvent", function()
+		if HookCardCapHints() then this:UnregisterEvent("PLAYER_ENTERING_WORLD") end
+	end)
+end
+
 local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 local WIDTH = 440
 local PAD = 16
