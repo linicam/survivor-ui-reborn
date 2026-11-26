@@ -619,6 +619,7 @@ local function Update()
 			end
 			local lairs = settings.pinLairs ~= false and AZS_GetLairs and AZS_GetLairs() or {}
 			local lairSize = SurvivorUI_PinSize("lair")
+			local reborn = SurvivorUI_RebornActive and SurvivorUI_RebornActive()
 			-- The game's seconds left are from its last word; while it plays they
 			-- run on from there (Guardians.lua).
 			local since = AZS_LAIRS_UPDATED and AZS_GetPhase() == "playing" and GetTime() - AZS_LAIRS_UPDATED or 0
@@ -630,10 +631,13 @@ local function Update()
 			end
 			for index = 1, table.getn(lairs) do
 				local lair = lairs[index]
-				-- Awake and out to fight: where its guardian is.
-				local guardian = lair.active and away[tonumber(lair.index) or index]
-				local east, south = WayTo(guardian or lair, px, py, heroX, heroY, span)
-				if east and (lair.active or settings.pinEmpty ~= "hide") then
+				local guardian, east, south
+				if lair.active or (not reborn and settings.pinEmpty ~= "hide") then
+					-- Awake and out to fight: where its guardian is.
+					guardian = lair.active and away[tonumber(lair.index) or index]
+					east, south = WayTo(guardian or lair, px, py, heroX, heroY, span)
+				end
+				if east then
 					shown = shown + 1
 					local pin = Pin(shown)
 					-- The skull, dimmed while the lair is empty.
@@ -653,10 +657,8 @@ local function Update()
 					end
 					pin.title = SurvivorUI_T("Lair")
 					pin.flagged = tonumber(lair.flag) == 1 or nil
-					-- No respawn timer in Reborn (guardians do not
-					-- come back at the fixed lair point there).
+					-- Empty pins are only drawn in the original game.
 					local left = settings.pinTimers and not lair.active
-						and not (SurvivorUI_RebornActive and SurvivorUI_RebornActive())
 						and (tonumber(lair.left) or -1) - since
 					if left and left > 0 then
 						pin.timer:SetText(Clock(left))

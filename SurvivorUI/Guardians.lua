@@ -414,6 +414,7 @@ local function Draw()
 	end
 	local north = Settings().guardiansNorth
 	local healths = Healths()
+	local reborn = SurvivorUI_RebornActive and SurvivorUI_RebornActive()
 	local since = AZS_LAIRS_UPDATED and (GetTime() - AZS_LAIRS_UPDATED) or 0
 	if AZS_GetPhase and AZS_GetPhase() ~= "playing" then
 		since = 0
@@ -441,7 +442,7 @@ local function Draw()
 			-- sampled and decayed on the run clock; the original
 			-- game keeps its own arithmetic. Every guardian view
 			-- reads entry.left, so all displays agree.
-			if SurvivorUI_RebornActive and SurvivorUI_RebornActive() and SurvivorUI_RebornGuardianLeft then
+			if reborn and SurvivorUI_RebornGuardianLeft then
 				entry.left = SurvivorUI_RebornGuardianLeft(lair)
 			else
 				entry.left = (tonumber(Field(lair, "left", 5)) or -1) - since
@@ -463,14 +464,16 @@ local function Draw()
 			entry.share = healths[entry.id]
 		end
 		local east, south
-		local lx, ly = tonumber(Field(lair, "x", 6)), tonumber(Field(lair, "y", 7))
-		if px and lx and ly then
-			east, south = SurvivorUI_WorldWay(px, py, lx, ly)
-		else
-			local mx = SurvivorUI_MapShare and SurvivorUI_MapShare(Field(lair, "mx", 9))
-			local my = SurvivorUI_MapShare and SurvivorUI_MapShare(Field(lair, "my", 10))
-			if heroX and span and mx and my then
-				east, south = (mx - heroX) * span.across, (my - heroY) * span.down
+		if entry.alive or not reborn then
+			local lx, ly = tonumber(Field(lair, "x", 6)), tonumber(Field(lair, "y", 7))
+			if px and lx and ly then
+				east, south = SurvivorUI_WorldWay(px, py, lx, ly)
+			else
+				local mx = SurvivorUI_MapShare and SurvivorUI_MapShare(Field(lair, "mx", 9))
+				local my = SurvivorUI_MapShare and SurvivorUI_MapShare(Field(lair, "my", 10))
+				if heroX and span and mx and my then
+					east, south = (mx - heroX) * span.across, (my - heroY) * span.down
+				end
 			end
 		end
 		if east then

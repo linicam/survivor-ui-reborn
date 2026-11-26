@@ -339,6 +339,10 @@ unchanged in substance); the full audit is in the research notes
 
 ## Known limitations and unsupported features
 
+- Reborn keeps defeated guardians and available respawn timers in its
+  panels. Empty lairs have no world marker, minimap pin, or compass
+  bearing because their last coordinates cannot locate the next spawn.
+
 ### Native snapshots and Stats tooltip
 
 - **Stat caps.** In a Reborn run, the Stats tooltip for Crit, Cooldown Reduction, Echo
