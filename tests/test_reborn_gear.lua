@@ -210,6 +210,8 @@ function SurvivorUI_RebornActive() return reborn end
 function AZS_GetPhase() return phase end
 local handlers = {}
 AZS = { On = function(event, callback) handlers[event] = callback end }
+local commands = {}
+AZS_SendCommand = function(command) table.insert(commands, command) end
 time = function() return 100 end
 date = function() return "2026-11-26 12:00" end
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, text) table.insert(logs, text) end }
@@ -223,7 +225,8 @@ phase = "ready"
 AZS_ARMOR = { { slot = 0, rarity = 8, stars = 0 }, { slot = 8, rarity = 4, stars = 1 } }
 handlers.AZSARMOR()
 local snapshot = assert(SurvivorUIDB.rebornGear.wornSnapshots.warlock)
-assert(count == 0 and snapshot.at == 100 and #snapshot.pieces == 2, "wear is recorded without creating the UI")
+assert(count == 0 and snapshot.at == 100 and snapshot.source == "campaign" and #snapshot.pieces == 2,
+	"wear is recorded without creating the UI")
 assert(SurvivorUI_RebornGearOpen("show"))
 local input, items, output, gearPanel, gearView
 for _, w in ipairs(widgets) do
@@ -262,9 +265,9 @@ mapRef = SurvivorUIDB.rebornGear.mapReference
 assert(mapRef.zone == "elwynn" and mapRef.tier == 2 and MapShows("100.0%"), "map can be saved during a run")
 AZS_ZONE = { zone = "naxx", dt = 0, hub = 1, class = "warlock" }
 phase = nil -- The native API returns nil in the Hub.
-AZS_ARMOR = { { slot = 8, rarity = 2, stars = 5 } }
+AZS_ARMOR = { { slot = 8, rarity = 2 } }
 handlers.AZSARMOR()
-assert(SurvivorUIDB.rebornGear.wornSnapshots.warlock == snapshot, "the Hub does not overwrite a combat snapshot")
+assert(SurvivorUIDB.rebornGear.wornSnapshots.warlock == snapshot, "an incomplete Hub message keeps the previous snapshot")
 assert(Pick("World", 2) and not Pick("Zone", "elwynn") and not Pick("Zone", "unmodeled"))
 assert(Pick("Zone", "shadowmoon") and MapShows("Preview map: Shadowmoon Valley · Normal"))
 assert(Pick("Tier", 5) and MapShows("Preview map: Shadowmoon Valley · Heroic V"))
@@ -304,12 +307,26 @@ local function WornShows(text)
 	end
 	return false
 end
-assert(WornShows("Enter a Campaign map"), "the Hub never borrows another class's gear")
+assert(WornShows("No worn gear received in the Hub"), "the Hub never borrows another class's gear")
+assert(#commands == 0, "gear capture never sends an automatic sync")
+buttons["Refresh worn gear"].scripts.OnClick()
+assert(#commands == 1 and commands[1] == "sync")
+AZS_ARMOR = { { slot = 0, rarity = 2, stars = 0 } }
+handlers.AZSARMOR()
+local fromHub = assert(SurvivorUIDB.rebornGear.wornSnapshots.paladin)
+assert(fromHub.source == "hub" and #fromHub.pieces == 1 and fromHub.pieces[1].tier == "rare")
+assert(WornShows("Last recorded gear: Paladin · 1 pieces") and WornShows("Recorded in Dalaran Hub"),
+	"the open planner accepts the first snapshot directly in the Hub")
+assert(WornShows("1020 gold (table)"))
+AZS_ARMOR = {}
+handlers.AZSARMOR()
+assert(SurvivorUIDB.rebornGear.wornSnapshots.paladin == fromHub, "an empty reply does not clear the saved snapshot")
 AZS_ZONE = { hub = 1, class = "warlock" }
 assert(SurvivorUI_RebornGearOpen("show"))
 assert(not gearView:IsShown())
 buttons["Gear planner"].scripts.OnClick()
 assert(WornShows("Last recorded gear: Warlock · 2 pieces") and WornShows("3101 gold (estimate)"))
+assert(WornShows("Recorded in a Campaign map"), "the Hub still displays the provenance of a fallback snapshot")
 assert(WornShows("3754 gold (same as armor)"))
 buttons["Load recorded gear"].scripts.OnClick()
 assert(gearView:IsShown() and items:GetText() == "head elementium 0 worn\nmain_hand legendary 1 worn")

@@ -2,11 +2,11 @@
 
 Enter the Campaign map and difficulty you want to use as a reference. Click the Survivor UI button beside the minimap, choose **Global → Open Gear & Difficulty**, then click **Set current map to 100%**. The map page reads the current run's map and tier from `AZS_ZONE`. Opening it in another map shows the new comparison automatically. If the snapshot is still pending, click **Refresh current map**. In the Dalaran Hub or in a run, choose an expansion, map and difficulty to preview the comparison without traveling to that map. Previewing leaves the saved reference intact. The map reference is shared across classes and defaults to Naxxramas Normal. This percentage uses standard Campaign enemy health factors.
 
-`/sui gear` also opens the panel in the world. The character menu uses a separate Glue Lua environment and its AddOns menu manages addon enablement. The analyzer does not access the account save, invoke the native upgrade button, or send gameplay commands.
+`/sui gear` also opens the panel in the world. The character menu uses a separate Glue Lua environment and its AddOns menu manages addon enablement. The analyzer does not access the account save or invoke the native upgrade button.
 
 ## Gear planner
 
-The addon records the last valid native `AZSARMOR` snapshot per class in a campaign map. **Gear planner** in the Dalaran Hub shows the recorded time, up to six next-star gains ranked by added piece damage, and their available prices. The observation is local and contains only class, slot, tier, stars and time. It does not read the character menu's owned collection or the account's upgrade eligibility. Use **Load recorded gear** to fill an empty advanced planner for the selected preview map, or **Edit gear and prices** to enter your own loadout. Gear scenarios keep their own references.
+The addon records the last valid native `AZSARMOR` snapshot per class from a Campaign map or the Dalaran Hub. **Gear planner** shows the snapshot source and time, up to six next-star gains ranked by added piece damage, and their available prices. In the Hub, **Refresh worn gear** asks the game to resend world state using the documented `sync` command. If the Hub supplies no armor rows, the planner can still use a prior Campaign snapshot. The local observation stores class, slot, tier, stars, time and the source. It does not read the character menu's owned collection or the account's upgrade eligibility. Use **Load recorded gear** to fill an empty advanced planner for the selected preview map, or **Edit gear and prices** to enter your own loadout. Gear scenarios keep their own references.
 
 ### Prices
 

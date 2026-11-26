@@ -29,21 +29,23 @@ local function ClassKey()
 	return native and native.key or (token and string.lower(token))
 end
 
+local function InHub(zone)
+	return type(zone) == "table" and tonumber(zone.hub) == 1
+end
+
 local function StoreWorn()
 	local zone = AZS_ZONE
-	if not SurvivorUI_RebornActive() or type(zone) ~= "table" or zone == blockedZone or tonumber(zone.hub) == 1
-		or (AZS_PG and AZS_PG.active) or not (SurvivorUI_RebornMapReference and SurvivorUI_RebornMapReference[zone.zone]) then return end
+	if not SurvivorUI_RebornActive() or type(zone) ~= "table" or zone == blockedZone or (AZS_PG and AZS_PG.active) then return end
+	local hub = InHub(zone)
+	if not hub and not (SurvivorUI_RebornMapReference and SurvivorUI_RebornMapReference[zone.zone]) then return end
 	local settings = Settings()
 	if settings.worn == false or (settings.preview == false and settings.planner == false) then return end
 	local class = ClassKey()
 	local pieces = Gear.Worn(Gear.Catalog(AZS_GEN), class, AZS_ARMOR)
 	if not pieces then return end
 	if type(settings.wornSnapshots) ~= "table" then settings.wornSnapshots = {} end
-	settings.wornSnapshots[class] = { pieces = pieces, at = time and time() }
-end
-
-if AZS and type(AZS.On) == "function" then
-	AZS.On("AZSARMOR", StoreWorn)
+	settings.wornSnapshots[class] = { pieces = pieces, at = time and time(), source = hub and "hub" or "campaign" }
+	return true
 end
 
 local function WornSnapshot()
@@ -194,6 +196,12 @@ local function PriceText(catalog, slot, tier, star)
 	return string.format(T(labels[source]), amount)
 end
 
+local function MissingWornMessage(settings)
+	if settings.worn == false then return T("Worn gear recording is disabled.") end
+	if InHub(AZS_ZONE) then return T("No worn gear received in the Hub yet. Try Refresh worn gear.") end
+	return T("Waiting for the game to send your worn gear.")
+end
+
 local function ShowWorn()
 	local settings = Settings()
 	if settings.preview == false then DisplayLines(wornLines, { T("This gear analysis feature is disabled.") }); return end
@@ -201,14 +209,17 @@ local function ShowWorn()
 	local catalog = Gear.Catalog(AZS_GEN)
 	local rows = snapshot and catalog and Gear.NextStars(catalog, class, snapshot.pieces)
 	if not rows then
-		DisplayLines(wornLines, { T(settings.worn == false and "Worn gear recording is disabled."
-			or "Enter a Campaign map wearing gear once, then return here to see its upgrade gains.") })
+		DisplayLines(wornLines, { MissingWornMessage(settings) })
 		return
 	end
 	local native = AZS_ZONE and AZS_ZONE.cname
 	local stamp = snapshot.at and date and date("%Y-%m-%d %H:%M", snapshot.at)
 	local lines = { string.format(T("Last recorded gear: %s · %d pieces"), native or GearName(class), table.getn(snapshot.pieces)) }
-	if stamp then table.insert(lines, string.format(T("Recorded at %s UTC"), stamp)) end
+	local source = snapshot.source == "hub" and T("Recorded in Dalaran Hub")
+		or snapshot.source == "campaign" and T("Recorded in a Campaign map")
+	if source and stamp then source = source .. " · " .. string.format(T("Recorded at %s UTC"), stamp) end
+	if source then table.insert(lines, source)
+	elseif stamp then table.insert(lines, string.format(T("Recorded at %s UTC"), stamp)) end
 	table.insert(lines, T(rows[1] and "Top next-star gains, ordered by added piece damage" or "All recorded pieces are at five stars."))
 	for i = 1, math.min(table.getn(rows), 6) do
 		local row = rows[i]
@@ -454,7 +465,7 @@ end
 local function UseRecordedGear()
 	local snapshot, class = WornSnapshot()
 	if not snapshot then
-		DisplayLines(wornLines, { T("Enter a Campaign map wearing gear once, then return here to see its upgrade gains.") })
+		DisplayLines(wornLines, { MissingWornMessage(Settings()) })
 		return
 	end
 	ShowView("manual")
@@ -475,6 +486,16 @@ local function UseRecordedGear()
 	context:SetText(string.format("%s %s %d 0", class, key or "naxx", tier or 0))
 	entries:SetText(table.concat(lines, "\n"))
 	RunAction("gear")
+end
+
+local function RefreshWorn()
+	local settings = Settings()
+	if settings.worn == false or settings.preview == false then
+		ShowWorn()
+	elseif InHub(AZS_ZONE) and type(AZS_SendCommand) == "function" then
+		AZS_SendCommand("sync")
+		Say("Requested a worn gear refresh from the game.")
+	end
 end
 
 local function Label(parent, text, x, y)
@@ -610,6 +631,14 @@ local function Build()
 	use:SetWidth(190); use:SetHeight(24)
 	use:SetText(T("Load recorded gear"))
 	use:SetScript("OnClick", UseRecordedGear)
+	local refresh = CreateFrame("Button", nil, wornView, "UIPanelButtonTemplate")
+	refresh:SetPoint("LEFT", use, "RIGHT", 8, 0)
+	refresh:SetWidth(170); refresh:SetHeight(24)
+	refresh:SetText(T("Refresh worn gear"))
+	refresh:SetScript("OnClick", RefreshWorn)
+	wornView:SetScript("OnShow", function()
+		if InHub(AZS_ZONE) and type(AZS_SendCommand) == "function" then refresh:Show() else refresh:Hide() end
+	end)
 	for index = 1, 10 do
 		local label = Label(wornView, "", 16, -86 - (index - 1) * 23)
 		label:SetWidth(WIDTH - 32)
@@ -713,4 +742,10 @@ function SurvivorUI_RebornGearOpen(argument)
 		panel:Show()
 	end
 	return panel:IsShown()
+end
+
+if AZS and type(AZS.On) == "function" then
+	AZS.On("AZSARMOR", function()
+		if StoreWorn() and panel and panel:IsShown() and wornView:IsShown() then ShowWorn() end
+	end)
 end
