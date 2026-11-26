@@ -180,6 +180,9 @@ local activeCurses = {}
 local racialCooldownSample = nil
 local racialSampleStamp = nil
 local eventCurses = {}
+local riftBosses = {}
+local riftBossOrder = {}
+local guardianSamples = {}
 local seenCurseIds = {}
 local curseBoundary = {}
 local historyScanStamp = nil
@@ -221,6 +224,9 @@ local function ResetOwnCaches()
 	jewelryError = nil
 	lastLoadoutAt = 0
 	activeCurses = {}
+	riftBosses = {}
+	riftBossOrder = {}
+	guardianSamples = {}
 	racialCooldownSample = nil
 	racialSampleStamp = AZS_ABILITIES_UPDATED
 	eventCurses = {}
@@ -606,6 +612,14 @@ local function RefreshAbilitiesCache()
 					spell = a.spell, cd = a.cd or 0, cdmax = a.cdmax or 0,
 					atRun = AZS_GetRunTime and AZS_GetRunTime() or 0,
 				}
+				if SurvivorUI_RebornRecord then
+					SurvivorUI_RebornRecord("racial_cooldown", {
+						spell = a.spell, cd = a.cd, cdmax = a.cdmax,
+						stamp = AZS_ABILITIES_UPDATED,
+						runTime = racialCooldownSample.atRun,
+						clientTime = GetTime and GetTime() or nil,
+					})
+				end
 			end
 		end
 	end
@@ -806,7 +820,22 @@ function SurvivorUI_RebornRequestAbilities(force)
 	local changed = signature ~= lastRequestSignature
 		or (AZS_CARDS_UPDATED ~= nil and AZS_CARDS_UPDATED ~= lastRequestCardsStamp)
 	local safetyDue = now - lastAbilityRequest >= 60
-	if not force and not snapshotEmpty and not changed and not safetyDue then
+	-- Adaptive racial sync: while an off-bar racial active exists
+	-- in an active run, resync near predicted readiness so a
+	-- 15-second cooldown is not stranded by the 60-second safety
+	-- refresh. Coalesced through this same request path (5s floor).
+	local racialDue = false
+	if racialCooldownSample and racialCooldownSample.cdmax and racialCooldownSample.cdmax > 0 then
+		local phase = type(AZS_RUN) == "table" and AZS_RUN.ph or nil
+		if phase == "playing" then
+			local runNow = AZS_GetRunTime and AZS_GetRunTime() or 0
+			local predicted = racialCooldownSample.cd - (runNow - racialCooldownSample.atRun)
+			if predicted <= 1 then
+				racialDue = true
+			end
+		end
+	end
+	if not force and not snapshotEmpty and not changed and not safetyDue and not racialDue then
 		return false
 	end
 	if not force and now - lastAbilityRequest < 5 then
@@ -825,7 +854,7 @@ function SurvivorUI_RebornRequestAbilities(force)
 	requestRunId = SurvivorUI_RebornRunId()
 	abilitiesRequested = true
 	if SurvivorUI_RebornRecord then
-		SurvivorUI_RebornRecord("abilities_request", { signature = signature, forced = force == true })
+		SurvivorUI_RebornRecord("abilities_request", { signature = signature, forced = force == true, racialDue = racialDue or nil })
 	end
 	return true
 end
@@ -1083,14 +1112,106 @@ local function IconTextureOf(icon)
 		or Candidate(icon.file) or Candidate(icon[1])
 end
 
+-- Official static jewelry identities (azreborn.com/data/v1): itemKey -> name, icon.
+local JEWELRY_STATIC = {
+	["abomination_jar"] = { "Tiny Abomination in a Jar", "INV_Alchemy_EnchantedVial" },
+	["accuria"] = { "Band of Accuria", "INV_Jewelry_Ring_15" },
+	["animated_chain"] = { "Animated Chain Necklace", "INV_Jewelry_Necklace_01" },
+	["archimtiros"] = { "Archimtiros' Ring of Reckoning", "INV_Jewelry_Ring_40" },
+	["ashen_band"] = { "Ashen Band of Destruction", "INV_Jewelry_Ring_84" },
+	["bell_of_enraging_resonance"] = { "Bell of Enraging Resonance", "INV_Misc_Bell_01" },
+	["blackhand"] = { "Blackhand's Breadth", "INV_Misc_ArmorKit_09" },
+	["blooddrinker"] = { "Blooddrinker's Band", "INV_Jewelry_Ring_49Naxxramas" },
+	["bloodlust_brooch"] = { "Bloodlust Brooch", "INV_Misc_MonsterScales_15" },
+	["carrot"] = { "Carrot on a Stick", "INV_Misc_Food_54" },
+	["chosen"] = { "Mark of the Chosen", "INV_Jewelry_Talisman_08" },
+	["crusade"] = { "Darkmoon Card: Crusade", "INV_Misc_Ticket_Tarot_Crusade" },
+	["dark_iron"] = { "Heavy Dark Iron Ring", "INV_Jewelry_Ring_14" },
+	["darkmoon"] = { "Amulet of the Darkmoon", "INV_Jewelry_Necklace_14" },
+	["darkmoon_volcano"] = { "Darkmoon Card: Volcano", "INV_Misc_Ticket_Tarot_Elemental_01" },
+	["deathbringer"] = { "Deathbringer's Will", "INV_Jewelry_Trinket_04" },
+	["devoured"] = { "Ring of the Devoured", "INV_Jewelry_Ring_AhnQiraj_05" },
+	["dragonslayer"] = { "Master Dragonslayer's Ring", "INV_Jewelry_Ring_41" },
+	["dragonspine"] = { "Dragonspine Trophy", "INV_Misc_Bone_03" },
+	["dragonwrath"] = { "Dragonwrath, Tarecgosa's Rest", "INV_Staff_99" },
+	["earthstrike"] = { "Earthstrike", "Spell_Nature_AbolishMagic" },
+	["elder_council_signet"] = { "Signet of the Elder Council", "INV_Jewelry_Ring_67" },
+	["eldre_thalas"] = { "Royal Seal of Eldre'Thalas", "INV_Jewelry_Talisman_10" },
+	["elementium_signet"] = { "Elementium Signet", "INV_Jewelry_Ring_54" },
+	["enlightenment"] = { "Choker of Enlightenment", "INV_Jewelry_Necklace_10" },
+	["eye_of_hakkar"] = { "The Eye of Hakkar", "INV_Jewelry_Necklace_22" },
+	["fallen_dragon"] = { "Pendant of the Fallen Dragon", "INV_Jewelry_Necklace_12" },
+	["fangs_of_the_father"] = { "Fangs of the Father", "INV_Weapon_ShortBlade_96" },
+	["fire_lord"] = { "Choker of the Fire Lord", "INV_Jewelry_Amulet_05" },
+	["foreign_object"] = { "Dislodged Foreign Object", "INV_Jewelry_Trinket_01" },
+	["fury_of_angerforge"] = { "Fury of Angerforge", "INV_Misc_Head_Dragon_Black" },
+	["greatness"] = { "Darkmoon Card: Greatness", "INV_Inscription_TarotGreatness" },
+	["guldan_skull"] = { "The Skull of Gul'dan", "INV_Misc_Bone_ElfSkull_01" },
+	["heart_of_ignacious"] = { "Heart of Ignacious", "INV_Misc_Orb_05" },
+	["hoj"] = { "Hand of Justice", "INV_Jewelry_Talisman_01" },
+	["hourglass"] = { "Hourglass of the Unraveller", "INV_Gizmo_KhoriumPowerCore" },
+	["insignia"] = { "Insignia of the Horde", "INV_Jewelry_TrinketPVP_02" },
+	["jeklik"] = { "Jeklik's Opaline Talisman", "INV_Jewelry_Necklace_03" },
+	["lifegiving"] = { "Lifegiving Gem", "INV_Misc_Gem_Pearl_05" },
+	["madness"] = { "Madness of the Betrayer", "Spell_Shadow_Charm" },
+	["malice_stone"] = { "Malice Stone Pendant", "INV_Jewelry_Necklace_29Naxxramas" },
+	["mark_of_fordring"] = { "Mark of Fordring", "INV_Jewelry_Talisman_07" },
+	["onyxia_blood"] = { "Onyxia Blood Talisman", "Spell_Shadow_LifeDrain" },
+	["onyxia_tooth"] = { "Onyxia Tooth Pendant", "INV_Jewelry_Necklace_09" },
+	["phylactery"] = { "Phylactery of the Nameless Lich", "INV_Jewelry_Trinket_03" },
+	["prestor"] = { "Prestor's Talisman of Connivery", "INV_Jewelry_Necklace_17" },
+	["quick_strike"] = { "Quick Strike Ring", "INV_Jewelry_Ring_07" },
+	["remote"] = { "Gnomish Universal Remote", "INV_Misc_PocketWatch_01" },
+	["seal_damned"] = { "Seal of the Damned", "INV_Jewelry_Ring_51Naxxramas" },
+	["shadowmourne"] = { "Shadowmourne", "INV_Axe_113" },
+	["soulstone"] = { "Major Soulstone", "INV_Misc_Orb_04" },
+	["south_seas_kelp"] = { "Pristine Enchanted South Seas Kelp", "INV_Jewelry_Necklace_26" },
+	["spell_power"] = { "Ring of Spell Power", "INV_Jewelry_Ring_38" },
+	["star_of_mystaria"] = { "Star of Mystaria", "INV_Enchant_EssenceMagicLarge" },
+	["steadfast_might"] = { "Medallion of Steadfast Might", "INV_Jewelry_Amulet_03" },
+	["talvash"] = { "Talvash's Enhancing Necklace", "INV_Jewelry_Necklace_02" },
+	["tep"] = { "Talisman of Ephemeral Power", "INV_Misc_StoneTablet_11" },
+	["theralions_mirror"] = { "Theralion's Mirror", "Spell_Nature_MirrorImage" },
+	["thoridal"] = { "Thori'dal, the Stars' Fury", "INV_Weapon_Bow_39" },
+	["tsunami"] = { "Tsunami Talisman", "Spell_Nature_UnrelentingStorm" },
+	["valanyr"] = { "Val'anyr, Hammer of Ancient Kings", "INV_Mace_99" },
+	["vek_nilash"] = { "Amulet of Vek'nilash", "INV_Jewelry_Necklace_AhnQiraj_01" },
+	["violet_eye"] = { "Pendant of the Violet Eye", "INV_Trinket_Naxxramas02" },
+	["war_horn"] = { "Horn of the Warchief", "INV_Misc_Horn_01" },
+	["warglaives"] = { "Warglaives of Azzinoth", "INV_Weapon_Glave_01" },
+	["woven_ivy"] = { "Woven Ivy Necklace", "INV_Misc_Herb_15" },
+}
+
 local function NormaliseJewelryEntry(entry, source)
-	local name = SourceField(source, entry, { "name", "displayName" })
-	local icon = IconTextureOf(SourceField(source, entry, { "icon", "texture" }))
+	-- Instance identity comes from itemInstanceKey
+	-- (gear:<category>:<itemKey>). The shared meter source record
+	-- is category attribution: its name/rank/icon belong to one
+	-- item and must not be copied onto other instances.
+	local instanceKey = entry and entry.itemInstanceKey or nil
+	local itemKey = instanceKey and string.match(tostring(instanceKey), "^gear:[^:]+:(.+)$") or nil
+	local sourceMatches = source and itemKey and source.itemKey == itemKey
+	local name, icon, rank, rarity
+	if sourceMatches then
+		name = SourceField(source, entry, { "name", "displayName" })
+		icon = IconTextureOf(SourceField(source, entry, { "icon", "texture" }))
+		rank = SourceField(source, entry, { "rank", "level", "lvl" })
+		rarity = SourceField(source, entry, { "rarity", "quality" })
+	else
+		local static = itemKey and JEWELRY_STATIC[itemKey] or nil
+		if static then
+			name = static[1]
+			icon = static[2] ~= "" and ("Interface\\Icons\\" .. static[2]) or nil
+		end
+		if not itemKey then
+			name = SourceField(source, entry, { "name", "displayName" })
+			icon = IconTextureOf(SourceField(source, entry, { "icon", "texture" }))
+			rank = SourceField(source, entry, { "rank", "level", "lvl" })
+			rarity = SourceField(source, entry, { "rarity", "quality" })
+		end
+	end
 	local slot = SourceField(source, entry, { "slot", "kind", "type", "category" })
 	local sourceKey = entry and entry.sourceKey or nil
-	local key = SourceField(nil, entry, { "sourceKey", "key", "id" })
-	local rank = SourceField(source, entry, { "rank", "level", "lvl" })
-	local rarity = SourceField(source, entry, { "rarity", "quality" })
+	local key = itemKey or SourceField(nil, entry, { "sourceKey", "key", "id" })
 	if type(rarity) == "number" then
 		rarity = tostring(rarity)
 	end
@@ -1330,6 +1451,7 @@ end
 local CURSE_ENDINGS = {
 	{ "涌动平息", "horde_surge" },
 	{ "脆弱消退", "damage_taken" },
+	{ "凋零消退", "healing_reduced" },
 }
 
 local function CurseEndingId(text)
@@ -1429,6 +1551,7 @@ local function LatchCurseBanner(banner, fromHistory)
 	end
 	local runNow = AZS_GetRunTime and AZS_GetRunTime() or nil
 	local left0 = duration
+	local uncertain = nil
 	if fromHistory and duration and duration > 0 then
 		-- Historical observation: estimate elapsed time only from
 		-- same-domain banner timestamps (latest banner time minus
@@ -1448,6 +1571,14 @@ local function LatchCurseBanner(banner, fromHistory)
 			left0 = duration - (latestBanner - atBanner)
 			if left0 <= 0 then
 				return
+			end
+			-- The newest banner may itself be old: only trust the
+			-- estimate when the banner stream is demonstrably
+			-- recent on the session clock. Otherwise the curse is
+			-- shown without a fabricated countdown.
+			if GetTime and (GetTime() - latestBanner) > 5 then
+				uncertain = true
+				left0 = nil
 			end
 		end
 	end
@@ -1485,6 +1616,7 @@ local function LatchCurseBanner(banner, fromHistory)
 		atBanner = tonumber(Field(banner, "time", 6)),
 		duration = duration,
 		left0 = left0,
+		uncertain = uncertain,
 	})
 end
 
@@ -1524,7 +1656,11 @@ function SurvivorUI_RebornCurses()
 				local curse = activeCurses[i]
 				local left = nil
 				local expired = false
-				if curse.duration and curse.duration > 0 then
+				if curse.uncertain then
+					if now - (curse.atRun or now) > 300 then
+						expired = true
+					end
+				elseif curse.duration and curse.duration > 0 then
 					left = (curse.left0 or curse.duration) - (now - (curse.atRun or now))
 					if left > curse.duration then
 						left = curse.duration
@@ -1561,6 +1697,123 @@ function SurvivorUI_RebornCurses()
 		items = items,
 		reason = "Curse effects arrive as kind=\"curse\" banners (AZS_RegisterBannerHandler, verified in game 2026-11-26). Banners are not retold after a reload, so curses taken before a reload cannot be reconstructed.",
 	}
+end
+
+-- Summoned Rift Portal bosses: AZS_UNITS entries with kind="rift"
+-- (documented), independent of AZS_SCHEDULE. Identity is the unit
+-- id. Death is confirmed only by observed hp<=0 or a boss-kill
+-- tally increase after disappearance; a transient missing unit
+-- is not death.
+function SurvivorUI_RebornRiftBosses()
+	if not SurvivorUI_RebornActive() then
+		return {}
+	end
+	local runNow = AZS_GetRunTime and AZS_GetRunTime() or 0
+	local bk = type(AZS_RUN) == "table" and tonumber(AZS_RUN.bk) or nil
+	local present = {}
+	if type(AZS_UNITS) == "table" then
+		for i = 1, table.getn(AZS_UNITS) do
+			local unit = AZS_UNITS[i]
+			if Field(unit, "kind", 1) == "rift" then
+				local id = Field(unit, "id", 2)
+				local key = id and ("id:" .. tostring(id)) or ("name:" .. tostring(Field(unit, "name", 3)))
+				present[key] = true
+				local boss = riftBosses[key]
+				if not boss then
+					boss = { id = id, name = Field(unit, "name", 3), state = "up", bkAtSeen = bk }
+					riftBosses[key] = boss
+					table.insert(riftBossOrder, key)
+					if SurvivorUI_RebornRecord then
+						SurvivorUI_RebornRecord("boss_unit", { transition = "appeared", kind = "rift", id = id, name = boss.name, hp = Field(unit, "hp", 4), hpm = Field(unit, "hpm", 5), rift = AZS_RIFT })
+					end
+				end
+				boss.hp = tonumber(Field(unit, "hp", 4))
+				boss.hpm = tonumber(Field(unit, "hpm", 5))
+				boss.enraged = tonumber(Field(unit, "state", 6)) == 1 or nil
+				boss.missing = nil
+				if boss.hp and boss.hp <= 0 and boss.state ~= "dead" then
+					boss.state = "dead"
+					boss.fell = runNow
+					if SurvivorUI_RebornRecord then
+						SurvivorUI_RebornRecord("boss_unit", { transition = "died", kind = "rift", id = id, name = boss.name })
+					end
+				end
+			end
+		end
+	end
+	local out = {}
+	for i = 1, table.getn(riftBossOrder) do
+		local boss = riftBosses[riftBossOrder[i]]
+		if boss then
+			if not present[riftBossOrder[i]] and boss.state == "up" then
+				if bk and boss.bkAtSeen and bk > boss.bkAtSeen then
+					boss.state = "dead"
+					boss.fell = runNow
+					if SurvivorUI_RebornRecord then
+						SurvivorUI_RebornRecord("boss_unit", { transition = "died", kind = "rift", id = boss.id, name = boss.name, via = "bk" })
+					end
+				else
+					boss.missing = true
+				end
+			end
+			table.insert(out, boss)
+		end
+	end
+	return out
+end
+
+-- Shared guardian respawn countdown model: AZS_LAIRS.left is the
+-- documented remaining time until an empty lair fills. Samples
+-- resync on AZS_LAIRS_UPDATED and decay on the run clock (which
+-- excludes pauses). Zero is a valid value; missing or negative
+-- values are unsupported. Identity includes run/map/space when
+-- the API provides them; stale identities are rejected.
+function SurvivorUI_RebornGuardianLeft(lair)
+	if type(lair) ~= "table" then
+		return nil
+	end
+	local index = tonumber(Field(lair, "index", 1))
+	if not index then
+		return nil
+	end
+	local runId = Field(lair, "runId", 15)
+	local currentRun = SurvivorUI_RebornRunId()
+	if runId and currentRun and tostring(runId) ~= tostring(currentRun) then
+		return nil
+	end
+	local identity = table.concat({
+		tostring(runId or currentRun or ""), tostring(Field(lair, "mapId", 16) or ""),
+		tostring(Field(lair, "spaceId", 17) or ""), tostring(index),
+	}, "|")
+	local stamp = AZS_LAIRS_UPDATED
+	local runNow = AZS_GetRunTime and AZS_GetRunTime() or 0
+	local sample = guardianSamples[identity]
+	if not sample or sample.stamp ~= stamp then
+		local rawLeft = tonumber(Field(lair, "left", 5))
+		local previous = sample
+		sample = {
+			stamp = stamp, atRun = runNow,
+			left = (rawLeft and rawLeft >= 0) and rawLeft or nil,
+			state = Field(lair, "state", 2),
+		}
+		guardianSamples[identity] = sample
+		if SurvivorUI_RebornRecord and (not previous or previous.state ~= sample.state or previous.left ~= sample.left) then
+			SurvivorUI_RebornRecord("guardian_lair", {
+				index = index, identity = identity, state = sample.state,
+				rawLeft = rawLeft, stamp = stamp, runTime = runNow,
+				id = Field(lair, "id", 4), name = Field(lair, "name", 3),
+				active = Field(lair, "active", 14),
+			})
+		end
+	end
+	if sample.left == nil then
+		return nil
+	end
+	local left = sample.left - (runNow - sample.atRun)
+	if left < 0 then
+		left = 0
+	end
+	return left
 end
 
 -- Racial active cooldown from verified Reborn snapshot data

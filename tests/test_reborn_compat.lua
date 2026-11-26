@@ -350,6 +350,7 @@ AZS_BANNERS = { { kind = "curse", boss = false, name = "", time = 100,
 AZS_RequestAbilities = function() end
 AZS_BUFFS = { { spell = 47241, left = 10 } }
 AZS_GetRunTime = function() return 110 end
+fakeTime = 102
 curses = SurvivorUI_RebornCurses()
 eq("curses: one active item", table.getn(curses.items), 1)
 eq("curses: effect translated", curses.items[1].text, "Horde surges ")
@@ -703,6 +704,66 @@ eq("tooltip plan: slotted passive has base", slottedPassivePlan.hasBase, true)
 local noTextPlan = SurvivorUI_RebornBuildTooltipPlan({ key = "demonic_knowledge", rank = 31, passive = true, text = "" })
 eq("tooltip plan: empty text is not a base", noTextPlan.hasBase, false)
 eq("tooltip plan: missing text stays reborn mode", noTextPlan.mode, "reborn")
+-- Session 004: healing reduction and its ending.
+AZS_GetRunTime = function() return 60 end
+AZS_BANNERS = { { 41, "curse", nil, "", "Проклятие тяготеет над тобой: твоё исцеление снижено на 60% (25 с)!", 900 } }
+local healCurses = SurvivorUI_RebornCurses()
+eq("curse: healing reduced id", healCurses.items[table.getn(healCurses.items)].effectId, "healing_reduced")
+AZS_BANNERS = { { 44, "curse", nil, "", "凋零消退了。", 933 } }
+local healGone = true
+for i = 1, table.getn(SurvivorUI_RebornCurses().items) do
+	if SurvivorUI_RebornCurses().items[i].effectId == "healing_reduced" then healGone = false end
+end
+eq("curse: wither ending clears healing reduced", healGone, true)
+-- Rift Portal boss model (synthetic AZS_UNITS; session 004 has no raw units).
+AZS_RUN = { ph = "playing", bk = 5 }
+AZS_UNITS = { { kind = "rift", id = 777, name = "暴君魔暴龙", hp = 500, hpm = 1000, state = 0 } }
+local riftBosses = SurvivorUI_RebornRiftBosses()
+eq("rift boss: tracked", table.getn(riftBosses), 1)
+eq("rift boss: identity", riftBosses[1].id, 777)
+AZS_UNITS = {}
+eq("rift boss: transient disappearance is not death", SurvivorUI_RebornRiftBosses()[1].state, "up")
+AZS_RUN = { ph = "playing", bk = 6 }
+eq("rift boss: bk increase confirms death", SurvivorUI_RebornRiftBosses()[1].state, "dead")
+AZS_UNITS = nil
+-- Guardian countdown model (synthetic AZS_LAIRS; no runtime samples yet).
+AZS_GetRunTime = function() return 100 end
+AZS_LAIRS_UPDATED = 1
+local lair = { index = 2, state = "empty", name = "G", id = 9, left = 47 }
+eq("guardian: positive left", SurvivorUI_RebornGuardianLeft(lair), 47)
+AZS_GetRunTime = function() return 110 end
+eq("guardian: decays on run clock", SurvivorUI_RebornGuardianLeft(lair), 37)
+AZS_LAIRS_UPDATED = 2
+lair.left = 50
+eq("guardian: fresh snapshot resyncs", SurvivorUI_RebornGuardianLeft(lair), 50)
+lair.left = -1
+AZS_LAIRS_UPDATED = 3
+eq("guardian: negative left unsupported", SurvivorUI_RebornGuardianLeft(lair), nil)
+lair.left = 0
+AZS_LAIRS_UPDATED = 4
+eq("guardian: zero is valid", SurvivorUI_RebornGuardianLeft(lair), 0)
+-- Jewelry: distinct instances sharing category sources (session 004 seq 374).
+AZS_GetMeterLoadout = function()
+	return {
+		runJewelry = {
+			{ category = "trinket", slotId = 1, sourceKey = "jewel:trinket", itemInstanceKey = "gear:trinket:chosen", effectSourceKeys = {} },
+			{ category = "trinket", slotId = 2, sourceKey = "jewel:trinket", itemInstanceKey = "gear:trinket:insignia", effectSourceKeys = {} },
+			{ category = "ring", slotId = 3, sourceKey = "jewel:ring", itemInstanceKey = "gear:ring:quick_strike", effectSourceKeys = {} },
+			{ category = "ring", slotId = 4, sourceKey = "jewel:ring", itemInstanceKey = "gear:ring:accuria", effectSourceKeys = {} },
+		},
+		sources = {
+			["jewel:ring"] = { itemKey = "accuria", name = "埃库利亚指环", rank = 520, icon = { path = "Interface\\Icons\\INV_Jewelry_Ring_15" } },
+			["jewel:trinket"] = { itemKey = "insignia", name = "部落徽记", rank = 54, icon = { path = "Interface\\Icons\\INV_Jewelry_Talisman_08" } },
+		},
+	}
+end
+local jew004 = SurvivorUI_RebornJewelry(true)
+eq("jewelry004: four rows", table.getn(jew004.items), 4)
+eq("jewelry004: chosen not insignia", jew004.items[1].name ~= "部落徽记", true)
+eq("jewelry004: chosen rank unknown", jew004.items[1].rank, nil)
+eq("jewelry004: insignia keeps source rank", jew004.items[2].rank, 54)
+eq("jewelry004: quick_strike not accuria", jew004.items[3].name ~= "埃库利亚指环", true)
+eq("jewelry004: accuria keeps source rank", jew004.items[4].rank, 520)
 -- Event curses expire as notifications, not at run end.
 AZS_GetRunTime = function() return 200 end
 AZS_BANNERS = { { 57, "curse", nil, "", "诅咒降临：精英正在伏击你！", 1239 } }

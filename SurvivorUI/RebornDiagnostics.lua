@@ -25,6 +25,7 @@ local sessionStart = 0
 local pendingTooltips = {}
 local pendingBuffs = {}
 local tooltipBaselines = {}
+local tooltipLegacyInvalid = {}
 local lastExtraButtonSignature = nil
 local lastCaptureNote = nil
 local pseudonyms = {}
@@ -216,11 +217,18 @@ function SurvivorUI_RebornRecordStart()
 		if SurvivorUI_RebornTooltipRead then
 			local run = CurrentRunId()
 			for i = 1, table.getn(data.all) do
-				local read = SurvivorUI_RebornTooltipRead(data.all[i].key)
-				if ValidTooltipRead(read, run) then
-					tooltipBaselines[BaselineKey(data.all[i].key, run)] = read
+				-- The native tooltip source is established legacy
+				-- text for Reborn abilities; once a key reads
+				-- invalid, stop rescanning it automatically.
+				if not tooltipLegacyInvalid[data.all[i].key] then
+					local read = SurvivorUI_RebornTooltipRead(data.all[i].key)
+					if ValidTooltipRead(read, run) then
+						tooltipBaselines[BaselineKey(data.all[i].key, run)] = read
+					else
+						tooltipLegacyInvalid[data.all[i].key] = true
+					end
+					SurvivorUI_RebornRecord("tooltip", { phase = "baseline", read = read })
 				end
-				SurvivorUI_RebornRecord("tooltip", { phase = "baseline", read = read })
 			end
 		end
 	end
@@ -288,6 +296,9 @@ end
 -- native tooltip may update after the rank does.
 function SurvivorUI_RebornRecordTooltipSoon(key, phase)
 	if not recording or not session then
+		return
+	end
+	if tooltipLegacyInvalid[key] then
 		return
 	end
 	local run = CurrentRunId()

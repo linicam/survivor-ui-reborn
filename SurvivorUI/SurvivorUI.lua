@@ -964,16 +964,20 @@ function SurvivorUI_RenderExtraCooldown(frame)
 	if not CooldownFrame_SetTimer or not frame or not frame.spell then
 		return
 	end
-	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() and SurvivorUI_RebornRacialCooldown then
-		local remaining, cdmax = SurvivorUI_RebornRacialCooldown(frame.spell)
-		if remaining ~= nil and cdmax and cdmax > 0 then
-			if remaining > 0 and GetTime then
-				CooldownFrame_SetTimer(frame.cooldown, GetTime() - (cdmax - remaining), cdmax, 1)
-			else
-				CooldownFrame_SetTimer(frame.cooldown, 0, 0, 0)
-			end
-			return
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+		-- Reborn: never fall back to legacy spell cooldown data,
+		-- which does not cover the auto-cast racial; missing or
+		-- stale verified data clears the sweep instead.
+		local remaining, cdmax
+		if SurvivorUI_RebornRacialCooldown then
+			remaining, cdmax = SurvivorUI_RebornRacialCooldown(frame.spell)
 		end
+		if remaining ~= nil and cdmax and cdmax > 0 and remaining > 0 and GetTime then
+			CooldownFrame_SetTimer(frame.cooldown, GetTime() - (cdmax - remaining), cdmax, 1)
+		else
+			CooldownFrame_SetTimer(frame.cooldown, 0, 0, 0)
+		end
+		return
 	end
 	if GetSpellCooldown then
 		local start, duration = GetSpellCooldown(frame.spell)
