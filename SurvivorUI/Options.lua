@@ -1648,7 +1648,8 @@ if SurvivorUI_RebornGearOpen and SurvivorUI_RebornActive() then
 		if SurvivorUI_RebornGearOpen("show") then panel:Hide() end
 	end)
 	page.y = page.y - 28
-	Note(page, "Enter a Campaign map to read its difficulty and set it as 100%.")
+	Check(page, "Enable Gear & Difficulty", SurvivorUI_RebornGearEnabled, SurvivorUI_RebornGearToggle,
+		"Read equipped items and the selected Campaign map in Dalaran.")
 end
 Subheader(page, "Font")
 FontPicker(page, "Global font",
