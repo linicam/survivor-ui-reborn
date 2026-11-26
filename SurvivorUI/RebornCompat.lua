@@ -178,6 +178,8 @@ end
 local lastRunId = nil
 local activeCurses = {}
 local racialCooldownSample = nil
+local racialSampleStamp = nil
+local eventCurses = {}
 local seenCurseIds = {}
 local curseBoundary = {}
 local historyScanStamp = nil
@@ -220,6 +222,8 @@ local function ResetOwnCaches()
 	lastLoadoutAt = 0
 	activeCurses = {}
 	racialCooldownSample = nil
+	racialSampleStamp = AZS_ABILITIES_UPDATED
+	eventCurses = {}
 	seenCurseIds = {}
 	historyScanStamp = nil
 	-- Run boundary: banner IDs are not guaranteed monotonic across
@@ -589,13 +593,20 @@ local function RefreshAbilitiesCache()
 		end
 	end
 	TrackRanks(merged)
-	for i = 1, table.getn(merged) do
-		local a = merged[i]
-		if a.kind == "racial" and not a.passive and a.spell and a.spell > 0 then
-			racialCooldownSample = {
-				spell = a.spell, cd = a.cd or 0, cdmax = a.cdmax or 0,
-				atRun = AZS_GetRunTime and AZS_GetRunTime() or 0,
-			}
+	-- Only a genuinely new AZS_ABILITIES snapshot may move the
+	-- racial cooldown sample; AZS_SPELLS-only refreshes reuse the
+	-- same stale cd and must keep the original timestamp.
+	if AZS_ABILITIES_UPDATED ~= racialSampleStamp then
+		racialSampleStamp = AZS_ABILITIES_UPDATED
+		racialCooldownSample = nil
+		for i = 1, table.getn(merged) do
+			local a = merged[i]
+			if a.kind == "racial" and not a.passive and a.spell and a.spell > 0 then
+				racialCooldownSample = {
+					spell = a.spell, cd = a.cd or 0, cdmax = a.cdmax or 0,
+					atRun = AZS_GetRunTime and AZS_GetRunTime() or 0,
+				}
+			end
 		end
 	end
 	return merged
@@ -949,6 +960,21 @@ function SurvivorUI_RebornAbilityTooltipLines(ability)
 	end
 	table.insert(lines, { text = TF("Rank {1}", ability.rank or 0), kind = "rank" })
 	return lines
+end
+
+-- Build tooltip plan for a Reborn ability: the API description is
+-- primary. A lines table without a base description is not proof
+-- of a meaningful description; missing text is reported as such
+-- and never replaced by an unverified legacy tooltip.
+function SurvivorUI_RebornBuildTooltipPlan(ability)
+	local lines = SurvivorUI_RebornAbilityTooltipLines(ability)
+	local hasBase = false
+	for i = 1, table.getn(lines) do
+		if lines[i].kind == "base" and lines[i].text and lines[i].text ~= "" then
+			hasBase = true
+		end
+	end
+	return { mode = "reborn", lines = lines, hasBase = hasBase }
 end
 
 ------------------------------------------------------------------------------
@@ -1401,6 +1427,30 @@ local function LatchCurseBanner(banner, fromHistory)
 	if eventBased then
 		duration = nil
 	end
+	local runNow = AZS_GetRunTime and AZS_GetRunTime() or nil
+	local left0 = duration
+	if fromHistory and duration and duration > 0 then
+		-- Historical observation: estimate elapsed time only from
+		-- same-domain banner timestamps (latest banner time minus
+		-- this banner's time), then decay on the run clock. An
+		-- already-elapsed historical curse is not latched fresh.
+		local atBanner = tonumber(Field(banner, "time", 6))
+		local latestBanner = nil
+		if type(AZS_BANNERS) == "table" then
+			for i = 1, table.getn(AZS_BANNERS) do
+				local t = tonumber(Field(AZS_BANNERS[i], "time", 6))
+				if t and (not latestBanner or t > latestBanner) then
+					latestBanner = t
+				end
+			end
+		end
+		if atBanner and latestBanner then
+			left0 = duration - (latestBanner - atBanner)
+			if left0 <= 0 then
+				return
+			end
+		end
+	end
 	if SurvivorUI_RebornRecord then
 		SurvivorUI_RebornRecord("curse_banner", {
 			raw = banner, buffs = AZS_BUFFS, effect = CurseEffectDisplay(effectId, pct),
@@ -1411,12 +1461,30 @@ local function LatchCurseBanner(banner, fromHistory)
 	-- AZS_GetRunTime is the run clock excluding pauses; never
 	-- subtract across domains. Countdowns measure run time from
 	-- the moment the banner is latched.
-	local runNow = AZS_GetRunTime and AZS_GetRunTime() or nil
+	if eventBased then
+		-- Event curses are notifications, not persistent statuses:
+		-- shown briefly as UI notices, never as effect durations.
+		table.insert(eventCurses, {
+			text = text, effectId = effectId, pct = pct,
+			shownUntilRun = (runNow or 0) + 10,
+		})
+		return
+	end
+	if effectId then
+		local kept = {}
+		for i = 1, table.getn(activeCurses) do
+			if activeCurses[i].effectId ~= effectId then
+				table.insert(kept, activeCurses[i])
+			end
+		end
+		activeCurses = kept
+	end
 	table.insert(activeCurses, {
 		id = Field(banner, "id", 1), text = text, effectId = effectId, pct = pct,
 		atRun = runNow or 0,
 		atBanner = tonumber(Field(banner, "time", 6)),
 		duration = duration,
+		left0 = left0,
 	})
 end
 
@@ -1457,13 +1525,18 @@ function SurvivorUI_RebornCurses()
 				local left = nil
 				local expired = false
 				if curse.duration and curse.duration > 0 then
-					left = curse.duration - (now - (curse.atRun or now))
+					left = (curse.left0 or curse.duration) - (now - (curse.atRun or now))
 					if left > curse.duration then
 						left = curse.duration
 					end
 					if left <= 0 then
 						expired = true
 					end
+				elseif now - (curse.atRun or now) > 300 then
+					-- Unknown-duration curses are removed by ending
+					-- banners, replacement, or run reset; this stale
+					-- cap only prevents indefinite display.
+					expired = true
 				end
 				if not expired then
 					table.insert(alive, curse)
@@ -1473,6 +1546,14 @@ function SurvivorUI_RebornCurses()
 				end
 			end
 			activeCurses = alive
+			local aliveEvents = {}
+			for i = 1, table.getn(eventCurses) do
+				if now < eventCurses[i].shownUntilRun then
+					table.insert(aliveEvents, eventCurses[i])
+					table.insert(items, { text = CurseEffectDisplay(eventCurses[i].effectId, eventCurses[i].pct) or eventCurses[i].text, left = nil, raw = eventCurses[i].text, effectId = eventCurses[i].effectId, event = true })
+				end
+			end
+			eventCurses = aliveEvents
 		end
 	end
 	return {

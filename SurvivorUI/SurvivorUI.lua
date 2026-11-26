@@ -955,6 +955,34 @@ end
 -- directly; its spell is set out of combat by
 -- SurvivorUI_SetExtraButton. (The former button-7 overlay for the
 -- account-talent active was removed: no supported trigger exists.)
+-- One visual cooldown path for the extra button: verified Reborn
+-- cooldown data wins (a verified zero clears the sweep and never
+-- falls back to the legacy API); the legacy API is only for
+-- non-Reborn use. Cooldown numbers come from the addon's
+-- CooldownFrame_SetTimer wrapper, as on normal buttons.
+function SurvivorUI_RenderExtraCooldown(frame)
+	if not CooldownFrame_SetTimer or not frame or not frame.spell then
+		return
+	end
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() and SurvivorUI_RebornRacialCooldown then
+		local remaining, cdmax = SurvivorUI_RebornRacialCooldown(frame.spell)
+		if remaining ~= nil and cdmax and cdmax > 0 then
+			if remaining > 0 and GetTime then
+				CooldownFrame_SetTimer(frame.cooldown, GetTime() - (cdmax - remaining), cdmax, 1)
+			else
+				CooldownFrame_SetTimer(frame.cooldown, 0, 0, 0)
+			end
+			return
+		end
+	end
+	if GetSpellCooldown then
+		local start, duration = GetSpellCooldown(frame.spell)
+		if start and duration then
+			CooldownFrame_SetTimer(frame.cooldown, start, duration, 1)
+		end
+	end
+end
+
 do
 	row.extraButtons = {}
 	for _, spec in pairs({ { button = 12, position = 8, key = "=" } }) do
@@ -975,24 +1003,7 @@ do
 				return
 			end
 			self.cdElapsed = 0
-			if CooldownFrame_SetTimer then
-				local remaining, cdmax
-				if SurvivorUI_RebornRacialCooldown then
-					remaining, cdmax = SurvivorUI_RebornRacialCooldown(self.spell)
-				end
-				if remaining and cdmax and cdmax > 0 then
-					if remaining > 0 and GetTime then
-						CooldownFrame_SetTimer(self.cooldown, GetTime() - (cdmax - remaining), cdmax, 1)
-					else
-						CooldownFrame_SetTimer(self.cooldown, 0, 0, 0)
-					end
-				elseif GetSpellCooldown then
-					local start, duration = GetSpellCooldown(self.spell)
-					if start and duration then
-						CooldownFrame_SetTimer(self.cooldown, start, duration, 1)
-					end
-				end
-			end
+			SurvivorUI_RenderExtraCooldown(self)
 		end)
 		frame:Hide()
 		frame.key = spec.key
@@ -1102,20 +1113,7 @@ function SurvivorUI_SetExtraButton(button, spell, icon)
 	RecordExtraButton("spell:" .. tostring(spell) .. "|owned:" .. tostring(frame.ownedBinding), {
 		button = 12, spell = spell, visible = true, ownedBinding = frame.ownedBinding,
 	})
-	if CooldownFrame_SetTimer then
-		local remaining, cdmax
-		if SurvivorUI_RebornRacialCooldown then
-			remaining, cdmax = SurvivorUI_RebornRacialCooldown(spell)
-		end
-		if remaining and cdmax and cdmax > 0 and remaining > 0 and GetTime then
-			CooldownFrame_SetTimer(frame.cooldown, GetTime() - (cdmax - remaining), cdmax, 1)
-		elseif GetSpellCooldown then
-			local start, duration = GetSpellCooldown(spell)
-			if start and duration then
-				CooldownFrame_SetTimer(frame.cooldown, start, duration, 1)
-			end
-		end
-	end
+	SurvivorUI_RenderExtraCooldown(frame)
 end
 end
 

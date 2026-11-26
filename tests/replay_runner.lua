@@ -59,7 +59,13 @@ for i = 1, table.getn(events) do
 			runStartTime = simTime
 			AZS_ZONE = { run = currentRunId }
 		end
-		simRunTime = math.max(0, simTime - runStartTime)
+		-- Three separate clocks: simTime is session elapsed time,
+		-- simRunTime is gameplay/run time (advanced only by recorded
+		-- run-time observations or explicit fixture runTime values),
+		-- and banner timestamps stay in the raw payloads.
+		if e.data and e.data.runTime then
+			simRunTime = e.data.runTime
+		end
 		if type(AZS_RUN) ~= "table" then AZS_RUN = {} end
 		AZS_RUN.id = currentRunId
 		AZS_RUN.t = simRunTime
@@ -67,10 +73,15 @@ for i = 1, table.getn(events) do
 	if e.type == "run_transition" then
 		-- handled above
 	elseif e.type == "abilities_update" and e.data then
-		AZS_ABILITIES = e.data.rawAbilities
-		AZS_SPELLS = e.data.rawSpells
-		AZS_ABILITIES_UPDATED = i
-		AZS_SPELLS_UPDATED = i
+		if e.data.spellsOnly then
+			AZS_SPELLS = e.data.rawSpells
+			AZS_SPELLS_UPDATED = i
+		else
+			AZS_ABILITIES = e.data.rawAbilities
+			AZS_SPELLS = e.data.rawSpells
+			AZS_ABILITIES_UPDATED = i
+			AZS_SPELLS_UPDATED = i
+		end
 		local data = SurvivorUI_RebornAbilities()
 		local recorded = e.data.normalized or {}
 		eq("seq " .. tostring(e.seq) .. " ability count", table.getn(data.all), table.getn(recorded))
@@ -79,20 +90,21 @@ for i = 1, table.getn(events) do
 			eq("seq " .. tostring(e.seq) .. " rank " .. j, data.all[j].rank, recorded[j].rank)
 			eq("seq " .. tostring(e.seq) .. " passive " .. j, data.all[j].passive, recorded[j].passive)
 		end
+		if e.data.expectRacialRemaining ~= nil then
+			eq("seq " .. tostring(e.seq) .. " racial remaining", (SurvivorUI_RebornRacialCooldown(20549)), e.data.expectRacialRemaining)
+		end
 	elseif e.type == "jewelry_update" and e.data then
 		local items, duplicates = SurvivorUI_RebornDedupJewelry(e.data.preDedup or {})
 		eq("seq " .. tostring(e.seq) .. " jewelry rows", table.getn(items), table.getn(e.data.items or {}))
 		eq("seq " .. tostring(e.seq) .. " jewelry duplicates", duplicates, e.data.duplicates or 0)
 	elseif e.type == "curse_banner" and e.data and e.data.raw then
-		local bannerTime = e.data.raw[6] or e.data.raw.time
-		if bannerTime then
-			simRunTime = bannerTime
-			if type(AZS_RUN) ~= "table" then AZS_RUN = {} end
-			AZS_RUN.t = simRunTime
-		end
+		-- Banner timestamps are session-clock values; they never
+		-- overwrite the simulated run clock.
 		AZS_BANNERS = { e.data.raw }
 		local curses = SurvivorUI_RebornCurses()
-		if e.data.expired then
+		if e.data.expectCurseCount ~= nil then
+			eq("seq " .. tostring(e.seq) .. " curse count", table.getn(curses.items), e.data.expectCurseCount)
+		elseif e.data.expired then
 			eq("seq " .. tostring(e.seq) .. " curse expired", table.getn(curses.items), 0)
 		elseif e.data.expectActive then
 			eq("seq " .. tostring(e.seq) .. " curse active", table.getn(curses.items), 1)
@@ -101,8 +113,20 @@ for i = 1, table.getn(events) do
 		else
 			skipped = skipped + 1
 		end
+		if e.data.expectEffectId then
+			eq("seq " .. tostring(e.seq) .. " curse effect id", curses.items[1] and curses.items[1].effectId, e.data.expectEffectId)
+		end
+		if e.data.expectLeft ~= nil then
+			eq("seq " .. tostring(e.seq) .. " curse left", curses.items[1] and curses.items[1].left, e.data.expectLeft)
+		end
 	elseif e.type == "boss_transition" and e.data then
 		AZS_RUN = e.data.run
+		if e.data.run and e.data.run.t then
+			simRunTime = e.data.run.t
+		end
+		if e.data.expectCurseCount ~= nil then
+			eq("seq " .. tostring(e.seq) .. " curse count", table.getn(SurvivorUI_RebornCurses().items), e.data.expectCurseCount)
+		end
 		local nb = SurvivorUI_RebornNextBoss()
 		eq("seq " .. tostring(e.seq) .. " boss mode", nb and nb.mode, e.data.nextBoss and e.data.nextBoss.mode)
 		eq("seq " .. tostring(e.seq) .. " boss state", nb and nb.state, e.data.nextBoss and e.data.nextBoss.state)

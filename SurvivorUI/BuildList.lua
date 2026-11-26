@@ -476,12 +476,33 @@ local function Row(index)
 		-- Reborn: the native action tooltip is a legacy WoW spell
 		-- tooltip (verified in real sessions: English Rank 1 text at
 		-- Reborn rank 31), not Reborn skill data. Build the tooltip
-		-- from the verified localized AZS_ABILITIES text instead;
-		-- fall back to the native tooltip only without Reborn lines.
-		if reborn and RebornLines() then
+		-- from the verified localized AZS_ABILITIES text instead.
+		if reborn then
+			local ability = this.abilityKey and SurvivorUI_RebornAbilityByKey
+				and SurvivorUI_RebornAbilityByKey(this.abilityKey) or nil
+			if not ability then
+				ability = {
+					key = this.abilityKey, rank = this.abilityRank,
+					passive = this.passive, text = this.abilityText,
+				}
+			end
+			local plan = SurvivorUI_RebornBuildTooltipPlan and SurvivorUI_RebornBuildTooltipPlan(ability) or nil
 			GameTooltip:ClearLines()
 			GameTooltip:SetText(this.ability, 1, 0.82, 0)
-			AddRebornLines(false)
+			if plan then
+				for i = 1, table.getn(plan.lines) do
+					local line = plan.lines[i]
+					local grey = line.kind ~= "base"
+					GameTooltip:AddLine(line.text, grey and 0.7 or 1, grey and 0.7 or 1, grey and 0.7 or 1, 1)
+				end
+			else
+				if this.passive then
+					GameTooltip:AddLine(SurvivorUI_T("Passive"), 0.7, 0.7, 0.7)
+				end
+				if this.abilityRank then
+					GameTooltip:AddLine(SurvivorUI_TF("Rank {1}", this.abilityRank), 0.7, 0.7, 0.7)
+				end
+			end
 		else
 			GameTooltip:SetAction(this.actionSlot)
 		end
