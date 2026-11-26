@@ -38,7 +38,9 @@ $parsed = @()
 foreach ($chunk in $chunks) {
     $bytes = [System.Text.Encoding]::UTF8.GetByteCount($chunk)
     Assert-Test ($bytes -le 524288) "chunk must not exceed 512 KiB (got $bytes)"
-    $parsed += @($chunk | ConvertFrom-Json)
+    # Windows PowerShell writes a decoded JSON array as one pipeline object.
+    $chunkEvents = ConvertFrom-Json -InputObject $chunk
+    $parsed += @($chunkEvents)
 }
 Assert-Test ($parsed.Count -eq 200) "all events must survive chunking"
 for ($i = 0; $i -lt $parsed.Count; $i++) {
