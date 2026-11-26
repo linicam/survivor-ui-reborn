@@ -71,6 +71,8 @@ local scriptDir = arg and arg[0] or "tests/test_reborn_compat.lua"
 local repoRoot = string.gsub(scriptDir, "tests/test_reborn_compat%.lua$", "")
 if repoRoot == "" then repoRoot = "." end
 local raidNoticeHook
+local compatHandlers = {}
+AZS = { On = function(prefix, callback) compatHandlers[prefix] = callback end }
 RaidNotice_AddMessage = function() end
 hooksecurefunc = function(name, callback)
 	if name == "RaidNotice_AddMessage" then raidNoticeHook = callback end
@@ -968,6 +970,23 @@ eq("diag native: offer logged", nativeEvents.card_offer[1].hand.kind, "jewel")
 eq("diag native: unchanged spell tip deduplicated", table.getn(nativeEvents.native_spell_tip), 1)
 eq("diag native: empty and respawn recorded without duplicates", table.getn(nativeEvents.guardian_lairs), 2)
 eq("diag native: guardian's new position captured", nativeEvents.guardian_lairs[2].rows[1].x, 34)
+
+eq("history identity: native short ID normalized", SurvivorUI_RebornStableRunId("rABCDEF01"), "azs:rabcdef01")
+eq("history identity: native prefixed ID retained", SurvivorUI_RebornStableRunId("azs:rabcdef01"), "azs:rabcdef01")
+eq("history identity: transient session ID ignored", SurvivorUI_RebornStableRunId("azs:1000:1"), nil)
+eq("history identity: protocol placeholder ignored", SurvivorUI_RebornStableRunId("1"), nil)
+local spell = { key = "fireball", rank = 3, text = "Base description" }
+AZS_ZONE.run = "azs:rabcdef01"
+AZS_API_RunId = nil
+AZS_SPELLS = { { key = "fireball", rank = 3 } }
+compatHandlers.AZSSPELLTIP("key=fireball;text=Current damage 125")
+local currentLines = SurvivorUI_RebornAbilityTooltipLines(spell)
+eq("spell tips: current text from native event", currentLines[3] and currentLines[3].text, "Current damage 125")
+spell.rank = 4
+eq("spell tips: older rank excluded", table.getn(SurvivorUI_RebornAbilityTooltipLines(spell)), 2)
+spell.rank = 3
+AZS_ZONE.run = "azs:rabcdef02"
+eq("spell tips: earlier run excluded", table.getn(SurvivorUI_RebornAbilityTooltipLines(spell)), 2)
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

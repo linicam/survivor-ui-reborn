@@ -430,7 +430,7 @@ local function Row(index)
 			for i = 1, table.getn(lines) do
 				local line = lines[i]
 				if not (skipBase and line.kind == "base") then
-					local grey = line.kind ~= "base"
+					local grey = line.kind ~= "base" and line.kind ~= "current"
 					GameTooltip:AddLine(line.text, grey and 0.7 or 1, grey and 0.7 or 1, grey and 0.7 or 1, 1)
 				end
 			end
@@ -492,7 +492,7 @@ local function Row(index)
 			if plan then
 				for i = 1, table.getn(plan.lines) do
 					local line = plan.lines[i]
-					local grey = line.kind ~= "base"
+					local grey = line.kind ~= "base" and line.kind ~= "current"
 					GameTooltip:AddLine(line.text, grey and 0.7 or 1, grey and 0.7 or 1, grey and 0.7 or 1, 1)
 				end
 			else
@@ -2593,6 +2593,8 @@ function SurvivorUI_BuildSnapshot()
 	-- not "all but the last entry are actives and the last is the
 	-- racial".
 	local rebornActives, rebornRacial, rebornPassives = RebornBuild()
+	local complete
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then complete = rebornActives ~= nil end
 	local spells, count
 	if rebornActives then
 		spells = rebornActives
@@ -2647,7 +2649,7 @@ function SurvivorUI_BuildSnapshot()
 	elseif count >= 1 then
 		Add(spells[count], Slot(count, count), true)
 	end
-	return list
+	return list, complete
 end
 
 -- For the range rings (WorldMarks.lua): the longest reach among the build's

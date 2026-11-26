@@ -398,6 +398,17 @@ unchanged in substance); the full audit is in the research notes
 
 ## Diagnostics
 
+Use `/sui reborn record auto on` to capture a normal run and
+`/sui reborn record status` to check recording. Older `capture` commands
+point to the SavedVariables recorder. `probe` remains a manual current-state
+query, and `jewelry raw` reports the native gear feed alongside the loadout.
+
+Run History uses stable Reborn server IDs when present and retains its
+legacy matching for records without them. Build can show the native
+current spell description after receiving it for the same run and rank.
+New history records mark the Build snapshot as partial when the full
+Reborn ability snapshot was unavailable at the time of capture.
+
 Debug logging is **off by default** (`SurvivorUIDB.rebornDebug`).
 Diagnostics never send addon messages except through the game's own
 sync, never request server data every frame, and never include
