@@ -32,13 +32,15 @@ Owner identifiers are replaced with stable session-local pseudonyms
 Native card payloads, spell descriptions, and manual marks can contain
 free-form text. Review any data you choose to share.
 
-### Dalaran Gear & Difficulty investigation
+### Gear & Difficulty evidence
 
-One Dalaran entry is enough for the targeted check. Select a known Campaign
-map and, if already unlocked, a non-Normal tier in the lobby. In Dalaran,
-use `/sui reborn record start` and `/sui gear show`. Exit normally and upload
-with the existing private diagnostics helper. A record already running in
-auto mode can be reused.
+The verified Dalaran feed identifies the hub and reports its Normal tier.
+It provides equipped items for simulation. A Campaign entry is required
+to compare actual maps and use the optimizer. To collect Campaign evidence,
+reuse auto recording or use `/sui reborn record start` before the baseline
+action. `/sui gear show` records the analyzer's state when opened. Exit normally
+and upload with the existing private diagnostics helper. See the provisional
+checks in the [delivery report](docs/reviews/PR-006.md#h-independent-review-and-provisional-in-game-checklist).
 
 `gear_analyzer` events distinguish the wire fields of `AZSZONE` from
 the native parsed fields, the analyzer's normalized context, and

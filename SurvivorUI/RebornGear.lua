@@ -3,9 +3,14 @@ if SurvivorUI_Standby or not SurvivorUI_RebornGearPlanner then return end
 
 local Gear, Planner = SurvivorUI_RebornGearModel, SurvivorUI_RebornGearPlanner
 local Maps = SurvivorUI_RebornMapReference
-local WIDTH = 686
-local panel, scroll, content, plannerTab, simulatorTab, baselineButton, loadButtons
-local view, rows, used, y = "planner", {}, 0, 0
+local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
+local BORDER = { bgFile = FLAT, edgeFile = FLAT, edgeSize = 1 }
+local GOLD, TEXT, MUTED = { 1, 0.82, 0.42 }, { 0.94, 0.93, 0.89 }, { 0.72, 0.73, 0.76 }
+local NEUTRAL = { body = { 0.12, 0.13, 0.16 }, edge = { 0.38, 0.38, 0.43 }, text = TEXT }
+local MENU_HEIGHT = 23
+local panel, shield, scroll, bar, content, plannerTab, simulatorTab, baselineButton, loadButtons
+local popup, menuChoice, details
+local view, activeView, width, viewport, rows, used, y = "planner", nil, 0, 0, {}, 0, 0
 local observedZone, worn, state, draft, searches, rendering
 local previewOwner, previewIsNative
 local observationOrder, worldEpoch = 0, 0
@@ -19,10 +24,10 @@ local SLOT = { head = "Head", shoulders = "Shoulders", chest = "Chest", waist = 
 local TIER = { common = "Common", uncommon = "Uncommon", rare = "Rare", epic = "Epic", pvp = "PvP",
 	legendary = "Legendary", exotic = "Exotic", mythic = "Mythic", elementium = "Elementium" }
 local STATS = {
-	{ "damage", "Damage" }, { "crit", "Critical strike" }, { "crit_damage", "Critical damage" },
-	{ "cooldown", "Cooldown reduction" }, { "area", "Area of effect" }, { "hp", "Health", true },
-	{ "armor", "Damage reduction" }, { "regen", "Health per second", true }, { "speed", "Movement speed" },
-	{ "pickup", "Pickup range" }, { "gold", "Gold find" }, { "echo", "Echo" },
+	{ "damage", "Damage", false, "Output" }, { "crit", "Critical strike" }, { "crit_damage", "Critical damage" },
+	{ "cooldown", "Cooldown reduction" }, { "area", "Area of effect" }, { "echo", "Echo" },
+	{ "hp", "Health", true, "Survival" }, { "armor", "Damage reduction" }, { "regen", "Health per second", true },
+	{ "speed", "Movement speed", false, "Utility" }, { "pickup", "Pickup range" }, { "gold", "Gold find" },
 }
 
 local function T(key) return SurvivorUI_T(key) end
@@ -124,11 +129,11 @@ local function EvaluateState(zone)
 	local scope = Planner.Scope(level, modifiers)
 	local demand
 	local mapStatus, difficultyStatus = ResolveSelection(zone)
-	local selected = mapStatus == "ready" and difficultyStatus == "ready"
+	local selected = not zone.hub and mapStatus == "ready" and difficultyStatus == "ready"
 	if selected and scope ~= "unsupported" then
 		demand = SurvivorUI_RebornAnalysisModel.GearDemand(Maps[zone.zone], level)
 	end
-	local context = { class = class, zone = selected and zone.zone, level = selected and level, heroic = heroic, scope = scope,
+	local context = { class = class, hub = zone.hub, zone = selected and zone.zone, level = selected and level, heroic = heroic, scope = scope,
 		modifiers = modifiers, build = AZS and AZS.ServerBuild, demand = demand,
 		pieces = worn, at = time and time() }
 	local actual = worn and catalog and class and Planner.Evaluate(catalog, class, worn)
@@ -173,6 +178,7 @@ local function TraceGear(trigger, wire, invalidation)
 	if not context then pressure = equipment
 	elseif map ~= "ready" then pressure = map
 	elseif difficulty ~= "ready" then pressure = difficulty
+	elseif context.hub then pressure = "hub_without_campaign_target"
 	elseif context.scope == "unsupported" then pressure = "unsupported_mode"
 	elseif not context.demand then pressure = "demand_unavailable"
 	elseif not current.actual then pressure = equipment
@@ -435,13 +441,40 @@ local function InstallInspectHook()
 	InspectUpdated()
 end
 
-local function Button(parent, caption, width, action)
-	local widget = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-	widget:SetWidth(width)
+local function Font(parent, size, color, justify)
+	local label = parent:CreateFontString(nil, "OVERLAY")
+	label:SetFont(SurvivorUI_FONT or "Fonts\\FRIZQT__.TTF", size + (SurvivorUI_FONT_BUMP or 0), "OUTLINE")
+	label:SetTextColor(color[1], color[2], color[3])
+	label:SetJustifyH(justify or "LEFT")
+	return label
+end
+
+local function Button(parent, caption, size, action, primary)
+	local widget = SurvivorUI_GoldButton(parent, size, nil, nil, T(caption), not primary and NEUTRAL or nil)
 	widget:SetHeight(24)
-	widget:SetText(T(caption))
+	widget.icon:Hide()
+	widget.text:ClearAllPoints()
+	widget.text:SetPoint("LEFT", widget, "LEFT", 4, 0)
+	widget.text:SetPoint("RIGHT", widget, "RIGHT", -4, 0)
+	widget.text:SetJustifyH("CENTER")
+	widget:SetScript("OnEnter", function() widget:Light(true) end)
+	widget:SetScript("OnLeave", function() widget:Light(false) end)
+	widget:SetScript("OnMouseDown", function() widget.text:SetAlpha(0.72) end)
+	widget:SetScript("OnMouseUp", function() widget.text:SetAlpha(1) end)
 	widget:SetScript("OnClick", action)
 	return widget
+end
+
+local function Control(widget, enabled, selected)
+	if enabled then widget:Enable() else widget:Disable() end
+	widget.lit = selected
+	widget:Light(false)
+	widget:SetAlpha(enabled and 1 or 0.44)
+end
+
+local function CloseMenu()
+	menuChoice = nil
+	if popup then popup:Hide() end
 end
 
 local function Row()
@@ -449,9 +482,7 @@ local function Row()
 	local row = rows[used]
 	if not row then
 		row = CreateFrame("Frame", nil, content)
-		row:SetWidth(WIDTH - 54)
-		row.label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-		row.label:SetJustifyH("LEFT")
+		row.label = Font(row, 11, TEXT)
 		row.iconButton = CreateFrame("Button", nil, row)
 		row.iconButton:SetWidth(22)
 		row.iconButton:SetHeight(22)
@@ -486,11 +517,13 @@ local function Row()
 	end
 	row:ClearAllPoints()
 	row:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -y)
+	row:SetWidth(width)
 	row:SetHeight(24)
 	row:Show()
 	row.iconButton:Hide()
 	if row.tier then row.tier:Hide(); row.stars:Hide() end
 	if row.action then row.action:Hide() end
+	if row.columns then for _, cell in ipairs(row.columns) do cell:Hide() end end
 	row.slot, row.item, row.simulated, row.plan, row.change = nil, nil, nil, nil, nil
 	return row
 end
@@ -501,18 +534,28 @@ local function Line(text, header, icon, slot, reserve)
 	local inset = icon and 30 or 0
 	row.label:ClearAllPoints()
 	row.label:SetPoint("TOPLEFT", row, "TOPLEFT", inset, -3)
-	row.label:SetWidth(WIDTH - 60 - inset - (reserve or 0))
-	row.label:SetTextColor(header and 1 or 0.92, header and 0.82 or 0.94, header and 0.22 or 0.98)
+	row.label:SetWidth(math.max(1, width - inset - (reserve or 0)))
+	local color = header == "note" and MUTED or header and GOLD or TEXT
+	row.label:SetTextColor(color[1], color[2], color[3])
 	row.label:SetText(text)
 	if icon then row.icon:SetTexture(icon); row.iconButton:Show() end
-	local height = row.label.GetStringHeight and row.label:GetStringHeight() or 15
-	height = math.max(height + 9, 24)
+	local height = math.max(row.label:GetStringHeight() + 7, icon and 27 or 25)
 	row:SetHeight(height)
 	y = y + height
 	return row
 end
 
 local function Gap() y = y + 9 end
+
+local function RowAction(row, caption, action)
+	if not row.action then
+		row.action = Button(row, "", 188)
+		row.action:SetPoint("TOPRIGHT", row, "TOPRIGHT", 0, 0)
+	end
+	row.action.text:SetText(T(caption))
+	row.action:SetScript("OnClick", action)
+	row.action:Show()
+end
 
 local function ChangeRows(current, changes, plan)
 	for _, row in ipairs(changes) do
@@ -543,23 +586,17 @@ end
 local function OutputPlan(current, index)
 	local title = index == 1 and "Plan A · Current expansion drops" or "Plan B · Stars only"
 	local plan = searches and searches[index]
-	local head = Line(T(title), true, nil, nil, 165)
+	local head = Line(T(title), true, nil, nil, 196)
 	if not plan then
 		Line(T(current.current.combined and "Expansion drop data unavailable." or "A comparable baseline and both pressures are required."))
 		return
-	end
-	if not head.action then
-		head.action = Button(head, "Load in Simulator", 165)
-		head.action:SetPoint("TOPRIGHT", head, "TOPRIGHT", 0, 0)
 	end
 	if plan.worker then
 		Line(T("Searching equipment combinations…"))
 		return
 	end
 	if plan.error then Line(T("Upgrade search unavailable.")); return end
-	head.action:SetText(T("Load in Simulator"))
-	head.action:SetScript("OnClick", function() LoadPlan(index) end)
-	head.action:Show()
+	RowAction(head, "Load in Simulator", function() LoadPlan(index) end)
 	local rows, quote = Planner.Changes(current.catalog, current.context.pieces, plan.pieces, current.drops, current.context.class)
 	Line(F("Modeled pressure %s → %s · %d gold in upgrades", ShortPercent(current.current.combined), ShortPercent(plan.after), quote.gold))
 	if current.current.combined <= 100 then
@@ -606,9 +643,11 @@ local function ContextLines(current)
 	local context = current and current.context
 	if not context then Line(T("Waiting for the game's world snapshot."), true); return end
 	local class = current.catalog and Planner.Class(current.catalog, context.class)
-	Line((class and L(class.name) or T("Class unavailable")) .. " · "
-		.. MapTitle(context.zone, context.level, observedZone.zname), true)
-	if not current.actual then Line(T("Current equipment unavailable. Waiting for the game to send equipped items.")) end
+	local location = context.hub and L("Dalaran") or MapTitle(context.zone, context.level, observedZone.zname)
+	Line((class and L(class.name) or T("Class unavailable")) .. " · " .. location, true)
+	if context.hub then Line(T("Enter a Campaign to compare map difficulty or plan upgrades."), "note") end
+	if not current.actual then Line(T("Current equipment unavailable. Waiting for the game to send equipped items."), "note") end
+	if context.hub then return end
 	if type(current.saved) == "table" then
 		local saved = current.saved
 		local offset = SurvivorUI_TimeZone and SurvivorUI_TimeZone()
@@ -633,10 +672,11 @@ end
 
 local function PlannerView(current)
 	if not current then return end
-	Line(DifficultyLine(current.current), true)
-	if not current.context.demand and current.context.scope ~= "unsupported" then
-		Line(T("The game has not reported a supported selected Campaign map and difficulty."))
+	if not current.context.demand then
+		if current.context.scope ~= "unsupported" then Line(T("The game has not reported a supported selected Campaign map and difficulty."), "note") end
+		return
 	end
+	if current.current.output or current.current.survival then Line(DifficultyLine(current.current), true) end
 	if current.actual and not current.actual.survival then Line(T("Survival estimate unavailable for this class data.")) end
 	if current.reference and current.context.demand then
 		local map = current.context.demand
@@ -644,34 +684,63 @@ local function PlannerView(current)
 		Line(F("Map demand vs. baseline · enemy health %s · first boss hit %s",
 			ShortPercent(map.output and 100 * map.output / old.output), ShortPercent(map.survival and 100 * map.survival / old.survival)))
 	end
-	if current.context.demand then
-		Line(T("Output uses gear Damage. Survival uses class starting HP, gear HP and Damage Reduction capped at 60%."))
-		Line(T("Plans optimize modeled pressure. Gameplay calibration is pending. Critical chance and damage, cooldown, Echo, recovery, movement, area, talents, summons, density and encounter rules such as Rifts and Endless are excluded."))
+	if current.current.combined then
+		Gap()
+		SearchFor(current)
+		OutputPlan(current, 1)
+		Gap()
+		OutputPlan(current, 2)
 	end
 	Gap()
-	SearchFor(current)
-	OutputPlan(current, 1)
-	Gap()
-	OutputPlan(current, 2)
+	local header = Line(T("Calculation model"), true, nil, nil, 196)
+	RowAction(header, details and "Hide details" or "Show details", function() details = not details; render() end)
+	if details then
+		Line(T("Output uses gear Damage. Survival uses class starting HP, gear HP and Damage Reduction capped at 60%."), "note")
+		Line(T("Plans optimize modeled pressure. Gameplay calibration is pending. Critical chance and damage, cooldown, Echo, recovery, movement, area, talents, summons, density and encounter rules such as Rifts and Endless are excluded."), "note")
+	end
 end
 
-local function Menu(row, field, width, offset, options, set)
-	local menu = CreateFrame("Frame", "SurvivorUIRebornGearMenu" .. used .. field, row, "UIDropDownMenuTemplate")
-	menu:SetPoint("TOPLEFT", row, "TOPLEFT", offset, 3)
-	UIDropDownMenu_SetWidth(menu, width)
-	UIDropDownMenu_Initialize(menu, function()
-		local context, slot = Read(), row.slot
-		if not context or not slot then return end
-		for _, entry in ipairs(options(row)) do
-			local value = entry[1]
-			local info = UIDropDownMenu_CreateInfo()
-			info.value, info.text = value, entry[2]
-			info.func = function()
-				if view == "simulator" and context == Read() and slot == row.slot then set(row, value) end
+local function Menu(row, field, size, offset, options, set)
+	local menu = Button(row, "", size, function()
+		if menuChoice and menuChoice.anchor == row[field] then CloseMenu(); return end
+		local current, slot, anchor = Read(), row.slot, row[field]
+		if activeView ~= "simulator" or not current or not slot then return end
+		local entries = options(row, current)
+		local total = table.getn(entries) * MENU_HEIGHT + 4
+		local bottom = anchor:GetBottom() or 0
+		local below = bottom - (panel:GetBottom() or 0)
+		local above = (panel:GetTop() or 0) - (anchor:GetTop() or 0)
+		popup:ClearAllPoints()
+		if below < total and above >= below then popup:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 0, 2)
+		else popup:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -2) end
+		popup:SetWidth(size)
+		popup:SetHeight(total)
+		local choice = { anchor = anchor }
+		menuChoice = choice
+		for i, entry in ipairs(entries) do
+			local item = popup.items[i]
+			if not item then
+				item = Button(popup, "", size)
+				item:SetHeight(MENU_HEIGHT)
+				item:SetPoint("TOPLEFT", popup, "TOPLEFT", 2, -2 - (i - 1) * MENU_HEIGHT)
+				popup.items[i] = item
 			end
-			UIDropDownMenu_AddButton(info)
+			local value = entry[1]
+			item:SetWidth(size - 4)
+			item.text:SetText(entry[2])
+			Control(item, true, value == anchor.value)
+			item:SetScript("OnClick", function()
+				if menuChoice ~= choice or current ~= Read() or slot ~= row.slot then return end
+				CloseMenu()
+				set(row, value, current)
+			end)
+			item:Show()
 		end
+		for i = table.getn(entries) + 1, table.getn(popup.items) do popup.items[i]:Hide() end
+		ClearPreview()
+		popup:Show()
 	end)
+	menu:SetPoint("TOPLEFT", row, "TOPLEFT", offset, 0)
 	return menu
 end
 
@@ -684,11 +753,10 @@ local function EditSlot(row, tier, star)
 end
 
 local function EquipmentControls(current, slot, simulated, actual)
-	local row = Line(L(SLOT[slot]), false, ItemIcon(current.catalog, current.context.class, simulated, actual), slot, 260)
+	local row = Line(L(SLOT[slot]), false, ItemIcon(current.catalog, current.context.class, simulated, actual), slot, width - 154)
 	row.item, row.simulated = simulated, true
 	if not row.tier then
-		row.tier = Menu(row, "tier", 130, 222, function(widget)
-			local ctx = Read()
+		row.tier = Menu(row, "tier", 134, 156, function(widget, ctx)
 			local options = { { false, T("Empty slot") } }
 			for _, key in ipairs(Planner.Tiers(ctx.catalog)) do
 				if Gear.ValidPiece(ctx.catalog, ctx.context.class, widget.slot, key, 0) then
@@ -696,27 +764,56 @@ local function EquipmentControls(current, slot, simulated, actual)
 				end
 			end
 			return options
-		end, function(widget, tier)
-			local real = Planner.BySlot(Read().context.pieces)[widget.slot]
+		end, function(widget, tier, ctx)
+			local real = Planner.BySlot(ctx.context.pieces)[widget.slot]
 			EditSlot(widget, tier, real and real.tier == tier and real.stars or 0)
 		end)
-		row.stars = Menu(row, "stars", 64, 406, function(widget)
+		row.stars = Menu(row, "stars", 70, 296, function(widget, ctx)
 			local options = {}
 			if widget.item then
-				for star = 0, Read().catalog.pieces.scale.top do table.insert(options, { star, F("★%d", star) }) end
+				for star = 0, ctx.catalog.pieces.scale.top do table.insert(options, { star, F("★%d", star) }) end
 			end
 			return options
 		end, function(widget, star)
 			if widget.item then EditSlot(widget, widget.item.tier, star) end
 		end)
 	end
-	UIDropDownMenu_SetSelectedValue(row.tier, simulated and simulated.tier or false)
-	UIDropDownMenu_SetText(row.tier, simulated and TierText(current.catalog, simulated.tier) or T("Empty slot"))
+	row.tier.value = simulated and simulated.tier or false
+	row.tier.text:SetText((simulated and TierText(current.catalog, simulated.tier) or T("Empty slot")) .. "  v")
 	row.tier:Show()
 	if simulated then
-		UIDropDownMenu_SetSelectedValue(row.stars, simulated.stars)
-		UIDropDownMenu_SetText(row.stars, F("★%d", simulated.stars))
+		row.stars.value = simulated.stars
+		row.stars.text:SetText(F("★%d", simulated.stars) .. "  v")
 		row.stars:Show()
+	end
+end
+
+local function StatRow(label, actual, simulated, delta, header)
+	local cellWidth = math.floor((width - 128) / 3)
+	local row = Line(label, header, nil, nil, cellWidth * 3 + 6)
+	if not row.columns then
+		row.columns = { Font(row, 10, MUTED, "RIGHT"), Font(row, 10, TEXT, "RIGHT"), Font(row, 10, GOLD, "RIGHT") }
+	end
+	for i, value in ipairs({ actual, simulated, delta }) do
+		local cell = row.columns[i]
+		cell:ClearAllPoints()
+		cell:SetPoint("TOPRIGHT", row, "TOPRIGHT", -(3 - i) * cellWidth, -3)
+		cell:SetWidth(cellWidth - 6)
+		cell:SetText(value)
+		cell:Show()
+	end
+end
+
+local function EquipmentStats(actual, simulated)
+	StatRow(T("Equipment attributes"), T("Actual"), T("Simulated"), T("Change"), true)
+	for _, stat in ipairs(STATS) do
+		if stat[4] then Line(T(stat[4]), "note") end
+		local old, new = actual[stat[1]] or 0, simulated[stat[1]] or 0
+		local delta = new - old
+		local unit = stat[3] and 1 or 100
+		local valueFormat = stat[3] and "%.2f" or "%.2f%%"
+		StatRow(L(stat[2]), string.format(valueFormat, old * unit), string.format(valueFormat, new * unit),
+			math.abs(delta) <= Planner.tolerance and "—" or F(stat[3] and "%+.2f" or "%+.2f pp", delta * unit))
 	end
 end
 
@@ -727,39 +824,32 @@ local function SimulatorView(current)
 	local evaluation = Planner.Evaluate(catalog, context.class, draft)
 	if not evaluation then Line(T("Gear analysis is unavailable for these game data.")); return end
 	local simulated = Planner.Difficulty(context.demand, evaluation, current.reference)
-	Line(DifficultyLine(simulated), true)
+	if simulated.output or simulated.survival then Line(DifficultyLine(simulated), true) end
 	if simulated.combined and current.current.combined then
 		Line(F("Compared with actual gear · difficulty %+.2f pp · output %+.2f pp · survival %+.2f pp",
 			simulated.combined - current.current.combined, simulated.output - current.current.output,
 			simulated.survival - current.current.survival))
 	end
 	local changes, quote = Planner.Changes(catalog, context.pieces, draft, current.drops, context.class)
-	Line(F("Calculable upgrade gold: %d", quote.gold))
+	Line(F("Calculable upgrade gold: %d", quote.gold), true)
 	if quote.unknown then Line(T("Some upgrade prices are unavailable.")) end
 	if quote.acquisition then Line(T("Replacement gear is hypothetical. Ownership and direct ascension are unavailable here.")) end
-	local totals = AttributeLines({}, evaluation.stats)
-	if totals[1] then Line(F("Equipment totals · %s", table.concat(totals, "  ·  "))) end
-	if (evaluation.stats.armor or 0) > 0.6 then Line(T("Damage reduction is capped at 60% in this model.")) end
-	local attrs = AttributeLines(current.actual.stats, evaluation.stats)
-	if attrs[1] then Line(table.concat(attrs, "  ·  ")) end
-	if current.actual.sets and evaluation.sets then
-		for _, entry in ipairs(SetLines(catalog, current.actual.sets, evaluation.sets)) do Line(entry) end
-	end
-	if next(evaluation.opaque) then Line(T("Some active set effects have no quantified combat value.")) end
-	local header = Line(T("Simulated equipment"), true, nil, nil, 165)
-	if not header.action then
-		header.action = Button(header, "Reset to Actual Equipment", 165)
-		header.action:SetPoint("TOPRIGHT", header, "TOPRIGHT", 0, 0)
-	end
-	header.action:SetText(T("Reset to Actual Equipment"))
-	header.action:SetScript("OnClick", function() draft = nil; render() end)
-	header.action:Show()
+	Gap()
+	local header = Line(T("Simulated equipment"), true, nil, nil, 196)
+	if changes[1] then RowAction(header, "Reset to Actual Equipment", function() draft = nil; render() end) end
 	local previous, wanted = Planner.BySlot(context.pieces), Planner.BySlot(draft)
-	if UIDropDownMenu_Initialize then
-		for _, slot in ipairs(Planner.Slots(catalog, context.class)) do
-			EquipmentControls(current, slot, wanted[slot], previous[slot])
-		end
+	for _, slot in ipairs(Planner.Slots(catalog, context.class)) do
+		EquipmentControls(current, slot, wanted[slot], previous[slot])
 	end
+	Gap()
+	EquipmentStats(current.actual.stats, evaluation.stats)
+	if context.demand and (evaluation.stats.armor or 0) > 0.6 then Line(T("Damage reduction is capped at 60% in this model."), "note") end
+	if current.actual.sets and evaluation.sets then
+		local sets = SetLines(catalog, current.actual.sets, evaluation.sets)
+		if sets[1] then Gap(); Line(T("Set changes"), true) end
+		for _, entry in ipairs(sets) do Line(entry) end
+	end
+	if next(evaluation.opaque) then Line(T("Some active set effects have no quantified combat value."), "note") end
 	if changes[1] then
 		Gap()
 		Line(T("Changes and acquisition"), true)
@@ -769,36 +859,51 @@ end
 
 render = function()
 	if rendering or not panel or not panel:IsShown() then return end
+	CloseMenu()
 	if not previewIsNative then ClearPreview() end
 	rendering, used, y = true, 0, 0
 	local current = Read()
+	local hub = current and current.context.hub
+	local previous = activeView
+	activeView = hub and "simulator" or view
+	if hub then plannerTab:Hide() else plannerTab:Show() end
+	simulatorTab:ClearAllPoints()
+	if hub then simulatorTab:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -43)
+	else simulatorTab:SetPoint("LEFT", plannerTab, "RIGHT", 6, 0) end
+	Control(plannerTab, true, activeView == "planner")
+	Control(simulatorTab, true, activeView == "simulator")
 	ContextLines(current)
-	if view == "planner" then PlannerView(current) else SimulatorView(current) end
+	if activeView == "planner" then PlannerView(current) else SimulatorView(current) end
 	for i = used + 1, table.getn(rows) do rows[i]:Hide() end
-	content:SetHeight(math.max(1, y + 4))
-	if baselineButton then
-		if view == "planner" then
-			baselineButton:Show()
-			local demand = current and current.context.demand
-			if demand and demand.output and demand.survival and current.actual and current.actual.sets and current.actual.survival then
-				baselineButton:Enable()
-			else baselineButton:Disable() end
-		else baselineButton:Hide() end
-	end
+	local demand = current and current.context.demand
+	if activeView == "planner" and demand then
+		baselineButton:Show()
+		Control(baselineButton, demand.output and demand.survival and current.actual and current.actual.sets and current.actual.survival)
+	else baselineButton:Hide() end
+	local footer = baselineButton:IsShown()
 	for i, button in ipairs(loadButtons) do
-		if view == "simulator" then
+		local plan = searches and searches[i]
+		if activeView == "simulator" and plan and not plan.worker and not plan.error then
 			button:Show()
-			local plan = searches and searches[i]
-			if plan and not plan.worker and not plan.error then button:Enable() else button:Disable() end
+			footer = true
 		else button:Hide() end
 	end
+	scroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -31, footer and 51 or 16)
+	local extent = math.max(1, y + 4)
+	local range = math.max(0, extent - viewport + (footer and 35 or 0))
+	content:SetHeight(extent)
+	bar:SetMinMaxValues(0, math.max(1, range))
+	local offset = previous ~= activeView and 0 or math.min(bar:GetValue(), range)
+	bar:SetValue(offset)
+	scroll:SetVerticalScroll(offset)
+	if range > 0 then bar:Show() else bar:Hide() end
 	local work = searches and ((searches[1] and searches[1].worker) or (searches[2] and searches[2].worker))
-	panel:SetScript("OnUpdate", view == "planner" and work and updateSearch or nil)
+	panel:SetScript("OnUpdate", activeView == "planner" and work and updateSearch or nil)
 	rendering = false
 end
 
 updateSearch = function()
-	if not searches or view ~= "planner" or not SurvivorUI_RebornGearEnabled() then
+	if not searches or activeView ~= "planner" or not SurvivorUI_RebornGearEnabled() then
 		panel:SetScript("OnUpdate", nil)
 		return
 	end
@@ -813,35 +918,57 @@ updateSearch = function()
 end
 
 showView = function(target)
-	view = target
-	if target == "planner" then plannerTab:Disable(); simulatorTab:Enable()
-	else plannerTab:Enable(); simulatorTab:Disable() end
-	scroll:SetVerticalScroll(0)
+	view, activeView = target, nil
 	render()
 end
 
+local function SizePanel()
+	local availableWidth, availableHeight = UIParent:GetWidth() - 40, UIParent:GetHeight() - 40
+	local scale = math.min(1, availableWidth / 432, availableHeight / 330)
+	local w = math.min(640, availableWidth / scale)
+	local h = math.min(540, availableHeight / scale)
+	width, viewport = w - 47, h - 92
+	panel:SetScale(scale)
+	panel:SetWidth(w)
+	panel:SetHeight(h)
+	content:SetWidth(width)
+end
+
 local function Build()
+	shield = CreateFrame("Frame", nil, UIParent)
+	shield:Hide()
+	shield:SetAllPoints(UIParent)
+	shield:SetFrameStrata("FULLSCREEN_DIALOG")
+	shield:EnableMouse(true)
+	shield:EnableMouseWheel(true)
+	shield:SetScript("OnMouseDown", CloseMenu)
+	local dim = shield:CreateTexture(nil, "BACKGROUND")
+	dim:SetAllPoints(shield)
+	dim:SetTexture(FLAT)
+	dim:SetVertexColor(0, 0, 0, 0.42)
 	panel = CreateFrame("Frame", "SurvivorUIRebornGearPanel", UIParent)
 	panel:Hide()
-	panel:SetWidth(WIDTH)
-	panel:SetHeight(530)
 	panel:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-	panel:SetFrameStrata("DIALOG")
+	panel:SetFrameStrata("FULLSCREEN_DIALOG")
+	panel:SetFrameLevel(shield:GetFrameLevel() + 10)
 	panel:EnableMouse(true)
-	panel:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-		edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12 })
-	panel:SetBackdropColor(0.05, 0.06, 0.08, 0.98)
-	if UISpecialFrames then table.insert(UISpecialFrames, "SurvivorUIRebornGearPanel") end
-	local close = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
-	close:SetPoint("TOPRIGHT", panel, "TOPRIGHT", 0, 0)
-	local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+	panel:SetBackdrop(BORDER)
+	panel:SetBackdropColor(0.06, 0.065, 0.08, 1)
+	panel:SetBackdropBorderColor(0.65, 0.52, 0.30, 1)
+	panel:SetScript("OnMouseDown", CloseMenu)
+	local close = Button(panel, "Close", 62, function() panel:Hide() end)
+	close:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -16, -12)
+	local title = Font(panel, 15, GOLD)
 	title:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -14)
 	title:SetText(T("Gear & Difficulty"))
-	plannerTab = Button(panel, "Difficulty & Upgrade Planner", 210, function() showView("planner") end)
-	plannerTab:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -42)
-	simulatorTab = Button(panel, "Equipment Simulator", 163, function() showView("simulator") end)
-	simulatorTab:SetPoint("LEFT", plannerTab, "RIGHT", 6, 0)
-	baselineButton = Button(panel, "Set Current Configuration as 100% Baseline", 302, SaveBaseline)
+	plannerTab = Button(panel, "Difficulty & Upgrade Planner", 200, function()
+		if activeView ~= "planner" then showView("planner") end
+	end, true)
+	plannerTab:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -43)
+	simulatorTab = Button(panel, "Equipment Simulator", 145, function()
+		if activeView ~= "simulator" then showView("simulator") end
+	end, true)
+	baselineButton = Button(panel, "Set Current Configuration as 100% Baseline", 302, SaveBaseline, true)
 	baselineButton:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 16, 14)
 	loadButtons = {
 		Button(panel, "Load Plan A", 130, function() LoadPlan(1) end),
@@ -849,14 +976,86 @@ local function Build()
 	}
 	loadButtons[1]:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 16, 14)
 	loadButtons[2]:SetPoint("LEFT", loadButtons[1], "RIGHT", 8, 0)
-	scroll = CreateFrame("ScrollFrame", "SurvivorUIRebornGearScroll", panel, "UIPanelScrollFrameTemplate")
-	scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -77)
-	scroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -32, 50)
+	scroll = CreateFrame("ScrollFrame", "SurvivorUIRebornGearScroll", panel)
+	scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -76)
 	content = CreateFrame("Frame", nil, scroll)
-	content:SetWidth(WIDTH - 54)
 	content:SetHeight(1)
 	scroll:SetScrollChild(content)
+	bar = CreateFrame("Slider", nil, panel)
+	bar:SetOrientation("VERTICAL")
+	bar:SetWidth(8)
+	bar:SetPoint("TOPLEFT", scroll, "TOPRIGHT", 7, 0)
+	bar:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", 7, 0)
+	bar:SetMinMaxValues(0, 1)
+	bar:SetValue(0)
+	bar:EnableMouse(true)
+	bar:SetBackdrop(BORDER)
+	bar:SetBackdropColor(0.12, 0.12, 0.15, 1)
+	bar:SetBackdropBorderColor(0.29, 0.29, 0.34, 1)
+	local thumb = bar:CreateTexture(nil, "ARTWORK")
+	thumb:SetTexture(FLAT)
+	thumb:SetVertexColor(0.75, 0.60, 0.35, 1)
+	thumb:SetWidth(8)
+	thumb:SetHeight(28)
+	bar:SetThumbTexture(thumb)
+	bar:SetScript("OnValueChanged", function(_, value)
+		CloseMenu()
+		if not previewIsNative then ClearPreview() end
+		scroll:SetVerticalScroll(value or arg1)
+	end)
+	local function Wheel(_, delta)
+		if bar:IsShown() then
+			local low, high = bar:GetMinMaxValues()
+			bar:SetValue(math.max(low, math.min(high, bar:GetValue() - (delta or arg1) * 44)))
+		end
+	end
+	scroll:EnableMouseWheel(true)
+	scroll:SetScript("OnMouseWheel", Wheel)
+	bar:EnableMouseWheel(true)
+	bar:SetScript("OnMouseWheel", Wheel)
+	popup = CreateFrame("Frame", nil, panel)
+	popup:Hide()
+	popup:EnableMouse(true)
+	popup:SetClampedToScreen(true)
+	popup:SetFrameLevel(panel:GetFrameLevel() + 40)
+	popup:SetBackdrop(BORDER)
+	popup:SetBackdropColor(0.07, 0.07, 0.09, 1)
+	popup:SetBackdropBorderColor(0.45, 0.40, 0.31, 1)
+	popup.items = {}
+	-- Frame keyboard focus consumes Escape before the native menu binding.
+	-- The client repeats OnKeyDown without OnKeyUp. Wait for its repeat stream
+	-- to stop before releasing focus, as the native card picker does for taps.
+	local timer = CreateFrame("Frame", nil, panel)
+	local escapeAt, escapeMenu
+	local function FinishEscape()
+		if GetTime() - escapeAt < 0.12 then return end
+		local choice = escapeMenu
+		escapeAt, escapeMenu = nil, nil
+		timer:SetScript("OnUpdate", nil)
+		if choice then
+			if choice == menuChoice then CloseMenu() end
+		elseif not menuChoice then panel:Hide() end
+	end
+	panel:SetScript("OnKeyDown", function(_, key)
+		if (key or arg1) ~= "ESCAPE" then return end
+		if not escapeAt then
+			escapeMenu = menuChoice
+			timer:SetScript("OnUpdate", FinishEscape)
+		end
+		escapeAt = GetTime()
+	end)
+	panel:SetScript("OnEvent", function()
+		SizePanel()
+		render()
+	end)
 	panel:SetScript("OnHide", function()
+		escapeAt, escapeMenu = nil, nil
+		timer:SetScript("OnUpdate", nil)
+		panel:EnableKeyboard(false)
+		panel:UnregisterEvent("UI_SCALE_CHANGED")
+		panel:UnregisterEvent("DISPLAY_SIZE_CHANGED")
+		shield:Hide()
+		CloseMenu()
 		if not previewIsNative then ClearPreview() end
 		panel:SetScript("OnUpdate", nil)
 		if searches and ((searches[1] and searches[1].worker) or (searches[2] and searches[2].worker)) then searches = nil end
@@ -866,12 +1065,18 @@ end
 function SurvivorUI_RebornGearOpen(argument)
 	if not SurvivorUI_RebornGearEnabled() then return end
 	if argument == "off" then if panel then panel:Hide() end; return end
+	if not SurvivorUI_GoldButton then return end
 	if not panel then Build() end
 	if panel:IsShown() and argument ~= "show" and argument ~= "worn" and argument ~= "simulator" then
 		panel:Hide()
 		return
 	end
+	SizePanel()
+	if GameMenuFrame and GameMenuFrame:IsShown() then shield:Show() end
 	panel:Show()
+	panel:EnableKeyboard(true)
+	panel:RegisterEvent("UI_SCALE_CHANGED")
+	panel:RegisterEvent("DISPLAY_SIZE_CHANGED")
 	showView(argument == "simulator" and "simulator" or "planner")
 	TraceGear("open")
 	RequestDiagnosticSync(true)

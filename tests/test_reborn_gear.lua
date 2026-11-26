@@ -289,7 +289,7 @@ table.remove(AZS_GEN.setBonuses)
 cat.pieces.scale.top = savedTop
 
 -- Event and widget mocks follow the native zone-before-armor sync contract.
-local widgets, handlers, commands, entries, menus = {}, {}, {}, {}, {}
+local widgets, handlers, commands = {}, {}, {}
 function CreateFrame(kind, name, parent)
 	local w = { kind = kind, name = name, parent = parent, scripts = {}, shown = true, events = {} }
 	function w:CreateFontString() return CreateFrame("FontString", nil, self) end
@@ -308,23 +308,55 @@ function CreateFrame(kind, name, parent)
 	function w:RegisterEvent(key) self.events[key] = true end
 	function w:UnregisterEvent(key) self.events[key] = nil end
 	function w:GetStringHeight() return 14 end
+	function w:SetWidth(value) self.width = value end
+	function w:SetHeight(value) self.height = value end
+	function w:SetScale(value) self.scale = value end
+	function w:GetWidth() return self.width end
+	function w:GetHeight() return self.height end
+	function w:SetFrameStrata(value) self.strata = value end
+	function w:SetFrameLevel(value) self.level = value end
+	function w:GetFrameLevel() return self.level or 1 end
+	function w:GetTop() return self.top or 500 end
+	function w:GetBottom() return self.bottom or 0 end
+	function w:SetMinMaxValues(low, high) self.low, self.high = low, high end
+	function w:GetMinMaxValues() return self.low, self.high end
+	function w:SetValue(value)
+		self.value = value
+		if self.scripts.OnValueChanged then self.scripts.OnValueChanged(self, value) end
+	end
+	function w:GetValue() return self.value end
+	function w:EnableKeyboard(value) self.keyboard = value end
+	function w:EnableMouse(value) self.mouse = value end
+	function w:EnableMouseWheel(value) self.wheel = value end
+	function w:SetVerticalScroll(value) self.offset = value end
+	function w:SetBackdropColor(r, g, b, a) self.backgroundAlpha = a end
 	table.insert(widgets, w)
-	for _, method in ipairs({ "SetPoint", "ClearAllPoints", "SetAllPoints", "SetWidth", "SetHeight", "SetFrameStrata",
-		"EnableMouse", "SetBackdrop", "SetBackdropColor", "SetScrollChild", "SetVerticalScroll", "SetJustifyH",
-		"SetTextColor", "SetTexture" }) do w[method] = function() end end
+	for _, method in ipairs({ "SetPoint", "ClearAllPoints", "SetAllPoints", "SetBackdrop", "SetBackdropBorderColor",
+		"SetScrollChild", "SetJustifyH", "SetTextColor", "SetTexture", "SetFont", "SetAlpha", "SetThumbTexture",
+		"SetVertexColor", "SetOrientation", "SetClampedToScreen" }) do w[method] = function() end end
 	return w
 end
-function UIDropDownMenu_Initialize(menu, fn) menus[menu] = fn end
-function UIDropDownMenu_SetWidth() end
-function UIDropDownMenu_SetSelectedValue(menu, value) menu.value = value end
-function UIDropDownMenu_SetText(menu, text) menu.text = text end
-function UIDropDownMenu_CreateInfo() return {} end
-function UIDropDownMenu_AddButton(info) table.insert(entries, info) end
+function SurvivorUI_GoldButton(parent, width, _, _, caption)
+	local button = CreateFrame("Button", nil, parent)
+	button:SetWidth(width)
+	button.icon = button:CreateTexture()
+	button.text = button:CreateFontString()
+	button.text:SetText(caption)
+	function button:Light(hot) self.hot = hot end
+	return button
+end
+UIParent = CreateFrame("Frame", "UIParent")
+UIParent:SetWidth(1024)
+UIParent:SetHeight(768)
+GameMenuFrame = CreateFrame("Frame", "GameMenuFrame", UIParent)
+GameMenuFrame:Hide()
 function SurvivorUI_T(text) return text end
 function SurvivorUI_RebornActive() return true end
 function SurvivorUI_RebornStableRunId(value) return value end
 function AZS_SendCommand(command) table.insert(commands, command) end
 function time() return 1234 end
+local clock = 0
+function GetTime() return clock end
 AZS = { ServerBuild = "v0.7.4", On = function(event, fn) assert(not handlers[event]); handlers[event] = fn end }
 SurvivorUIDB = { rebornGear = { mapReference = { zone = "naxx", tier = 3 }, wornSnapshots = { warlock = { pieces = armor } } } }
 local dollSlot = { slot = 0, hooks = 0 }
@@ -380,8 +412,9 @@ local function Find(kind, text, children)
 		return true
 	end
 	for _, w in ipairs(widgets) do
+		local caption = type(w.text) == "table" and w.text.text or w.text
 		if w.kind == kind and Visible(w) and (not children or w.parent == children)
-			and type(w.text) == "string" and string.find(w.text, text, 1, true) then return w end
+			and type(caption) == "string" and string.find(caption, text, 1, true) then return w end
 	end
 end
 local function Click(text)
@@ -389,8 +422,8 @@ local function Click(text)
 	assert(not button.disabled, text)
 	button.scripts.OnClick()
 end
-local function Zone(key, level, class, run, affixes)
-	AZS_ZONE = { hub = 1, zone = key, dt = level, heroic = level, class = class, run = run, affixes = affixes }
+local function Zone(key, level, class, run, affixes, hub)
+	AZS_ZONE = { hub = hub or (key == "dalaran" and 1 or 0), zone = key, dt = level, heroic = level, class = class, run = run, affixes = affixes }
 	handlers.AZSZONE()
 end
 local function Armor(rows)
@@ -399,11 +432,14 @@ local function Armor(rows)
 	AZSInspect:RefreshDoll(rows)
 end
 local function SlotMenu(slot, value, field)
-	for menu, open in pairs(menus) do
-		if menu.shown and menu.parent.shown and menu.parent.slot == slot and string.find(menu.name, field or "tier", 1, true) then
-			entries = {}
-			open()
-			for _, item in ipairs(entries) do if item.value == value then return item.func end end
+	for _, row in ipairs(widgets) do
+		local menu = row[field or "tier"]
+		if row.shown and row.slot == slot and menu and menu.shown then
+			menu.scripts.OnClick()
+			local option = type(value) == "number" and ("★" .. value) or value == "legendary" and "Legendary" or "Empty slot"
+			for _, popup in ipairs(widgets) do
+				if popup.items and popup.shown then return assert(Find("Button", option, popup), option).scripts.OnClick end
+			end
 		end
 	end
 end
@@ -459,7 +495,10 @@ assert(saved.zone == "elwynn" and saved.level == 0 and saved.at == 1234 and save
 assert(saved.pieces[1].name == "Test item" and saved.pieces[1].stars == 0 and Find("FontString", "Estimated difficulty 100.0%"))
 assert(Find("FontString", "No upgrades required"))
 assert(string.find(dollSlot:Hover(), "Modeled pressure 100.0% →", 1, true))
+assert(not Find("FontString", "Output uses gear Damage"))
+Click("Show details")
 assert(Find("FontString", "Output uses gear Damage") and Find("FontString", "calibration is pending"))
+Click("Hide details")
 Click("Equipment Simulator")
 local edit = assert(SlotMenu("head", "legendary"))
 edit()
@@ -502,6 +541,8 @@ Click("Equipment Simulator")
 assert(not GameTooltip.shown)
 Click("Load Plan A")
 assert(Find("FontString", "Calculable upgrade gold:") and not VisiblePanel().scripts.OnUpdate)
+assert(SlotMenu("head", false))()
+assert(Find("Button", "Reset to Actual Equipment"))
 Click("Reset to Actual Equipment")
 assert(Find("FontString", "Calculable upgrade gold: 0") and not Find("FontString", "Changes and acquisition"))
 Click("Difficulty & Upgrade Planner")
@@ -517,7 +558,7 @@ AZS_ZONE.mode = "swarm"
 handlers.AZSZONE()
 Armor({ head })
 assert(Find("FontString", "Campaign pressure and plans are unavailable in this mode"))
-assert(not VisiblePanel().scripts.OnUpdate and Find("Button", "Set Current Configuration").disabled)
+assert(not VisiblePanel().scripts.OnUpdate and not Find("Button", "Set Current Configuration"))
 AZS_ZONE.zone, AZS_ZONE.dt, AZS_ZONE.heroic = "elwynn", 0, 0
 Armor({ head })
 assert(Find("FontString", "Waiting for the game's world snapshot"), "armor before an announced zone is rejected")
@@ -535,8 +576,20 @@ Armor({})
 Click("Set Current Configuration")
 assert(#SurvivorUIDB.rebornGear.baselines.paladin.pieces == 0 and SurvivorUIDB.rebornGear.baselines.warlock == saved)
 Zone("dalaran", 0, "paladin", "d")
-assert(Find("FontString", "Selected map or difficulty unavailable"))
-assert(Find("Button", "Set Current Configuration").disabled)
+assert(Find("FontString", "Enter a Campaign to compare map difficulty"))
+assert(not Find("Button", "Set Current Configuration") and not Find("Button", "Difficulty & Upgrade Planner"))
+assert(not Find("FontString", "Estimated difficulty") and not Find("FontString", "Plan A") and not Find("FontString", "100% reference:"))
+Armor({ head })
+assert(Find("FontString", "Equipment attributes") and Find("FontString", "Actual") and Find("FontString", "Simulated"))
+assert(Find("FontString", "Output") and Find("FontString", "Survival") and Find("FontString", "Utility"))
+assert(SlotMenu("head", "legendary"))()
+assert(Find("FontString", "pp") and Find("FontString", "%"), "only the delta column uses percentage points")
+assert(Find("FontString", "Calculable upgrade gold") and Find("FontString", "Changes and acquisition"))
+assert(not string.find(HoverIcon("head", false), "pressure", 1, true))
+assert(SurvivorUIDB.rebornGear.baselines.paladin.zone == "naxx" and head.rarity == "0")
+Zone("elwynn", 0, "paladin", "physical-hub", nil, 1)
+Armor({ head })
+assert(Find("FontString", "Enter a Campaign") and not Find("Button", "Set Current Configuration") and not VisiblePanel().scripts.OnUpdate)
 WorldEvent()
 assert(not VisiblePanel():IsShown() and not VisiblePanel().scripts.OnUpdate)
 assert(SurvivorUI_RebornGearOpen("show") and Find("FontString", "Waiting for the game's world snapshot"))
@@ -568,6 +621,72 @@ Click("装备模拟器")
 assert(string.find(HoverIcon("head", false), "模拟装备", 1, true))
 VisiblePanel():Hide()
 assert(not GameTooltip.shown, "closing the analyzer clears only its own tip")
+
+-- The host menu handles Escape before special windows. Check the analyzer's
+-- input path, without claiming that a mocked event dispatch proves native focus.
+GameMenuFrame:Show()
+UIParent:SetWidth(525)
+UIParent:SetHeight(420)
+assert(SurvivorUI_RebornGearOpen("simulator"))
+local panel = VisiblePanel()
+local shade, popup, scroller, scrollbar, keyTimer
+for _, widget in ipairs(widgets) do
+	if widget.parent == UIParent and widget ~= panel and widget.strata == "FULLSCREEN_DIALOG" then shade = widget end
+	if widget.parent == panel and widget.items then popup = widget end
+	if widget.parent == panel and widget.kind == "ScrollFrame" then scroller = widget end
+	if widget.parent == panel and widget.kind == "Slider" then scrollbar = widget end
+end
+assert(panel.width == 485 and panel.height == 380 and panel.backgroundAlpha == 1)
+assert(shade.shown and shade.mouse and shade.wheel and shade.level == nil and panel.level > shade:GetFrameLevel())
+assert(panel.keyboard and GameMenuFrame.shown and popup:GetFrameLevel() > panel:GetFrameLevel())
+assert(Find("FontString", "装备属性") and Find("FontString", "辅助"))
+assert(scrollbar.shown)
+scroller.scripts.OnMouseWheel(scroller, -1)
+assert(scroller.offset == 44)
+local function OpenTier()
+	for _, row in ipairs(widgets) do
+		if row.slot == "head" and row.shown and row.tier and row.tier.shown then row.tier.scripts.OnClick(); return end
+	end
+	error("No visible tier control")
+end
+OpenTier()
+assert(popup.shown)
+panel.scripts.OnKeyDown(panel, "ESCAPE")
+for _, widget in ipairs(widgets) do
+	if widget.parent == panel and widget.scripts.OnUpdate then keyTimer = widget end
+end
+assert(keyTimer)
+clock = 0.06
+panel.scripts.OnKeyDown(panel, "ESCAPE")
+clock = 0.13
+keyTimer.scripts.OnUpdate()
+assert(popup.shown and panel.shown, "pending repeat stream retains focus")
+clock = 0.20
+keyTimer.scripts.OnUpdate()
+assert(not popup.shown and panel.shown and GameMenuFrame.shown)
+OpenTier()
+assert(popup.shown)
+scroller.scripts.OnMouseWheel(scroller, -1)
+assert(not popup.shown and scroller.offset == 88)
+HoverIcon("head", false)
+panel.scripts.OnKeyDown(panel, "ESCAPE")
+clock = 0.34
+keyTimer.scripts.OnUpdate()
+assert(not panel.shown and not panel.keyboard and not shade.shown and not keyTimer.scripts.OnUpdate)
+assert(GameMenuFrame.shown and not GameTooltip.shown, "dismissing the analyzer leaves the native menu and clears its own tooltip")
+assert(not panel.events.DISPLAY_SIZE_CHANGED and not panel.events.UI_SCALE_CHANGED)
+assert(SurvivorUI_RebornGearOpen("show") and panel.events.DISPLAY_SIZE_CHANGED and panel.events.UI_SCALE_CHANGED)
+UIParent:SetWidth(465)
+panel.scripts.OnEvent(panel, "DISPLAY_SIZE_CHANGED")
+near(panel.width, 432)
+assert(panel.scale < 1 and shade.shown)
+assert(SurvivorUI_T("Close") == "关闭")
+Click("Close") -- The persistent frame was built while the mock was enUS.
+assert(GameMenuFrame.shown and not panel.shown and not shade.shown)
+GameMenuFrame:Hide()
+UIParent:SetWidth(1024)
+UIParent:SetHeight(768)
+
 Zone("elwynn", 0, "warlock", "late", "explosive")
 Armor({ head })
 dollSlot:Hover()

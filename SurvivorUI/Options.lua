@@ -1649,7 +1649,7 @@ if SurvivorUI_RebornGearOpen and SurvivorUI_RebornActive() then
 	end)
 	page.y = page.y - 28
 	Check(page, "Enable Gear & Difficulty", SurvivorUI_RebornGearEnabled, SurvivorUI_RebornGearToggle,
-		"Read equipped items and the selected Campaign map in Dalaran.")
+		"Read current equipment in Dalaran and Campaigns. Compare difficulty and plan upgrades in Campaigns.")
 end
 Subheader(page, "Font")
 FontPicker(page, "Global font",

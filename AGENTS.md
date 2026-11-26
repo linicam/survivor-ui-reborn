@@ -20,6 +20,12 @@
 - Sanitize reports before committing. Keep personal information, private paths, diagnostic captures, credentials, private notes, unrelated local material, and third-party material without redistribution permission out of the published report. Summarize restricted or local evidence and state what reviewers can access. A local translation can supplement the complete English report on GitHub.
 - Record the repository and development branch, PR URL, known implementation and tested source revisions, CI evidence, and each artifact's source revision and accessible location. Explain any divergence among the tested source, pushed source and artifacts. Put the exact final remote and local commit SHAs, whether they match, working-tree cleanliness, CI status, PR URL, and canonical GitHub report URL in the final chat handoff. Reference revisions that already exist from the report so its own commit SHA does not need to appear in its contents.
 
+## SurvivorUI interface design
+
+- For new or substantially revised SurvivorUI interfaces, reuse the addon's typography, color, spacing, component patterns, and controls. Provide consistent hover, pressed, selected, and disabled states. Avoid default native widget styling in custom windows when an existing SurvivorUI component fits. Preserve native controls where game integration or compatibility requires them and document material exceptions.
+- Design transparent combat HUD elements and focused tool windows for their different contexts. Use sufficiently opaque reading surfaces for settings, analysis, configuration, history, and similar tools. Check scrolling, window sizes and UI scale, keyboard and mouse access, localized text, and legible selection and disabled states.
+- Verify frame stacking, input and tooltip ownership, and Escape dismissal with other windows open. Preserve the game's existing menu and pause state. Distinguish source and mocked checks from actual client verification. Keep styling changes scoped to the approved interface and avoid parallel styling systems.
+
 ## Implementation and validation
 
 - Use `REBORN_COMPATIBILITY.md` for Reborn API contracts and runtime validation. Confirm the current PR and branch before choosing a baseline. The November 2026 audit started at PR #4 head `b09b1ce`.
