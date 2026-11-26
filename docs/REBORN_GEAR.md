@@ -1,6 +1,6 @@
 # Gear & Difficulty Analyzer
 
-Open `/sui gear` in a Reborn hub or other non-combat world. The pre-world character menu uses a separate Glue Lua environment. The in-world fallback has its own read-only controls and never reads the last `AZS_ZONE` as a menu selection. It does not access the account save, invoke the native upgrade button, or send gameplay commands.
+From the Reborn character menu, choose **Game Modes → Hub**, then enter the Hub. Click the Survivor UI button beside the minimap and choose **Global → Open Gear & Difficulty**. `/sui gear` also opens the panel in the Hub or another non-combat world. The character menu uses a separate Glue Lua environment. Its AddOns menu manages addon enablement. The world panel never reads the last `AZS_ZONE` as a menu selection. It does not access the account save, invoke the native upgrade button, or send gameplay commands.
 
 ## Inputs
 

@@ -153,15 +153,20 @@ assert(count == 0)
 SurvivorUI_RebornGearOpen()
 assert(count == 0)
 reborn = true
-SurvivorUI_RebornGearOpen()
+assert(not SurvivorUI_RebornGearOpen("show"))
 assert(count == 0 and #logs == 1)
-phase = "ready"
-SurvivorUI_RebornGearOpen()
-local input, items, output
+phase = nil -- The native API returns nil in the Hub.
+assert(SurvivorUI_RebornGearOpen("show"))
+local input, items, output, gearPanel
 for _, w in ipairs(widgets) do
 	if w.kind == "EditBox" then if not input then input = w else items = w end end
 	if w.kind == "ScrollingMessageFrame" then output = w end
+	if w.name == "SurvivorUIRebornGearPanel" then gearPanel = w end
 end
+assert(gearPanel and gearPanel:IsShown() and #output.messages == 1)
+assert(SurvivorUI_RebornGearOpen("show") and #output.messages == 1, "opening from options is idempotent")
+assert(not SurvivorUI_RebornGearOpen() and not gearPanel:IsShown(), "slash command still toggles the panel")
+assert(SurvivorUI_RebornGearOpen("show"))
 buttons.Difficulty.scripts.OnClick()
 assert(string.find(table.concat(output.messages, "\n"), "100.0%", 1, true))
 items:SetText("main_hand common 4 worn 100")

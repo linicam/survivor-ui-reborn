@@ -12,6 +12,8 @@ if SurvivorUI_Standby then return end
 SurvivorUI_WORDS = SurvivorUI_WORDS or {}
 SurvivorUI_WORDS.zh = {
 	["Gear & Difficulty"] = "装备与难度",
+	["Open Gear & Difficulty"] = "打开装备与难度分析",
+	["Use the analyzer in the Hub game mode or outside active combat."] = "请在 Hub 游戏模式或非战斗时使用分析器。",
 	["Reborn gear: /sui gear opens the analyzer; /sui gear keys lists input keys."] = "Reborn 装备：/sui gear 打开分析器；/sui gear keys 查看输入键。",
 	["class map tier background% [slot]"] = "职业 地图 难度 固定增伤% [部位]",
 	["slot quality stars worn/owned/farm [next prices: 100,200]"] = "部位 品质 星级 worn/owned/farm [下一星起的价格：100,200]",

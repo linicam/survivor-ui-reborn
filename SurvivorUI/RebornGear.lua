@@ -293,6 +293,7 @@ end
 
 local function Build()
 	panel = CreateFrame("Frame", "SurvivorUIRebornGearPanel", UIParent)
+	panel:Hide()
 	panel:SetWidth(WIDTH); panel:SetHeight(HEIGHT)
 	panel:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
 	panel:SetFrameStrata("DIALOG"); panel:EnableMouse(true)
@@ -386,20 +387,18 @@ function SurvivorUI_RebornGearOpen(argument)
 		end
 		for _, zone in ipairs(AZS_GEN and AZS_GEN.zones or {}) do Add(zone.key .. " · " .. (zone.name or "")) end
 		results:ScrollToTop()
-		panel.opened = true
 		panel:Show()
 	elseif argument == "reference" then
 		RunAction("reference")
-		panel.opened = true
 		panel:Show()
 	elseif argument == "capture" then
 		RunAction("record")
 		panel:Show()
-	elseif panel:IsShown() and panel.opened then
-		panel:Hide()
+	elseif panel:IsShown() then
+		if argument ~= "show" then panel:Hide() end
 	else
-		panel.opened = true
 		panel:Show()
 		if entries:GetText() == "" then Add(T("Enter values from the game menu. Upgrade prices are optional.")) end
 	end
+	return panel:IsShown()
 end
