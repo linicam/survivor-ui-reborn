@@ -108,6 +108,13 @@ for i = 1, table.getn(events) do
 			eq("seq " .. tostring(e.seq) .. " curse expired", table.getn(curses.items), 0)
 		elseif e.data.expectActive then
 			eq("seq " .. tostring(e.seq) .. " curse active", table.getn(curses.items), 1)
+		elseif e.data.effectId then
+			local present = false
+			for j = 1, table.getn(curses.items) do
+				if curses.items[j].effectId == e.data.effectId then present = true end
+			end
+			eq("seq " .. tostring(e.seq) .. " curse " .. e.data.effectId .. " active",
+				present, e.data.decision ~= "ending")
 		elseif e.data.effect then
 			eq("seq " .. tostring(e.seq) .. " curse effect", curses.items[1] and curses.items[1].text, e.data.effect)
 		else

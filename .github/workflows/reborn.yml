@@ -37,6 +37,13 @@ jobs:
       - name: Mocked regression tests
         run: lua tests/test_reborn_compat.lua
 
+      - name: Replay fixtures
+        run: |
+          set -e
+          for fixture in tests/fixtures/*_replay.lua; do
+            lua tests/replay_runner.lua "$fixture"
+          done
+
       - name: Validate manifests and runtime files
         run: python3 scripts/validate_addon.py
 
