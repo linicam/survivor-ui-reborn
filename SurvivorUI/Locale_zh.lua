@@ -15,6 +15,7 @@ SurvivorUI_WORDS.zh = {
 	["Open Gear & Difficulty"] = "打开装备与难度分析",
 	["Map difficulty"] = "地图难度",
 	["Gear planner"] = "装备规划",
+	["Upgrades"] = "升星总览",
 	["Last recorded gear: %s · %d pieces"] = "最近记录的穿戴：%s · %d 件",
 	["Recorded at %s"] = "记录时间：%s",
 	["Recorded at %s UTC"] = "记录时间：%s（协调世界时）",

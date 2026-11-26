@@ -232,6 +232,7 @@ local function AddInspectGearPreview(owner)
 end
 
 local hookedInspect, hookedSlots = nil, {}
+local inspectOverview
 local function HookInspectSlots()
 	-- Reborn creates the paper-doll frames lazily inside RefreshDoll.
 	for index = 0, 10 do
@@ -244,12 +245,37 @@ local function HookInspectSlots()
 	end
 end
 
+local function RefreshInspectOverview()
+	local inspect, gear = AZSInspect, AZSInspectGear
+	local settings = SurvivorUIDB and SurvivorUIDB.rebornGear
+	if not (SurvivorUI_RebornActive() and inspect and inspect.unit == "player" and inspect:IsShown()
+		and gear and gear:IsShown()) or (type(settings) == "table" and settings.preview == false) then
+		if inspectOverview then inspectOverview:Hide() end
+		return
+	end
+	if not inspectOverview then
+		inspectOverview = CreateFrame("Button", nil, gear, "UIPanelButtonTemplate")
+		inspectOverview:SetPoint("TOPRIGHT", gear, "TOPRIGHT", -12, -11)
+		inspectOverview:SetWidth(78); inspectOverview:SetHeight(22)
+		inspectOverview:SetText(T("Upgrades"))
+		inspectOverview:SetScript("OnClick", function()
+			if SurvivorUI_RebornGearOpen("worn") then inspect:Hide() end
+		end)
+	end
+	inspectOverview:Show()
+end
+
+local function RefreshInspectGear()
+	HookInspectSlots()
+	RefreshInspectOverview()
+end
+
 local function InstallInspectHook()
 	local inspect = AZSInspect
 	if not inspect or inspect == hookedInspect or type(inspect.RefreshDoll) ~= "function" or type(hooksecurefunc) ~= "function" then return end
-	hooksecurefunc(inspect, "RefreshDoll", HookInspectSlots)
+	hooksecurefunc(inspect, "RefreshDoll", RefreshInspectGear)
 	hookedInspect = inspect
-	HookInspectSlots()
+	RefreshInspectGear()
 end
 
 local function MissingWornMessage(settings)
@@ -765,6 +791,7 @@ function SurvivorUI_RebornGearOpen(argument)
 		if results then results:Clear() end
 		if feature == "difficulty" and enabled then DisplayLines(mapLines, {}) end
 		if (feature == "worn" or feature == "preview") and wornView and wornView:IsShown() then ShowWorn() end
+		if feature == "preview" then RefreshInspectOverview() end
 		Say(not enabled and "Gear analysis feature enabled." or "This gear analysis feature is disabled.")
 		return
 	end

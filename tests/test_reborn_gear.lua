@@ -231,7 +231,9 @@ function dollSlot:Hover()
 	if self.afterEnter then self.afterEnter(self) end
 	return table.concat(GameTooltip.lines, "\n")
 end
-AZSInspect = { unit = "player" }
+AZSInspect = { unit = "player", shown = true }
+function AZSInspect:IsShown() return self.shown end
+function AZSInspect:Hide() self.shown = false end
 function AZSInspect:RefreshDoll(armor)
 	AZSInspectSlot0 = { GetParent = function() return dollSlot end }
 	dollSlot.piece = armor[1]
@@ -272,6 +274,23 @@ handlers.AZSARMOR()
 local snapshot = assert(SurvivorUIDB.rebornGear.wornSnapshots.warlock)
 assert(count == 0 and snapshot.at == 100 and snapshot.source == "campaign" and #snapshot.pieces == 2,
 	"wear is recorded without creating the UI")
+AZSInspectGear = { IsShown = function() return AZSInspect.unit == "player" end }
+AZSInspect:RefreshDoll(AZS_ARMOR)
+local overview = assert(buttons.Upgrades)
+assert(overview.parent == AZSInspectGear and overview:IsShown())
+AZSInspect:RefreshDoll(AZS_ARMOR)
+assert(buttons.Upgrades == overview, "refresh reuses the equipment header button")
+AZSInspect.unit = "party1"
+AZSInspect:RefreshDoll({})
+assert(not overview:IsShown(), "the button is hidden on another character")
+AZSInspect.unit = "player"
+AZSInspect:RefreshDoll(AZS_ARMOR)
+SurvivorUI_RebornGearOpen("toggle preview")
+assert(not overview:IsShown(), "disabling gear preview also hides the overview button")
+SurvivorUI_RebornGearOpen("toggle preview")
+assert(overview:IsShown())
+overview.scripts.OnClick()
+assert(not AZSInspect:IsShown() and buttons["Load recorded gear"].parent:IsShown())
 assert(SurvivorUI_RebornGearOpen("show"))
 local input, items, output, gearPanel, gearView
 for _, w in ipairs(widgets) do
@@ -401,6 +420,7 @@ assert(logs[#logs] == "This gear analysis feature is disabled.")
 GetLocale = function() return "zhCN" end
 dofile("SurvivorUI/Locale_zh.lua")
 assert(SurvivorUI_WORDS.zh["Set current map to 100%"] == "将当前地图设为 100%")
+assert(SurvivorUI_WORDS.zh.Upgrades == "升星总览")
 assert(string.format(SurvivorUI_WORDS.zh["100%% reference: %s"], "纳克萨玛斯") == "100% 基准：纳克萨玛斯")
 function SurvivorUI_T(text) return SurvivorUI_WORDS.zh[text] or text end
 assert(SurvivorUI_RebornGearOpen("worn") and WornShows("伤害 +") and not WornShows("Damage +"))
