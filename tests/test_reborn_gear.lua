@@ -6,6 +6,12 @@ dofile("SurvivorUI/RebornGearModel.lua")
 local G = SurvivorUI_RebornGearModel
 local keys = { "head", "shoulders", "chest", "waist", "legs", "feet", "wrists", "hands", "main_hand", "off_hand", "ranged" }
 AZS_GEN = {
+	zones = {
+		{ key = "naxx", name = "Naxxramas", world = 1 },
+		{ key = "elwynn", name = "Elwynn Forest", world = 1 },
+		{ key = "shadowmoon", name = "Shadowmoon Valley", world = 2 },
+		{ key = "unmodeled", name = "Unmodeled", world = 2 },
+	},
 	pieces = {
 		scale = { top = 5, steps = 4, factor = 0.7, slot = { 1, 1.7, 2.5, 3.5, 4.6, 4 },
 			profile = { 0, 1, 1.6, 2.4, 3.4, 2.9 }, starStep = { 0.64, 0.4, 0.28, 0.17, 0.12, 0.15 },
@@ -123,11 +129,11 @@ end
 
 -- World-UI lifecycle with mock widgets. The module creates no frame until requested.
 local widgets, buttons, logs = {}, {}, {}
-local count = 0
+local count, menus, options = 0, {}, nil
 function CreateFrame(kind, name, parent)
 	count = count + 1
 	local w = { name = name, kind = kind, parent = parent, scripts = {}, shown = true, messages = {} }
-	function w:CreateFontString() return CreateFrame("FontString") end
+	function w:CreateFontString() return CreateFrame("FontString", nil, self) end
 	function w:SetText(text)
 		self.text = text
 		if self.kind == "Button" then buttons[text] = self end
@@ -142,6 +148,20 @@ function CreateFrame(kind, name, parent)
 	function w:IsShown() return self.shown end
 	table.insert(widgets, w)
 	return setmetatable(w, { __index = function() return function() end end })
+end
+function UIDropDownMenu_SetWidth() end
+function UIDropDownMenu_Initialize(menu, fill) menus[menu.name] = fill end
+function UIDropDownMenu_SetSelectedValue(menu, value) menu.selectedValue = value end
+function UIDropDownMenu_SetText(menu, text) menu.text = text end
+function UIDropDownMenu_CreateInfo() return {} end
+function UIDropDownMenu_AddButton(info) table.insert(options, info) end
+local function Pick(name, key)
+	options = {}
+	menus["SurvivorUIRebornGear" .. name]()
+	for _, option in ipairs(options) do
+		if option.value == key then option.func(); return true end
+	end
+	return false
 end
 function SurvivorUI_T(string) return string end
 function SurvivorUI_TF(text, value) return (string.gsub(text, "{1}", value)) end
@@ -165,45 +185,57 @@ for _, w in ipairs(widgets) do
 	if w.kind == "ScrollingMessageFrame" then output = w end
 	if w.name == "SurvivorUIRebornGearPanel" then gearPanel = w end
 end
-local function Shows(text)
-	return string.find(table.concat(output.messages, "\n"), text, 1, true) ~= nil
+local function MapShows(text)
+	for _, w in ipairs(widgets) do
+		if w.kind == "FontString" and w.parent == buttons["Set current map to 100%"].parent
+			and string.find(w:GetText(), text, 1, true) then return true end
+	end
+	return false
 end
 local saveMap = buttons["Set current map to 100%"].scripts.OnClick
-assert(gearPanel and gearPanel:IsShown() and not gearView:IsShown() and Shows("179.0%"))
-local messageCount = #output.messages
-assert(SurvivorUI_RebornGearOpen("show") and #output.messages == messageCount, "opening from options is idempotent")
+assert(gearPanel and gearPanel:IsShown() and not gearView:IsShown() and MapShows("179.0%"))
+assert(not output:IsShown() and #output.messages == 0, "map results never use the scrolling message frame")
+assert(SurvivorUI_RebornGearOpen("show") and MapShows("179.0%"), "opening from options is idempotent")
 saveMap()
 local mapRef = SurvivorUIDB.rebornGear.mapReference
-assert(mapRef.zone == "naxx" and mapRef.tier == 1 and Shows("100.0%") and Shows("Naxxramas · Heroic I"))
+assert(mapRef.zone == "naxx" and mapRef.tier == 1 and MapShows("100.0%") and MapShows("Naxxramas · Heroic I"))
 assert(not SurvivorUI_RebornGearOpen() and not gearPanel:IsShown(), "slash command still toggles the panel")
 gearPanel.scripts.OnEvent()
 assert(SurvivorUI_RebornGearOpen("show"))
 saveMap()
-assert(SurvivorUIDB.rebornGear.mapReference == mapRef and Shows("Your reference was kept"), "prior world snapshot is rejected")
+assert(SurvivorUIDB.rebornGear.mapReference == mapRef and MapShows("Your reference was kept"), "prior world snapshot is rejected")
 AZS_ZONE = { zone = "elwynn", dt = "2", zname = "Elwynn Forest" }
 phase = "playing"
 buttons["Refresh current map"].scripts.OnClick()
 local expected = 100 * G.Pressure(SurvivorUI_RebornMapReference, "elwynn", 2) / G.Pressure(SurvivorUI_RebornMapReference, "naxx", 1)
-assert(Shows(string.format("%.1f%%", expected)))
+assert(MapShows(string.format("%.1f%%", expected)) and MapShows("Current map: Elwynn Forest · Heroic II"))
 saveMap()
 mapRef = SurvivorUIDB.rebornGear.mapReference
-assert(mapRef.zone == "elwynn" and mapRef.tier == 2 and Shows("100.0%"), "map can be saved during a run")
+assert(mapRef.zone == "elwynn" and mapRef.tier == 2 and MapShows("100.0%"), "map can be saved during a run")
 AZS_ZONE = { zone = "naxx", dt = 0, hub = 1 }
 phase = nil -- The native API returns nil in the Hub.
+assert(Pick("World", 2) and not Pick("Zone", "elwynn") and not Pick("Zone", "unmodeled"))
+assert(Pick("Zone", "shadowmoon") and MapShows("Preview map: Shadowmoon Valley · Normal"))
+assert(Pick("Tier", 5) and MapShows("Preview map: Shadowmoon Valley · Heroic V"))
+local hubExpected = 100 * G.Pressure(SurvivorUI_RebornMapReference, "shadowmoon", 5) / G.Pressure(SurvivorUI_RebornMapReference, "elwynn", 2)
+assert(MapShows(string.format("%.1f%%", hubExpected)))
 saveMap()
-assert(SurvivorUIDB.rebornGear.mapReference == mapRef and Shows("Your reference was kept"))
+assert(SurvivorUIDB.rebornGear.mapReference == mapRef and MapShows("Your reference was kept") and MapShows("Preview map: Shadowmoon Valley · Heroic V"))
 AZS_ZONE = { zone = "naxx" }
 phase = "ready"
 saveMap()
-assert(SurvivorUIDB.rebornGear.mapReference == mapRef and Shows("Your reference was kept"), "missing difficulty cannot default to Normal")
+assert(SurvivorUIDB.rebornGear.mapReference == mapRef and MapShows("Your reference was kept"), "missing difficulty cannot default to Normal")
 AZS_ZONE = { zone = "naxx", dt = 6 }
 saveMap()
-assert(SurvivorUIDB.rebornGear.mapReference == mapRef and Shows("Your reference was kept"), "unmodeled tiers cannot replace the reference")
+assert(SurvivorUIDB.rebornGear.mapReference == mapRef and MapShows("Your reference was kept"), "unmodeled tiers cannot replace the reference")
 AZS_ZONE = { zone = "naxx", dt = 0 }
 AZS_PG = { active = true }
 saveMap()
-assert(SurvivorUIDB.rebornGear.mapReference == mapRef and Shows("Your reference was kept"))
+assert(SurvivorUIDB.rebornGear.mapReference == mapRef and MapShows("Your reference was kept"))
 AZS_PG = nil
+saveMap()
+mapRef = SurvivorUIDB.rebornGear.mapReference
+assert(mapRef.zone == "naxx" and mapRef.tier == 0 and MapShows("Current map: Naxxramas · Normal") and not MapShows("Preview map:"), "save takes the actual map even with a preview selected")
 phase = "playing"
 buttons["Gear planner"].scripts.OnClick()
 assert(gearView:IsShown())

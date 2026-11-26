@@ -2,10 +2,12 @@
 if SurvivorUI_Standby or not SurvivorUI_RebornGearModel then return end
 
 local Gear = SurvivorUI_RebornGearModel
-local WIDTH, MAP_HEIGHT, GEAR_HEIGHT = 590, 245, 510
+local WIDTH, MAP_HEIGHT, GEAR_HEIGHT = 590, 315, 510
 local panel, mapView, advanced, viewButton, context, entries, results
-local blockedZone
+local mapLines = {}
+local blockedZone, previewKey, previewTier, clearPreview, previewAvailable
 local ROMAN = { "I", "II", "III", "IV", "V" }
+local WORLDS = { "Classic", "The Burning Crusade", "Lich King", "Cataclysm" }
 local function T(key) return SurvivorUI_T(key) end
 
 local function Settings()
@@ -44,18 +46,26 @@ local function Add(text)
 	results:AddMessage(text, 0.9, 0.93, 0.96)
 end
 
+local function NativeName(name)
+	local localized = AZS_L and AZS_L[name]
+	return localized and localized ~= name and localized or T(name)
+end
+
+local function DifficultyName(tier)
+	return tier == 0 and T("Normal") or SurvivorUI_TF("Heroic {1}", ROMAN[tier])
+end
+
 local function MapTitle(zone, tier, liveName)
 	local name = type(liveName) == "string" and liveName ~= "" and liveName or nil
 	if not name then
 		for _, row in ipairs(AZS_GEN and AZS_GEN.zones or {}) do
 			if row.key == zone then
-				name = row.name and (AZS_L and AZS_L[row.name] or row.name)
+				name = row.name and NativeName(row.name)
 				break
 			end
 		end
 	end
-	local difficulty = tier == 0 and T("Normal") or SurvivorUI_TF("Heroic {1}", ROMAN[tier])
-	return (name or (zone == "naxx" and T("Naxxramas")) or zone) .. " · " .. difficulty
+	return (name or (zone == "naxx" and T("Naxxramas")) or zone) .. " · " .. DifficultyName(tier)
 end
 
 local function CurrentMap()
@@ -67,11 +77,20 @@ local function CurrentMap()
 	if pressure then return zone.zone, tier, pressure, zone.zname end
 end
 
+local function DisplayMapLines(lines)
+	for index, line in ipairs(mapLines) do line:SetText(lines[index] or "") end
+end
+
 local function ShowMap(save)
 	local settings = Settings()
 	local key, tier, pressure, name = CurrentMap()
-	results:Clear()
-	if save and pressure then settings.mapReference = { zone = key, tier = tier } end
+	local saved = save and pressure
+	if saved then
+		settings.mapReference = { zone = key, tier = tier }
+		clearPreview()
+	end
+	local preview = previewKey and Gear.Pressure(SurvivorUI_RebornMapReference, previewKey, previewTier)
+	if preview then key, tier, pressure, name = previewKey, previewTier, preview, nil end
 	local ref = settings.mapReference
 	local refKey, refTier, base = "naxx", 0, nil
 	if type(ref) == "table" then
@@ -79,17 +98,18 @@ local function ShowMap(save)
 		if base then refKey, refTier = ref.zone, ref.tier end
 	end
 	base = base or Gear.Pressure(SurvivorUI_RebornMapReference, refKey, refTier)
-	if save and pressure then Add(T("Current map saved as 100%.")) end
-	Add(string.format(T("100%% reference: %s"), MapTitle(refKey, refTier, key == refKey and name or nil)))
+	local lines = { string.format(T("100%% reference: %s"), MapTitle(refKey, refTier, key == refKey and name or nil)) }
 	if pressure then
-		Add(string.format(T("Current map: %s"), MapTitle(key, tier, name)))
-		Add(string.format(T("Map health scaling vs reference %.1f%%"), 100 * pressure / base))
-		Add(T("This comparison uses standard Campaign enemy health scaling."))
-		if tier >= 3 or refTier >= 3 then Add(T("Heroic affixes can change the actual workload.")) end
+		table.insert(lines, string.format(T(preview and "Preview map: %s" or "Current map: %s"), MapTitle(key, tier, name)))
+		table.insert(lines, string.format(T("Map health scaling vs reference %.1f%%"), 100 * pressure / base))
+		table.insert(lines, T("This comparison uses standard Campaign enemy health scaling."))
+		if tier >= 3 or refTier >= 3 then table.insert(lines, T("Heroic affixes can change the actual workload.")) end
 	else
-		Add(T("Enter a Campaign map to read its difficulty and set it as 100%."))
-		if save then Add(T("Current map data unavailable. Your reference was kept.")) end
+		table.insert(lines, T(previewAvailable and "Choose a map above to preview its difficulty."
+			or "Enter a Campaign map to read its difficulty and set it as 100%."))
 	end
+	if save then table.insert(lines, T(saved and "Current map saved as 100%." or "Current map data unavailable. Your reference was kept.")) end
+	DisplayMapLines(lines)
 end
 
 local function ActiveSets(sets)
@@ -332,8 +352,8 @@ local function RunAction(action)
 	local ok
 	if mapAction then ok = pcall(ShowMap, action == "save_map") else ok = pcall(Calculate, action) end
 	if not ok then
-		results:Clear()
-		Add(T("Gear analysis is unavailable for these game data."))
+		local message = T("Gear analysis is unavailable for these game data.")
+		if mapAction then DisplayMapLines({ message }) else results:Clear(); Add(message) end
 	end
 end
 
@@ -342,17 +362,79 @@ local function ShowView(equipment)
 	panel:SetHeight(equipment and GEAR_HEIGHT or MAP_HEIGHT)
 	viewButton:SetText(T(equipment and "Map difficulty" or "Gear planner"))
 	results:Clear()
-	results:ClearAllPoints()
-	results:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, equipment and -272 or -118)
-	results:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -20, 17)
-	if not equipment then RunAction("map") end
-	results:ScrollToTop()
+	if equipment then results:Show() else results:Hide(); RunAction("map") end
 end
 
 local function Label(parent, text, x, y)
 	local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	label:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
 	label:SetText(T(text))
+	return label
+end
+
+local function Picker(parent, suffix, caption, x, width, choices, select)
+	Label(parent, caption, x + 16, -110)
+	local menu = CreateFrame("Frame", "SurvivorUIRebornGear" .. suffix, parent, "UIDropDownMenuTemplate")
+	menu:SetPoint("TOPLEFT", parent, "TOPLEFT", x, -126)
+	UIDropDownMenu_SetWidth(menu, width)
+	UIDropDownMenu_Initialize(menu, function()
+		for _, option in ipairs(choices()) do
+			local key, text = option.key, option.name
+			local info = UIDropDownMenu_CreateInfo()
+			info.value, info.text = key, text
+			info.func = function() select(key, text) end
+			UIDropDownMenu_AddButton(info)
+		end
+	end)
+	return function(key, text)
+		UIDropDownMenu_SetSelectedValue(menu, key)
+		UIDropDownMenu_SetText(menu, text)
+	end
+end
+
+local function BuildPreviewPickers(parent)
+	clearPreview = function() previewKey, previewTier = nil, nil end
+	if not (UIDropDownMenu_Initialize and UIDropDownMenu_SetWidth and UIDropDownMenu_CreateInfo
+		and UIDropDownMenu_AddButton and UIDropDownMenu_SetSelectedValue and UIDropDownMenu_SetText) then return end
+	local byWorld, worlds, tiers = {}, {}, {}
+	for _, zone in ipairs(AZS_GEN and AZS_GEN.zones or {}) do
+		local world = tonumber(zone.world)
+		if WORLDS[world] and Gear.Pressure(SurvivorUI_RebornMapReference, zone.key, 0) then
+			if not byWorld[world] then byWorld[world] = {} end
+			table.insert(byWorld[world], { key = zone.key, name = NativeName(zone.name or zone.key) })
+		end
+	end
+	for i, name in ipairs(WORLDS) do
+		if byWorld[i] then table.insert(worlds, { key = i, name = NativeName(name) }) end
+	end
+	if not worlds[1] then return end
+	for i = 0, 5 do table.insert(tiers, { key = i, name = DifficultyName(i) }) end
+	local world, tier = worlds[1].key, 0
+	local setWorld, setZone, setTier
+	setWorld = Picker(parent, "World", "Expansion", 0, 135, function() return worlds end, function(key, text)
+		world = key
+		setWorld(key, text)
+		clearPreview()
+		RunAction("map")
+	end)
+	setZone = Picker(parent, "Zone", "Map to preview", 158, 205, function() return byWorld[world] end, function(key, text)
+		previewKey, previewTier = key, tier
+		setZone(key, text)
+		RunAction("map")
+	end)
+	setTier = Picker(parent, "Tier", "Difficulty", 388, 128, function() return tiers end, function(key, text)
+		tier, previewTier = key, key
+		setTier(key, text)
+		if previewKey then RunAction("map") end
+	end)
+	clearPreview = function()
+		previewKey, previewTier = nil, nil
+		setZone(nil, T("Choose a map"))
+	end
+	setWorld(world, worlds[1].name)
+	setTier(tier, tiers[1].name)
+	clearPreview()
+	previewAvailable = true
 end
 
 local function Build()
@@ -367,6 +449,7 @@ local function Build()
 	panel:RegisterEvent("PLAYER_ENTERING_WORLD")
 	panel:SetScript("OnEvent", function()
 		blockedZone = AZS_ZONE
+		clearPreview()
 		panel:Hide()
 	end)
 	local close = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
@@ -391,9 +474,17 @@ local function Build()
 		button:SetWidth(196); button:SetHeight(24)
 		button:SetText(T(row[2]))
 		button:SetScript("OnClick", function()
+			if action == "map" then clearPreview() end
 			RunAction(action)
-			results:ScrollToTop()
 		end)
+	end
+	BuildPreviewPickers(mapView)
+	for index = 1, 6 do
+		local label = Label(mapView, "", 16, -166 - (index - 1) * 21)
+		label:SetWidth(WIDTH - 32)
+		label:SetJustifyH("LEFT")
+		if index == 3 then label:SetTextColor(1, 0.82, 0.22) else label:SetTextColor(0.92, 0.94, 0.98) end
+		mapLines[index] = label
 	end
 	Label(advanced, "class map tier background% [slot]", 16, -46)
 	context = CreateFrame("EditBox", nil, advanced, "InputBoxTemplate")
@@ -412,6 +503,8 @@ local function Build()
 	entries:SetScript("OnEscapePressed", function() entries:ClearFocus() end)
 	scroll:SetScrollChild(entries)
 	results = CreateFrame("ScrollingMessageFrame", nil, panel)
+	results:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -272)
+	results:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -20, 17)
 	results:SetFontObject(GameFontHighlightSmall)
 	results:SetJustifyH("LEFT"); results:SetFading(false); results:SetMaxLines(160)
 	results:EnableMouseWheel(true)
@@ -451,6 +544,7 @@ function SurvivorUI_RebornGearOpen(argument)
 		if enabled == nil then enabled = feature ~= "diagnostics" end
 		settings[feature] = not enabled
 		if results then results:Clear() end
+		if feature == "difficulty" and enabled then DisplayMapLines({}) end
 		Say(not enabled and "Gear analysis feature enabled." or "This gear analysis feature is disabled.")
 		return
 	end

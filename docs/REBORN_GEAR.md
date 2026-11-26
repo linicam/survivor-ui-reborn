@@ -1,12 +1,12 @@
 # Gear & Difficulty Analyzer
 
-Enter the Campaign map and difficulty you want to use as a reference. Click the Survivor UI button beside the minimap, choose **Global → Open Gear & Difficulty**, then click **Set current map to 100%**. The map page reads the current run's map and tier from `AZS_ZONE`. Opening it in another map shows the new comparison automatically. If the snapshot is still pending, click **Refresh current map**. The map reference is shared across classes and defaults to Naxxramas Normal. The Hub can display an existing reference. It supplies no map to save. This percentage uses standard Campaign enemy health factors.
+Enter the Campaign map and difficulty you want to use as a reference. Click the Survivor UI button beside the minimap, choose **Global → Open Gear & Difficulty**, then click **Set current map to 100%**. The map page reads the current run's map and tier from `AZS_ZONE`. Opening it in another map shows the new comparison automatically. If the snapshot is still pending, click **Refresh current map**. In the Dalaran Hub or in a run, choose an expansion, map and difficulty to preview the comparison without traveling to that map. Previewing leaves the saved reference intact. The map reference is shared across classes and defaults to Naxxramas Normal. This percentage uses standard Campaign enemy health factors.
 
 `/sui gear` also opens the panel in the world. The character menu uses a separate Glue Lua environment and its AddOns menu manages addon enablement. The analyzer does not access the account save, invoke the native upgrade button, or send gameplay commands.
 
 ## Optional gear planner
 
-Use **Gear planner** for manual equipment scenarios outside active combat. These scenarios keep their own references.
+Use **Gear planner** in the Dalaran Hub or another world outside active combat. Gear scenarios use manual inputs and keep their own references. The planner has no access to the character selection screen's gear collection or upgrade prices.
 
 The first field is `class map tier background% [slot]`. For example, `warlock naxx 0 0 main_hand` represents Warlock, Naxxramas Normal, an illustrative zero non-gear addition, and a preview restricted to the main hand. Enter Heroic I through V as 1–5. `/sui gear keys` lists zone and slot keys.
 
