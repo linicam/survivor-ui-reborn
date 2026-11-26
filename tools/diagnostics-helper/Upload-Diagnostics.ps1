@@ -250,7 +250,7 @@ function GhApi($method, $path, $bodyObj) {
     if ($result.IsNotFound) { return $null }
     $detail = $result.Error
     if (-not $detail) { $detail = "no error output from gh" }
-    Fail "GitHub API $method $path failed (exit $($result.ExitCode)): $detail"
+    throw "GitHub API $method $path failed (exit $($result.ExitCode)): $detail"
 }
 function Sha256Hex($text) {
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
@@ -262,8 +262,19 @@ function WriteExactText($path, $contentText) {
 }
 function GetRemoteText($path) {
     $res = GhApi "GET" "repos/$Repo/contents/$path"
-    if ($null -eq $res -or -not $res.content) { return $null }
-    return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($res.content -replace '\s', '')))
+    if ($null -eq $res) { return $null }
+    if ($res.content) {
+        return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($res.content -replace '\s', '')))
+    }
+    # The Contents API returns empty content for files over 1 MB;
+    # fetch the same file through the Git Blob API instead.
+    if ($res.sha) {
+        $blob = GhApi "GET" "repos/$Repo/git/blobs/$($res.sha)"
+        if ($blob -and $blob.content) {
+            return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($blob.content -replace '\s', '')))
+        }
+    }
+    return $null
 }
 function PutFile($path, $contentText, $message) {
     $existingText = GetRemoteText $path
@@ -275,7 +286,7 @@ function PutFile($path, $contentText, $message) {
     $body = @{ message = $message; content = $b64 }
     if ($existing -and $existing.sha) { $body.sha = $existing.sha }
     $res = GhApi "PUT" "repos/$Repo/contents/$path" $body
-    if ($null -eq $res) { Fail "Upload failed for $path. Check your connection and run the script again." }
+    if ($null -eq $res) { throw "Upload failed for $path. Check your connection and run the script again." }
 }
 
 # ---------- Main ----------
@@ -288,7 +299,11 @@ if ($auth.ExitCode -ne 0) {
     $detail = ($auth.StdErr + "`n" + $auth.StdOut).Trim()
     Fail "GitHub CLI is not authenticated. Run: gh auth login. $detail"
 }
-$repoInfo = GhApi "GET" "repos/$Repo"
+try {
+    $repoInfo = GhApi "GET" "repos/$Repo"
+} catch {
+    Fail $_.Exception.Message
+}
 if ($null -eq $repoInfo) { Fail "Repository $Repo was not found or is not accessible." }
 if (-not $repoInfo.private) { Fail "Repository $Repo is public. Refusing to upload diagnostics to a public repository." }
 
@@ -323,20 +338,20 @@ $text = Get-Content $svPath -Raw -Encoding UTF8
 $db = ParseDiagnostics $text
 if (-not $db.sessions -or -not $db.order -or $db.order.Count -eq 0) { Fail "No diagnostic sessions found. In game, run /sui reborn record start, play, then /sui reborn record stop." }
 
-$sessionId = $null
-$recoveredActive = $false
-for ($i = $db.order.Count - 1; $i -ge 0; $i--) {
-    $s = $db.sessions[$db.order[$i]]
-    if ($s.status -eq "active") { $sessionId = $db.order[$i]; $recoveredActive = $true; break }
-    if ($s.status -eq "completed" -or $s.status -eq "truncated" -or $s.status -eq "interrupted") { $sessionId = $db.order[$i]; break }
+$eligible = @()
+foreach ($id in $db.order) {
+    $s = $db.sessions[$id]
+    if ($s.status -eq "active") {
+        $eligible += ,@{ Id = $id; RecoveredActive = $true }
+    } elseif ($s.status -eq "completed" -or $s.status -eq "truncated" -or $s.status -eq "interrupted") {
+        $eligible += ,@{ Id = $id; RecoveredActive = $false }
+    }
 }
-if (-not $sessionId) { Fail "No completed or recoverable session found. Stop recording in game first (/sui reborn record stop)." }
-if ($sessionId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { Fail "Session ID '$sessionId' contains unsafe characters; refusing to use it in paths." }
-$session = $db.sessions[$sessionId]
-$events = @($session.events)
-$runs = @($events | ForEach-Object { $_.run } | Where-Object { $_ } | Select-Object -Unique).Count
+if ($eligible.Count -eq 0) { Fail "No completed or recoverable session found. Stop recording in game first (/sui reborn record stop)." }
 
 if ($SelfTest) {
+    $session = $db.sessions["selftest-001"]
+    $events = @($session.events)
     function AssertSelfTest($condition, $message) {
         if (-not $condition) { Fail "SELF-TEST FAIL: $message" }
     }
@@ -355,141 +370,153 @@ if ($SelfTest) {
     AssertSelfTest ($events[3].data["lines"][0] -eq "Upgrades: +10% damage") "tooltip line was not preserved"
 }
 
-function ConvertTo-SortedValue($value) {
-    if ($null -eq $value) { return $null }
-    if ($value -is [System.Collections.IDictionary]) {
-        $sorted = [ordered]@{}
-        foreach ($key in @($value.Keys | Sort-Object)) {
-            $sorted[[string]$key] = ConvertTo-SortedValue $value[$key]
+function Process-DiagnosticSession($sessionId, $recoveredActive) {
+    if ($sessionId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw "Session ID '$sessionId' contains unsafe characters; refusing to use it in paths." }
+    $session = $db.sessions[$sessionId]
+    $events = @($session.events)
+    $runs = @($events | ForEach-Object { $_.run } | Where-Object { $_ } | Select-Object -Unique).Count
+
+    $exportDir = Join-Path $ScriptDir ("export\" + $sessionId)
+    New-Item -ItemType Directory -Force -Path $exportDir | Out-Null
+
+    $files = [ordered]@{}
+    $exportStatus = $session.status
+    if ($recoveredActive) { $exportStatus = "recovered" }
+    $meta = [ordered]@{
+        sessionId = $sessionId; schema = $session.schema; status = $exportStatus
+        originalStatus = $session.status; recovered = [bool]$recoveredActive; incomplete = [bool]$recoveredActive
+        addonVersion = $session.addonVersion; addonCommit = $session.addonCommit
+        gameLanguage = $session.gameLanguage; class = $session.class
+        startedAt = $session.startedAt; endedAt = $session.endedAt
+        truncated = [bool]$session.truncated; eventCount = $events.Count; runCount = $runs
+    }
+    $files["metadata.json"] = $meta | ConvertTo-Json -Depth 10 -Compress
+    $chunks = New-EventChunks $events 524288
+    for ($i = 0; $i -lt $chunks.Count; $i++) {
+        $files[("events-{0:D3}.json" -f ($i + 1))] = $chunks[$i]
+    }
+    $summary = "# Diagnostic session $sessionId`n`n- Status: $exportStatus`n- Original status: $($session.status)`n- Recovered active session: $([bool]$recoveredActive)`n- Addon commit: $($session.addonCommit)`n- Events: $($events.Count)`n- Runs: $runs`n- Truncated: $($session.truncated)`n"
+    $files["summary.md"] = $summary
+
+    $manifest = [ordered]@{ sessionId = $sessionId; files = [ordered]@{} }
+    foreach ($name in $files.Keys) {
+        $manifest.files[$name] = Sha256Hex $files[$name]
+        WriteExactText (Join-Path $exportDir $name) $files[$name]
+    }
+    $files["manifest.json"] = $manifest | ConvertTo-Json -Depth 10 -Compress
+    WriteExactText (Join-Path $exportDir "manifest.json") $files["manifest.json"]
+
+    $base = "$BaseDir/$sessionId"
+    $result = [pscustomobject]@{
+        SessionId = $sessionId; Status = "uploaded"; StartedAt = $session.startedAt
+        EventCount = $events.Count; RunCount = $runs; AddonCommit = $session.addonCommit; Path = $base
+    }
+
+    $remoteManifestText = GetRemoteText "$base/manifest.json"
+    if ($null -ne $remoteManifestText) {
+        $remoteManifest = $remoteManifestText | ConvertFrom-Json
+        $remoteComplete = $true
+        $remoteEvents = @()
+        foreach ($name in @($remoteManifest.files.PSObject.Properties.Name | Sort-Object)) {
+            $remoteText = GetRemoteText "$base/$name"
+            if ($null -eq $remoteText -or (Sha256Hex $remoteText) -ne $remoteManifest.files.$name) {
+                $remoteComplete = $false
+                break
+            }
+            if ($name -like "events-*.json") {
+                $remoteEvents += @($remoteText | ConvertFrom-Json)
+            }
         }
-        return $sorted
-    }
-    if ($value -is [pscustomobject]) {
-        $sorted = [ordered]@{}
-        foreach ($prop in @($value.PSObject.Properties | Sort-Object Name)) {
-            $sorted[$prop.Name] = ConvertTo-SortedValue $prop.Value
+        if ($remoteComplete) {
+            for ($i = 0; $i -lt $remoteEvents.Count; $i++) {
+                if ($remoteEvents[$i].seq -ne ($i + 1)) { $remoteComplete = $false; break }
+            }
         }
-        return $sorted
+        if ($remoteComplete) {
+            $remoteCanonical = ConvertTo-SortedValue ([object[]]@($remoteEvents)) | ConvertTo-Json -Depth 30 -Compress
+            $localCanonical = ConvertTo-SortedValue ([object[]]@($events)) | ConvertTo-Json -Depth 30 -Compress
+            if ($remoteCanonical -ne $localCanonical) {
+                throw "Session $sessionId already exists remotely with different contents. Refusing to overwrite; investigate the collision."
+            }
+            $result.Status = "recovered"
+            return $result
+        }
+        $result.Status = "recovered"
     }
-    if ($value -is [System.Collections.IEnumerable] -and $value -isnot [string]) {
-        $items = @()
-        foreach ($item in $value) { $items += ,(ConvertTo-SortedValue $item) }
-        return ,$items
+
+    foreach ($name in $files.Keys) {
+        if ($name -ne "manifest.json") { PutFile "$base/$name" $files[$name] "diagnostics: $sessionId $name" }
     }
-    return $value
-}
-function Get-CanonicalJson($text) {
-    try {
-        $obj = $text | ConvertFrom-Json
-        return (ConvertTo-SortedValue $obj | ConvertTo-Json -Depth 30 -Compress)
-    } catch {
-        return $text
-    }
-}
-
-$exportDir = Join-Path $ScriptDir ("export\" + $sessionId)
-New-Item -ItemType Directory -Force -Path $exportDir | Out-Null
-
-$files = @{}
-$exportStatus = $session.status
-if ($recoveredActive) { $exportStatus = "recovered" }
-$meta = [ordered]@{
-    sessionId = $sessionId; schema = $session.schema; status = $exportStatus
-    originalStatus = $session.status; recovered = [bool]$recoveredActive; incomplete = [bool]$recoveredActive
-    addonVersion = $session.addonVersion; addonCommit = $session.addonCommit
-    gameLanguage = $session.gameLanguage; class = $session.class
-    startedAt = $session.startedAt; endedAt = $session.endedAt
-    truncated = [bool]$session.truncated; eventCount = $events.Count; runCount = $runs
-}
-$files["metadata.json"] = $meta | ConvertTo-Json -Depth 10
-$chunkSize = 500
-$chunkIndex = 0
-for ($i = 0; $i -lt $events.Count; $i += $chunkSize) {
-    $chunkIndex++
-    $slice = $events[$i..([Math]::Min($i + $chunkSize - 1, $events.Count - 1))]
-    $files[("events-{0:D3}.json" -f $chunkIndex)] = ConvertTo-Json -InputObject (ConvertTo-SortedValue ([object[]]@($slice))) -Depth 30
-}
-$summary = "# Diagnostic session $sessionId`n`n- Status: $exportStatus`n- Original status: $($session.status)`n- Recovered active session: $([bool]$recoveredActive)`n- Addon commit: $($session.addonCommit)`n- Events: $($events.Count)`n- Runs: $runs`n- Truncated: $($session.truncated)`n"
-$files["summary.md"] = $summary
-
-$manifest = [ordered]@{ sessionId = $sessionId; files = [ordered]@{} }
-foreach ($name in $files.Keys) {
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($files[$name])
-    $sha = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace("-", "").ToLower()
-    $manifest.files[$name] = $sha
-    WriteExactText (Join-Path $exportDir $name) $files[$name]
-}
-$files["manifest.json"] = $manifest | ConvertTo-Json -Depth 10
-WriteExactText (Join-Path $exportDir "manifest.json") $files["manifest.json"]
-
-$base = "$BaseDir/$sessionId"
-# Identity collision: a completed remote session with different
-# contents must never be overwritten silently.
-$remoteManifestText = GetRemoteText "$base/manifest.json"
-if ($null -ne $remoteManifestText) {
-    # Compare semantically, not only by hash: older uploads were
-    # serialized with nondeterministic key order, so identical data
-    # can hash differently. Identical content means there is no new
-    # session to upload.
-    $differing = @()
     foreach ($name in $manifest.files.Keys) {
         $remoteText = GetRemoteText "$base/$name"
-        if ($null -eq $remoteText) { $differing += $name; continue }
-        if ($name -like "*.json") {
-            if ((Get-CanonicalJson $remoteText) -ne (Get-CanonicalJson $files[$name])) { $differing += $name }
-        } elseif ($remoteText -ne $files[$name]) {
-            $differing += $name
+        if ($null -eq $remoteText -or (Sha256Hex $remoteText) -ne $manifest.files[$name]) {
+            throw "Verification failed for $base/$name. Run the script again to retry."
         }
     }
-    if ($differing.Count -eq 0) {
-        if ($SelfTest) { Write-Host "SELF-TEST PASS" }
-        Write-Host "No new diagnostic session to upload."
-        Write-Host "Session $sessionId was already uploaded with identical contents."
-        Write-Host "If you played since then, automatic recording did not create a new session; check /sui reborn record status in game."
-        exit 0
+    # Manifest last: publish it only after every data file verified.
+    PutFile "$base/manifest.json" $files["manifest.json"] "diagnostics: $sessionId manifest"
+    $remoteManifestCheck = GetRemoteText "$base/manifest.json"
+    if ($null -eq $remoteManifestCheck -or (Sha256Hex $remoteManifestCheck) -ne (Sha256Hex $files["manifest.json"])) {
+        throw "Verification failed for $base/manifest.json. Run the script again to retry."
     }
-    Fail "Session $sessionId already exists remotely with different contents ($($differing -join ', ')). Refusing to overwrite; investigate the collision."
-}
-foreach ($name in $files.Keys) {
-    if ($name -ne "manifest.json") { PutFile "$base/$name" $files[$name] "diagnostics: $sessionId $name" }
-}
-# Manifest last: its presence marks a complete upload.
-PutFile "$base/manifest.json" $files["manifest.json"] "diagnostics: $sessionId manifest"
-# Verify every uploaded file's remote hash, not just manifest existence.
-foreach ($name in $manifest.files.Keys) {
-    $remoteText = GetRemoteText "$base/$name"
-    if ($null -eq $remoteText -or (Sha256Hex $remoteText) -ne $manifest.files[$name]) {
-        Fail "Verification failed for $base/$name. Run the script again to retry."
-    }
+    return $result
 }
 
+$uploaded = @()
+$recovered = @()
+$skipped = @()
+$failed = @()
+$verified = @()
+$existingLatest = $null
 if (-not $SelfTest) {
     $existingLatestText = GetRemoteText "latest.json"
-    $updateLatest = $true
     if ($null -ne $existingLatestText) {
-        try {
-            $existingLatest = $existingLatestText | ConvertFrom-Json
-            if ($existingLatest.startedAt -and $session.startedAt -and [double]$existingLatest.startedAt -gt [double]$session.startedAt) {
-                $updateLatest = $false
+        try { $existingLatest = $existingLatestText | ConvertFrom-Json } catch {}
+    }
+}
+foreach ($entry in $eligible) {
+    try {
+        $r = Process-DiagnosticSession $entry.Id $entry.RecoveredActive
+        if ($r.Status -eq "recovered") {
+            if ($existingLatest -and $existingLatest.sessionId -eq $r.SessionId) {
+                $skipped += ,$r
+            } else {
+                $recovered += ,$r
             }
-        } catch {}
+        } else {
+            $uploaded += ,$r
+        }
+        $verified += ,$r
+        Write-Host "$($r.Status): $($r.SessionId) ($($r.EventCount) events, $($r.RunCount) runs)"
+    } catch {
+        $failed += ,$entry.Id
+        Write-Host "failed: $($entry.Id): $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+if (-not $SelfTest -and $verified.Count -gt 0) {
+    $newest = $verified | Sort-Object StartedAt | Select-Object -Last 1
+    $updateLatest = $true
+    if ($existingLatest -and $existingLatest.startedAt -and $newest.StartedAt -and [double]$existingLatest.startedAt -gt [double]$newest.StartedAt) {
+        $updateLatest = $false
     }
     if ($updateLatest) {
-        $latest = [ordered]@{ sessionId = $sessionId; path = $base; addonCommit = $session.addonCommit; eventCount = $events.Count; runCount = $runs; startedAt = $session.startedAt }
-        PutFile "latest.json" ($latest | ConvertTo-Json -Depth 10) "diagnostics: latest $sessionId"
+        $latest = [ordered]@{ sessionId = $newest.SessionId; path = $newest.Path; addonCommit = $newest.AddonCommit; eventCount = $newest.EventCount; runCount = $newest.RunCount; startedAt = $newest.StartedAt }
+        PutFile "latest.json" ($latest | ConvertTo-Json -Depth 10 -Compress) "diagnostics: latest $($newest.SessionId)"
     }
 }
 
 Write-Host ""
-if ($SelfTest) { Write-Host "SELF-TEST PASS" }
-Write-Host "Diagnostic upload completed."
-if ($recoveredActive) { Write-Host "Recovered active session: normal finalization was not observed; exported as incomplete." }
-Write-Host ""
-Write-Host "Session: $sessionId"
-Write-Host "Addon commit: $($session.addonCommit)"
-Write-Host "Runs recorded: $runs"
-Write-Host "Events uploaded: $($events.Count)"
+if ($SelfTest -and $failed.Count -eq 0) { Write-Host "SELF-TEST PASS" }
+Write-Host "Diagnostic upload summary:"
+Write-Host "Uploaded: $($uploaded.Count)"
+Write-Host "Recovered: $($recovered.Count)"
+Write-Host "Skipped (already verified): $($skipped.Count)"
+Write-Host "Failed: $($failed.Count)"
+if ($failed.Count -gt 0) {
+    Write-Host "Failed sessions: $($failed -join ', ')"
+    exit 1
+}
 Write-Host ""
 Write-Host "GitHub:"
-Write-Host "https://github.com/$Repo/tree/main/$base"
-Write-Host "Local export: $exportDir"
+Write-Host "https://github.com/$Repo"
