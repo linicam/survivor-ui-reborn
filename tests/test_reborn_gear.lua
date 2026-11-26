@@ -286,6 +286,86 @@ local kept = Eval(bothProtected.pieces).sets
 assert(kept.legendary[1].pieces == 4 and kept.common[1].pieces == 4, "both competing protected tiers survive")
 AZS_GEN.setBonuses[1].text = knownText
 table.remove(AZS_GEN.setBonuses)
+
+-- A deliberately output-limited Warlock. Cheap armor swaps only change
+-- survival or unmodeled stats. Check both reachable and unreachable ties.
+local originalDrop = G.DropSlot
+local chosenSlots = { chest = 2, legs = 4, head = 0, main_hand = 8 }
+local armorStats = {}
+for _, index in pairs(chosenSlots) do armorStats[index] = AZS_GEN.pieces.slots[index].stats end
+for _, index in ipairs({ 0, 2, 4 }) do AZS_GEN.pieces.slots[index].stats = { { "hp", 25 }, { "area", 0.02 } } end
+G.DropSlot = function(catalog, class, slot, tier)
+	return chosenSlots[slot] and originalDrop(catalog, class, slot, tier)
+end
+local tie = P.Copy(source)
+tie.pieces = { Item("chest", "legendary", 0), Item("legs", "legendary", 0), Item("main_hand", "legendary", 0) }
+local tieActual = Eval(tie.pieces)
+local tieRef = assert(P.Reference(tie, tieActual))
+local tieDrops = { uncommon = true, exotic = true }
+local legalSlots = { "chest", "legs", "main_hand", "head" }
+for _, factor in ipairs({ 1.04, 2 }) do
+	tie.demand = { output = tieRef.demand.output * factor, survival = tieRef.demand.survival * 0.70 }
+	local best, choices = nil, {}
+	local function Enumerate(i, gold, replacements, fills)
+		local slot = legalSlots[i]
+		if slot then
+			local worn = tie.pieces[i]
+			if not worn then Enumerate(i + 1, gold, replacements, fills) end
+			for _, tier in ipairs(worn and { "legendary", "exotic" } or { "uncommon", "exotic" }) do
+				for star = 0, 1 do
+					choices[i] = Item(slot, tier, star)
+					local price = star == 1 and priceTable[tier][star] or 0
+					Enumerate(i + 1, gold + price, replacements + (worn and tier ~= worn.tier and 1 or 0), fills + (worn and 0 or 1))
+				end
+			end
+			choices[i] = nil
+			return
+		end
+		local after = P.Difficulty(tie.demand, Eval(choices), tieRef).combined
+		local reached = after <= 100
+		local less = best and (gold < best.gold or (gold == best.gold and (replacements < best.replacements
+			or (replacements == best.replacements and fills < best.fills))))
+		if not best or (reached and not best.reached) or (reached and best.reached and less)
+			or (not reached and not best.reached and (after < best.after - P.tolerance
+				or (math.abs(after - best.after) <= P.tolerance and less))) then
+			best = { after = after, reached = reached, gold = gold, replacements = replacements, fills = fills }
+		end
+	end
+	Enumerate(1, 0, 0, 0)
+	local plan = Finish(P.Search(cat, tie, tieActual, tieRef, tieDrops, 12000))
+	local result = P.BySlot(plan.pieces)
+	assert(plan.complete and (plan.after <= 100) == best.reached and plan.gold == best.gold)
+	assert(best.replacements == 1 and best.fills == 0 and not result.head)
+	assert(P.SamePiece(result.chest, tie.pieces[1]) and P.SamePiece(result.legs, tie.pieces[2]), "retain worn armor in pressure and gold ties")
+	assert(result.main_hand.tier == "exotic")
+	local _, quote = P.Changes(cat, tie.pieces, plan.pieces, tieDrops, tie.class)
+	assert(quote.gold == plan.gold)
+	near(plan.after, P.Difficulty(tie.demand, Eval(plan.pieces), tieRef).combined)
+	if not best.reached then near(plan.after, best.after) end
+	local hypothetical = P.Replace(tie.pieces, "chest", "uncommon", 0)
+	assert(Eval(hypothetical).stats.hp < tieActual.stats.hp, "simulator can still evaluate the downgrade")
+end
+
+-- The first feasible zero-gold arrangement can spend two drops even though
+-- a different branch with one drop reaches the same target at the same gold.
+cat.pieces.scale.top = 0
+AZS_GEN.pieces.slots[2].stats = { { "damage", 0.12 } }
+AZS_GEN.pieces.slots[4].stats = { { "damage", 0.12 } }
+AZS_GEN.pieces.slots[8].stats = { { "damage", 0.20 } }
+tieActual = Eval(tie.pieces)
+tie.demand = P.Copy(ref.demand)
+tieRef = assert(P.Reference(tie, tieActual))
+tie.demand = { output = tieRef.demand.output * (1 + 0.13 / tieActual.output), survival = tieRef.demand.survival * 0.70 }
+local twoDrops = { Item("chest", "exotic", 0), Item("legs", "exotic", 0), tie.pieces[3] }
+local oneDrop = P.Replace(tie.pieces, "main_hand", "exotic", 0)
+assert(P.Difficulty(tie.demand, Eval(twoDrops), tieRef).combined <= 100)
+assert(P.Difficulty(tie.demand, Eval(oneDrop), tieRef).combined <= 100)
+local cheaperAcquisition = Finish(P.Search(cat, tie, tieActual, tieRef, { exotic = true }, 12000))
+local changes, quote = P.Changes(cat, tie.pieces, cheaperAcquisition.pieces, { exotic = true }, tie.class)
+assert(cheaperAcquisition.complete and cheaperAcquisition.after <= 100 and quote.gold == 0)
+assert(#changes == 1 and changes[1].slot == "main_hand", "search a same-gold branch when it can use fewer drops")
+for index, stats in pairs(armorStats) do AZS_GEN.pieces.slots[index].stats = stats end
+G.DropSlot = originalDrop
 cat.pieces.scale.top = savedTop
 
 -- Event and widget mocks follow the native zone-before-armor sync contract.
@@ -330,9 +410,10 @@ function CreateFrame(kind, name, parent)
 	function w:EnableMouseWheel(value) self.wheel = value end
 	function w:SetVerticalScroll(value) self.offset = value end
 	function w:SetBackdropColor(r, g, b, a) self.backgroundAlpha = a end
+	function w:SetTextColor(r, g, b) self.textColor = { r, g, b } end
 	table.insert(widgets, w)
 	for _, method in ipairs({ "SetPoint", "ClearAllPoints", "SetAllPoints", "SetBackdrop", "SetBackdropBorderColor",
-		"SetScrollChild", "SetJustifyH", "SetTextColor", "SetTexture", "SetFont", "SetAlpha", "SetThumbTexture",
+		"SetScrollChild", "SetJustifyH", "SetTexture", "SetFont", "SetAlpha", "SetThumbTexture",
 		"SetVertexColor", "SetOrientation", "SetClampedToScreen" }) do w[method] = function() end end
 	return w
 end
@@ -367,14 +448,17 @@ function dollSlot:HookScript(event, fn)
 end
 GameTooltip = {
 	SetOwner = function(self, owner) self.owner = owner end,
-	SetText = function(self, text) self.lines = { text } end,
+	SetText = function(self, text) self.lines, self.colors = { text }, {} end,
 	IsOwned = function(self, owner) return self.owner == owner end,
-	AddLine = function(self, text) table.insert(self.lines, text) end,
+	AddLine = function(self, text, r, g, b)
+		table.insert(self.lines, text)
+		self.colors[#self.lines] = { r, g, b }
+	end,
 	Show = function(self) self.shown = true end,
 	Hide = function(self) self.shown = false; self.owner = nil end,
 }
 function dollSlot:Hover()
-	GameTooltip.owner, GameTooltip.lines = self, { "Native tooltip" }
+	GameTooltip.owner, GameTooltip.lines, GameTooltip.colors = self, { "Native tooltip" }, {}
 	GameTooltip:Show()
 	if self.afterEnter then self.afterEnter(self) end
 	return table.concat(GameTooltip.lines, "\n")
@@ -436,7 +520,8 @@ local function SlotMenu(slot, value, field)
 		local menu = row[field or "tier"]
 		if row.shown and row.slot == slot and menu and menu.shown then
 			menu.scripts.OnClick()
-			local option = type(value) == "number" and ("★" .. value) or value == "legendary" and "Legendary" or "Empty slot"
+			local tierNames = { legendary = "Legendary", common = "Common" }
+			local option = type(value) == "number" and ("★" .. value) or tierNames[value] or "Empty slot"
 			for _, popup in ipairs(widgets) do
 				if popup.items and popup.shown then return assert(Find("Button", option, popup), option).scripts.OnClick end
 			end
@@ -449,6 +534,11 @@ local function HoverIcon(slot, planned)
 			row.iconButton.scripts.OnEnter()
 			return table.concat(GameTooltip.lines, "\n")
 		end
+	end
+end
+local function TooltipColor(text)
+	for i, line in ipairs(GameTooltip.lines) do
+		if string.find(line, text, 1, true) then return GameTooltip.colors[i] end
 	end
 end
 local function VisiblePanel()
@@ -492,23 +582,36 @@ Armor({ head })
 Click("Set Current Configuration")
 local saved = assert(SurvivorUIDB.rebornGear.baselines.warlock)
 assert(saved.zone == "elwynn" and saved.level == 0 and saved.at == 1234 and saved.modifiers.affixes == "")
-assert(saved.pieces[1].name == "Test item" and saved.pieces[1].stars == 0 and Find("FontString", "Estimated difficulty 100.0%"))
-assert(Find("FontString", "No upgrades required"))
-assert(string.find(dollSlot:Hover(), "Modeled pressure 100.0% →", 1, true))
+assert(saved.pieces[1].name == "Test item" and saved.pieces[1].stars == 0 and Find("FontString", "Combined pressure 100.0%"))
+assert(Find("FontString", "No upgrade is needed for this target"))
+assert(Find("FontString", "Lower pressure is better"))
+assert(string.find(dollSlot:Hover(), "Combined pressure 100.0% →", 1, true))
+assert(TooltipColor("Damage +")[2] == 1 and TooltipColor("Combined pressure 100.0% →")[2] == 1)
 assert(not Find("FontString", "Output uses gear Damage"))
 Click("Show details")
 assert(Find("FontString", "Output uses gear Damage") and Find("FontString", "calibration is pending"))
+assert(Find("FontString", "When the lower component improves"))
 Click("Hide details")
+local highHead = P.Copy(head)
+highHead.stars = "5"
+Armor({ highHead })
+assert(string.find(dollSlot:Hover(), "Next tier", 1, true))
+assert(TooltipColor("Damage -")[1] == 1 and TooltipColor("Damage -")[2] < 0.6)
+Armor({ head })
 Click("Equipment Simulator")
 local edit = assert(SlotMenu("head", "legendary"))
 edit()
 assert(string.find(HoverIcon("head", false), "Simulated item · Legendary", 1, true))
+assert(TooltipColor("Damage +")[2] == 1)
 local changeStar = assert(SlotMenu("head", 2, "stars"))
 changeStar()
 assert(not GameTooltip.shown, "simulator edits clear tooltips")
 assert(string.find(HoverIcon("head", false), "★2 → ★3", 1, true))
 assert(string.find(HoverIcon("shoulders", false), "Empty slot", 1, true))
 assert(Find("FontString", "Compared with actual gear") and Find("FontString", "Replacement gear is hypothetical"))
+assert(SlotMenu("head", "common"))()
+assert(string.find(HoverIcon("head", false), "Simulated item · Common", 1, true), "manual simulator allows lower tiers")
+assert(SlotMenu("head", "legendary"))()
 assert(saved.pieces[1].stars == 0 and saved.pieces[1].tier == "common" and head.rarity == "0")
 Armor({ head })
 assert(Find("FontString", "Replacement gear is hypothetical"), "duplicate native gear updates preserve the simulation")
@@ -536,12 +639,19 @@ DrainSearch()
 assert(Find("FontString", "Plan A") and Find("FontString", "Plan B"))
 local planned = assert(HoverIcon("head", true))
 assert(string.find(planned, "Planned item Common ★0 →", 1, true))
-assert(string.find(planned, "Isolated item pressure", 1, true) and string.find(planned, "Full plan modeled pressure", 1, true))
+assert(string.find(planned, "Isolated item combined pressure", 1, true) and string.find(planned, "Full plan combined pressure", 1, true))
+assert(TooltipColor("Full plan combined pressure")[2] == 1)
 Click("Equipment Simulator")
 assert(not GameTooltip.shown)
 Click("Load Plan A")
 assert(Find("FontString", "Calculable upgrade gold:") and not VisiblePanel().scripts.OnUpdate)
+if Find("Button", "Reset to Actual Equipment") then Click("Reset to Actual Equipment") end
 assert(SlotMenu("head", false))()
+local lostDamage = assert(Find("FontString", "-8.40 pp"))
+assert(lostDamage.textColor[1] == 1 and lostDamage.textColor[2] < 0.6)
+local noChange = assert(Find("FontString", "—"))
+assert(noChange.textColor[1] == 0.72 and noChange.textColor[2] == 0.73)
+assert(string.find(Find("FontString", "Compared with actual gear").text, "|cffff8484+", 1, true), "higher pressure is red")
 assert(Find("Button", "Reset to Actual Equipment"))
 Click("Reset to Actual Equipment")
 assert(Find("FontString", "Calculable upgrade gold: 0") and not Find("FontString", "Changes and acquisition"))
@@ -578,7 +688,7 @@ assert(#SurvivorUIDB.rebornGear.baselines.paladin.pieces == 0 and SurvivorUIDB.r
 Zone("dalaran", 0, "paladin", "d")
 assert(Find("FontString", "Enter a Campaign to compare map difficulty"))
 assert(not Find("Button", "Set Current Configuration") and not Find("Button", "Difficulty & Upgrade Planner"))
-assert(not Find("FontString", "Estimated difficulty") and not Find("FontString", "Plan A") and not Find("FontString", "100% reference:"))
+assert(not Find("FontString", "Combined pressure") and not Find("FontString", "Plan A") and not Find("FontString", "100% reference:"))
 Armor({ head })
 assert(Find("FontString", "Equipment attributes") and Find("FontString", "Actual") and Find("FontString", "Simulated"))
 assert(Find("FontString", "Output") and Find("FontString", "Survival") and Find("FontString", "Utility"))
@@ -615,7 +725,7 @@ dofile("SurvivorUI/Locale_zh.lua")
 function SurvivorUI_T(text) return SurvivorUI_WORDS.zh[text] or text end
 Zone("elwynn", 0, "warlock", "f")
 Armor({ head })
-assert(SurvivorUI_RebornGearOpen("show") and Find("FontString", "预计难度 100.0%"))
+assert(SurvivorUI_RebornGearOpen("show") and Find("FontString", "综合压力 100.0%"))
 assert(string.find(dollSlot:Hover(), "408 金币", 1, true) and string.find(dollSlot:Hover(), "下一品质", 1, true))
 Click("装备模拟器")
 assert(string.find(HoverIcon("head", false), "模拟装备", 1, true))

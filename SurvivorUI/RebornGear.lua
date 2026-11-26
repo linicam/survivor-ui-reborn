@@ -6,6 +6,7 @@ local Maps = SurvivorUI_RebornMapReference
 local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 local BORDER = { bgFile = FLAT, edgeFile = FLAT, edgeSize = 1 }
 local GOLD, TEXT, MUTED = { 1, 0.82, 0.42 }, { 0.94, 0.93, 0.89 }, { 0.72, 0.73, 0.76 }
+local POSITIVE, NEGATIVE = { 0.55, 1, 0.65 }, { 1, 0.52, 0.52 }
 local NEUTRAL = { body = { 0.12, 0.13, 0.16 }, edge = { 0.38, 0.38, 0.43 }, text = TEXT }
 local MENU_HEIGHT = 23
 local panel, shield, scroll, bar, content, plannerTab, simulatorTab, baselineButton, loadButtons
@@ -249,8 +250,29 @@ local function ShortPercent(value)
 end
 
 local function DifficultyLine(result)
-	return F("Estimated difficulty %s   ·   Output %s   ·   Survival %s",
+	return F("Combined pressure %s · Output pressure %s · Survival pressure %s",
 		ShortPercent(result.combined), ShortPercent(result.output), ShortPercent(result.survival))
+end
+
+local function Delta(value, percent, lowerIsBetter)
+	if tonumber(string.format("%.2f", value)) == 0 then return "—", MUTED end
+	local beneficial = (value < 0) == (lowerIsBetter == true)
+	return F(percent and "%+.2f pp" or "%+.2f", value), beneficial and POSITIVE or NEGATIVE
+end
+
+local function Colored(text, color)
+	return string.format("|cff%02x%02x%02x%s|r", math.floor(color[1] * 255), math.floor(color[2] * 255),
+		math.floor(color[3] * 255), text)
+end
+
+local function PressureDelta(before, after)
+	if not before or not after then return Colored(T("Unavailable"), MUTED) end
+	return Colored(Delta(after - before, true, true))
+end
+
+local function PressureColor(before, after)
+	if not before or not after or ShortPercent(before) == ShortPercent(after) then return MUTED end
+	return after < before and POSITIVE or NEGATIVE
 end
 
 local function TierText(catalog, key)
@@ -283,19 +305,6 @@ local function ItemIcon(catalog, class, piece, fallback)
 	end
 	if fallback and fallback.icon then return ItemIcon(catalog, class, fallback) end
 	return "Interface\\Icons\\INV_Misc_QuestionMark"
-end
-
-local function AttributeLines(before, after)
-	local out = {}
-	for _, stat in ipairs(STATS) do
-		local old = before[stat[1]] or 0
-		local new = after[stat[1]] or 0
-		local delta = new - old
-		if math.abs(delta) > Planner.tolerance then
-			table.insert(out, stat[3] and F("%s %+.2f", L(stat[2]), delta) or F("%s %+.2f pp", L(stat[2]), delta * 100))
-		end
-	end
-	return out
 end
 
 local function SetLines(catalog, old, new)
@@ -335,15 +344,24 @@ local function PreviewChange(current, pieces, base, before, after, caption, isol
 	GameTooltip:AddLine(caption, 1, 0.82, 0.22, true)
 	local cost = QuoteText(quote)
 	GameTooltip:AddLine(quote.estimated and F("%s (estimated price)", cost) or cost, 1, 1, 1, true)
-	for _, change in ipairs(AttributeLines(base.stats, evaluated.stats)) do GameTooltip:AddLine(change, 0.55, 1, 0.65) end
+	for _, stat in ipairs(STATS) do
+		local value = (evaluated.stats[stat[1]] or 0) - (base.stats[stat[1]] or 0)
+		local change, color = Delta(value * (stat[3] and 1 or 100), not stat[3])
+		if color ~= MUTED then GameTooltip:AddLine(L(stat[2]) .. " " .. change, color[1], color[2], color[3]) end
+	end
 	if base.sets and evaluated.sets then
 		for _, change in ipairs(SetLines(catalog, base.sets, evaluated.sets)) do GameTooltip:AddLine(change, 1, 1, 1, true) end
 	end
-	local from = Planner.Difficulty(context.demand, base, current.reference).combined
-	local to = Planner.Difficulty(context.demand, evaluated, current.reference).combined
-	if from and to then
-		GameTooltip:AddLine(F(isolated and "Isolated item pressure %s → %s" or "Modeled pressure %s → %s",
-			ShortPercent(from), ShortPercent(to)), 1, 1, 1, true)
+	local from = Planner.Difficulty(context.demand, base, current.reference)
+	local to = Planner.Difficulty(context.demand, evaluated, current.reference)
+	if from.combined and to.combined then
+		local color = PressureColor(from.combined, to.combined)
+		GameTooltip:AddLine(F(isolated and "Isolated item combined pressure %s → %s" or "Combined pressure %s → %s",
+			ShortPercent(from.combined), ShortPercent(to.combined)), color[1], color[2], color[3], true)
+	end
+	if (from.output and to.output) or (from.survival and to.survival) then
+		GameTooltip:AddLine(F("Output pressure %s · Survival pressure %s", PressureDelta(from.output, to.output),
+			PressureDelta(from.survival, to.survival)), TEXT[1], TEXT[2], TEXT[3], true)
 	end
 	return quote
 end
@@ -499,7 +517,8 @@ local function Row()
 				local change = row.change
 				PreviewChange(current, current.context.pieces, current.actual, change.before, change.after,
 					F("Planned item %s → %s", ItemText(current.catalog, change.before), ItemText(current.catalog, change.after)), true)
-				GameTooltip:AddLine(F("Full plan modeled pressure %s", ShortPercent(row.plan.after)), 1, 0.82, 0.22, true)
+				local color = PressureColor(current.current.combined, row.plan.after)
+				GameTooltip:AddLine(F("Full plan combined pressure %s", ShortPercent(row.plan.after)), color[1], color[2], color[3], true)
 			elseif row.simulated then
 				local evaluated = Planner.Evaluate(current.catalog, current.context.class, draft)
 				if evaluated then
@@ -598,9 +617,10 @@ local function OutputPlan(current, index)
 	if plan.error then Line(T("Upgrade search unavailable.")); return end
 	RowAction(head, "Load in Simulator", function() LoadPlan(index) end)
 	local rows, quote = Planner.Changes(current.catalog, current.context.pieces, plan.pieces, current.drops, current.context.class)
-	Line(F("Modeled pressure %s → %s · %d gold in upgrades", ShortPercent(current.current.combined), ShortPercent(plan.after), quote.gold))
+	Line(F("Combined pressure %s → %s · %d gold in upgrades", ShortPercent(current.current.combined),
+		Colored(ShortPercent(plan.after), PressureColor(current.current.combined, plan.after)), quote.gold))
 	if current.current.combined <= 100 then
-		Line(T("At or below 100%. No upgrades required."))
+		Line(T("At or below 100%. No upgrade is needed for this target."))
 		return
 	end
 	local status
@@ -676,7 +696,10 @@ local function PlannerView(current)
 		if current.context.scope ~= "unsupported" then Line(T("The game has not reported a supported selected Campaign map and difficulty."), "note") end
 		return
 	end
-	if current.current.output or current.current.survival then Line(DifficultyLine(current.current), true) end
+	if current.current.output or current.current.survival then
+		Line(DifficultyLine(current.current), true)
+		Line(T("Lower pressure is better. Combined pressure is the higher of output and survival."), "note")
+	end
 	if current.actual and not current.actual.survival then Line(T("Survival estimate unavailable for this class data.")) end
 	if current.reference and current.context.demand then
 		local map = current.context.demand
@@ -696,6 +719,7 @@ local function PlannerView(current)
 	RowAction(header, details and "Hide details" or "Show details", function() details = not details; render() end)
 	if details then
 		Line(T("Output uses gear Damage. Survival uses class starting HP, gear HP and Damage Reduction capped at 60%."), "note")
+		Line(T("When the lower component improves, combined pressure can stay the same."), "note")
 		Line(T("Plans optimize modeled pressure. Gameplay calibration is pending. Critical chance and damage, cooldown, Echo, recovery, movement, area, talents, summons, density and encounter rules such as Rifts and Endless are excluded."), "note")
 	end
 end
@@ -788,12 +812,13 @@ local function EquipmentControls(current, slot, simulated, actual)
 	end
 end
 
-local function StatRow(label, actual, simulated, delta, header)
+local function StatRow(label, actual, simulated, delta, color, header)
 	local cellWidth = math.floor((width - 128) / 3)
 	local row = Line(label, header, nil, nil, cellWidth * 3 + 6)
 	if not row.columns then
 		row.columns = { Font(row, 10, MUTED, "RIGHT"), Font(row, 10, TEXT, "RIGHT"), Font(row, 10, GOLD, "RIGHT") }
 	end
+	row.columns[3]:SetTextColor(color[1], color[2], color[3])
 	for i, value in ipairs({ actual, simulated, delta }) do
 		local cell = row.columns[i]
 		cell:ClearAllPoints()
@@ -805,15 +830,14 @@ local function StatRow(label, actual, simulated, delta, header)
 end
 
 local function EquipmentStats(actual, simulated)
-	StatRow(T("Equipment attributes"), T("Actual"), T("Simulated"), T("Change"), true)
+	StatRow(T("Equipment attributes"), T("Actual"), T("Simulated"), T("Change"), GOLD, true)
 	for _, stat in ipairs(STATS) do
 		if stat[4] then Line(T(stat[4]), "note") end
 		local old, new = actual[stat[1]] or 0, simulated[stat[1]] or 0
-		local delta = new - old
 		local unit = stat[3] and 1 or 100
 		local valueFormat = stat[3] and "%.2f" or "%.2f%%"
-		StatRow(L(stat[2]), string.format(valueFormat, old * unit), string.format(valueFormat, new * unit),
-			math.abs(delta) <= Planner.tolerance and "—" or F(stat[3] and "%+.2f" or "%+.2f pp", delta * unit))
+		local delta, color = Delta((new - old) * unit, not stat[3])
+		StatRow(L(stat[2]), string.format(valueFormat, old * unit), string.format(valueFormat, new * unit), delta, color)
 	end
 end
 
@@ -826,9 +850,10 @@ local function SimulatorView(current)
 	local simulated = Planner.Difficulty(context.demand, evaluation, current.reference)
 	if simulated.output or simulated.survival then Line(DifficultyLine(simulated), true) end
 	if simulated.combined and current.current.combined then
-		Line(F("Compared with actual gear · difficulty %+.2f pp · output %+.2f pp · survival %+.2f pp",
-			simulated.combined - current.current.combined, simulated.output - current.current.output,
-			simulated.survival - current.current.survival))
+		Line(T("Lower pressure is better. Combined pressure is the higher of output and survival."), "note")
+		Line(F("Compared with actual gear · Combined %s · Output %s · Survival %s",
+			PressureDelta(current.current.combined, simulated.combined), PressureDelta(current.current.output, simulated.output),
+			PressureDelta(current.current.survival, simulated.survival)))
 	end
 	local changes, quote = Planner.Changes(catalog, context.pieces, draft, current.drops, context.class)
 	Line(F("Calculable upgrade gold: %d", quote.gold), true)

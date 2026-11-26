@@ -239,11 +239,15 @@ function Planner.Difficulty(demand, result, reference)
 	return { output = output, survival = survival, combined = output and survival and math.max(output, survival) }
 end
 
-local function Better(current, gold, best)
+local function Cheaper(gold, acquisitionRank, otherGold, otherRank)
+	return gold < otherGold or (gold == otherGold and acquisitionRank < otherRank)
+end
+
+local function Better(current, gold, acquisitionRank, best)
 	local reached = current <= 100
 	if (best.after <= 100) ~= reached then return reached end
 	if not reached and math.abs(current - best.after) > EPS then return current < best.after end
-	return gold < best.gold
+	return Cheaper(gold, acquisitionRank, best.gold, best.acquisitionRank)
 end
 
 local function Protects(catalog, item, req)
@@ -251,8 +255,8 @@ local function Protects(catalog, item, req)
 end
 
 local function Dominates(a, b)
-	-- Same acquisition path and contribution to protected sets. Both
-	-- capabilities are monotone in these three gear attributes.
+	-- Choices in the same slot and tier share the acquisition rank.
+	-- Keep the protected-set contribution and compare monotone attributes.
 	return a.tier == b.tier and a.protection == b.protection and a.gold <= b.gold
 		and a.damage >= b.damage and a.hp >= b.hp and a.armor >= b.armor
 end
@@ -345,21 +349,26 @@ end
 function Planner.Search(catalog, context, actual, reference, allowed, limit)
 	local current = Planner.Difficulty(context.demand, actual, reference).combined
 	if not current or not actual.sets then return end
-	local result = { after = current, gold = 0, pieces = Planner.Copy(context.pieces), complete = current <= 100, visited = 0 }
+	local result = { after = current, gold = 0, acquisitionRank = 0,
+		pieces = Planner.Copy(context.pieces), complete = current <= 100, visited = 0 }
 	if result.complete then return result end
 	local requirements = Gear.SetRequirements(actual.opaque, catalog.native.setRules)
 	local groups, tiers = {}, Planner.Tiers(catalog)
 	local seed, seedGold = {}, 0
-	local worn = BySlot(context.pieces)
-	for _, slot in ipairs(Planner.Slots(catalog, context.class)) do
+	local worn, slots = BySlot(context.pieces), Planner.Slots(catalog, context.class)
+	-- One worn replacement ranks after any number of newly filled slots.
+	local replacementRank = table.getn(slots) + 1
+	for _, slot in ipairs(slots) do
 		local piece = worn[slot]
 		if piece or allowed then
 			local group = {}
 			local sameTier
-			if not piece then table.insert(group, { gold = 0, damage = 0, hp = 0, armor = 0 }) end
+			if not piece then table.insert(group, { gold = 0, acquisitionRank = 0, damage = 0, hp = 0, armor = 0 }) end
+			local wornRank = piece and catalog.tiers[piece.tier].rank
 			for _, tier in ipairs(tiers) do
 				local same = piece and tier == piece.tier
-				if same or (allowed and allowed[tier] and Gear.DropSlot(catalog, context.class, slot, tier)) then
+				if same or (allowed and allowed[tier] and (not wornRank or catalog.tiers[tier].rank > wornRank)
+					and Gear.DropSlot(catalog, context.class, slot, tier)) then
 					for star = same and piece.stars or 0, catalog.pieces.scale.top do
 						local candidate = same and star == piece.stars and piece or { slot = slot, tier = tier, stars = star }
 						local quote = Planner.Quote(catalog, piece, candidate, allowed, context.class)
@@ -371,6 +380,7 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 								if Protects(catalog, candidate, req) then protection = j; break end
 							end
 							table.insert(group, { piece = candidate, gold = quote.gold, tier = tier, protection = protection,
+								acquisitionRank = same and 0 or (piece and replacementRank or 1),
 								damage = s.damage or 0, hp = s.hp or 0, armor = s.armor or 0 })
 							if same then sameTier = group[table.getn(group)] end
 						end
@@ -379,7 +389,8 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 			end
 			table.sort(group, function(a, b)
 				if a.gold ~= b.gold then return a.gold < b.gold end
-				if not a.piece or not b.piece then return not a.piece end
+				if a.acquisitionRank ~= b.acquisitionRank then return a.acquisitionRank < b.acquisitionRank end
+				if not a.piece then return false end
 				local ar, br = catalog.tiers[a.piece.tier].rank, catalog.tiers[b.piece.tier].rank
 				if ar ~= br then return ar < br end
 				return a.piece.stars < b.piece.stars
@@ -404,7 +415,7 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 	-- The most upgraded currently worn pieces give both searches a comparable
 	-- starting point, including when the replacement space exceeds its budget.
 	local seedPressure = Planner.Difficulty(context.demand, Planner.Evaluate(catalog, context.class, seed), reference).combined
-	if seedPressure and Better(seedPressure, seedGold, result) then
+	if seedPressure and Better(seedPressure, seedGold, 0, result) then
 		result.after, result.gold, result.pieces = seedPressure, seedGold, Planner.Copy(seed)
 	end
 
@@ -438,7 +449,7 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 
 		-- Choose one legal full seed using optimistic child bounds. The same
 		-- suffix data rules out choices that strand an active set threshold.
-		local d, h, a, cost = 0, 0, 0, 0
+		local d, h, a, cost, acquisitionRank = 0, 0, 0, 0, 0
 		local selected = {}
 		local terminal = table.getn(groups) + 1
 		for i, group in ipairs(groups) do
@@ -454,6 +465,7 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 			selected[i] = best
 			Count(best, 1)
 			d, h, a, cost = d + best.damage, h + best.hp, a + best.armor, cost + best.gold
+			acquisitionRank = acquisitionRank + best.acquisitionRank
 		end
 		local pressure = selected[terminal - 1] and Bound(terminal, d, h, a)
 		if pressure and pressure <= 100 then
@@ -462,7 +474,7 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 			for i, group in ipairs(groups) do
 				local prior = selected[i]
 				for _, choice in ipairs(group) do
-					if choice.gold >= prior.gold then break end
+					if not Cheaper(choice.gold, choice.acquisitionRank, prior.gold, prior.acquisitionRank) then break end
 					coroutine.yield()
 					Count(prior, -1)
 					Count(choice, 1)
@@ -471,6 +483,7 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 					if candidate and candidate <= 100 then
 						selected[i], d, h, a, pressure = choice, nd, nh, na, candidate
 						cost = cost - prior.gold + choice.gold
+						acquisitionRank = acquisitionRank - prior.acquisitionRank + choice.acquisitionRank
 						break
 					end
 					Count(choice, -1)
@@ -478,9 +491,9 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 				end
 			end
 		end
-		if pressure and Better(pressure, cost, result) then
+		if pressure and Better(pressure, cost, acquisitionRank, result) then
 			for _, choice in ipairs(selected) do if choice.piece then table.insert(path, choice.piece) end end
-			result.after, result.gold, result.pieces = pressure, cost, Planner.Copy(path)
+			result.after, result.gold, result.acquisitionRank, result.pieces = pressure, cost, acquisitionRank, Planner.Copy(path)
 		end
 		path, counts = {}, {}
 		local root = Bound(1, 0, 0, 0)
@@ -490,11 +503,14 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 			suffix = BoundSuffix(groups, requirements, survivalNeed, coroutine.yield)
 		end
 
-		local function Visit(i, gold, damage, hp, armor)
+		local function Visit(i, gold, acquisitionRank, damage, hp, armor)
 			if result.visited >= limit then return false end
 			result.visited = result.visited + 1
 			coroutine.yield()
-			if result.after <= 100 and gold >= result.gold then return true end
+			-- Both costs can only increase down the path. A tied gold branch
+			-- can still beat the incumbent by requiring fewer acquisitions.
+			local noCheaper = not Cheaper(gold, acquisitionRank, result.gold, result.acquisitionRank)
+			if result.after <= 100 and noCheaper then return true end
 			local lower = Bound(i, damage, hp, armor)
 			if not lower then return true end
 			local cutoff = result.after <= 100 and 100 or result.after
@@ -505,13 +521,13 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 					RemainingCost(rest, 2, survivalNeed - actual.health - hp - survivalNeed * armor),
 					RemainingCost(rest, 3, (1 - ARMOR_CAP) * survivalNeed - actual.health - hp))
 				if gold + need > result.gold + EPS then return true end
-			elseif lower > 100 and lower >= result.after and gold >= result.gold then
+			elseif lower > 100 and lower >= result.after and noCheaper then
 				return true
 			end
 			if not groups[i] then
 				if priceTie and lower > root + EPS then return true end
-				if Better(lower, gold, result) then
-					result.after, result.gold, result.pieces = lower, gold, Planner.Copy(path)
+				if Better(lower, gold, acquisitionRank, result) then
+					result.after, result.gold, result.acquisitionRank, result.pieces = lower, gold, acquisitionRank, Planner.Copy(path)
 				end
 				return true
 			end
@@ -519,14 +535,15 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 				local item = choice.piece
 				if item then table.insert(path, item) end
 				Count(choice, 1)
-				local done = Visit(i + 1, gold + choice.gold, damage + choice.damage, hp + choice.hp, armor + choice.armor)
+				local done = Visit(i + 1, gold + choice.gold, acquisitionRank + choice.acquisitionRank,
+					damage + choice.damage, hp + choice.hp, armor + choice.armor)
 				Count(choice, -1)
 				if item then table.remove(path) end
 				if not done then return false end
 			end
 			return true
 		end
-		result.complete = Visit(1, 0, 0, 0, 0)
+		result.complete = Visit(1, 0, 0, 0, 0, 0)
 	end)
 	return result
 end
