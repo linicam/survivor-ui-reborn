@@ -84,10 +84,18 @@ for i = 1, table.getn(events) do
 		eq("seq " .. tostring(e.seq) .. " jewelry rows", table.getn(items), table.getn(e.data.items or {}))
 		eq("seq " .. tostring(e.seq) .. " jewelry duplicates", duplicates, e.data.duplicates or 0)
 	elseif e.type == "curse_banner" and e.data and e.data.raw then
+		local bannerTime = e.data.raw[6] or e.data.raw.time
+		if bannerTime then
+			simRunTime = bannerTime
+			if type(AZS_RUN) ~= "table" then AZS_RUN = {} end
+			AZS_RUN.t = simRunTime
+		end
 		AZS_BANNERS = { e.data.raw }
 		local curses = SurvivorUI_RebornCurses()
 		if e.data.expired then
 			eq("seq " .. tostring(e.seq) .. " curse expired", table.getn(curses.items), 0)
+		elseif e.data.expectActive then
+			eq("seq " .. tostring(e.seq) .. " curse active", table.getn(curses.items), 1)
 		elseif e.data.effect then
 			eq("seq " .. tostring(e.seq) .. " curse effect", curses.items[1] and curses.items[1].text, e.data.effect)
 		else

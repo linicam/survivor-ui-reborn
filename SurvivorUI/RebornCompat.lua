@@ -127,6 +127,7 @@ local abilitiesSeen = {}       -- [key] = true, keys already merged
 local lastAbilityRequest = 0
 local lastRequestSignature = nil
 local lastRecordedSignature = nil
+local lastRecordedTexts = {}
 local lastRequestCardsStamp = nil
 local requestRunId = nil
 local abilitiesRequested = false
@@ -564,16 +565,24 @@ local function RefreshAbilitiesCache()
 	spellsStamp = AZS_SPELLS_UPDATED
 	if SurvivorUI_RebornRecord and SurvivorUI_RebornRecording and SurvivorUI_RebornRecording() then
 		local parts = {}
+		local textChanges = {}
 		for i = 1, table.getn(merged) do
 			local a = merged[i]
 			parts[i] = tostring(a.key) .. "|" .. tostring(a.spell) .. "|" .. tostring(a.rank) ..
-				"|" .. tostring(a.passive) .. "|" .. tostring(a.kind)
+				"|" .. tostring(a.passive) .. "|" .. tostring(a.kind) ..
+				"|" .. tostring(a.name) .. "|" .. tostring(a.text) ..
+				"|" .. tostring(a.cdmax) .. "|" .. tostring(a.icon)
+			if lastRecordedTexts[a.key] ~= nil and lastRecordedTexts[a.key] ~= a.text then
+				table.insert(textChanges, { key = a.key, from = lastRecordedTexts[a.key], to = a.text, rank = a.rank })
+			end
+			lastRecordedTexts[a.key] = a.text
 		end
 		local signature = table.concat(parts, ";")
 		if signature ~= lastRecordedSignature then
 			lastRecordedSignature = signature
 			SurvivorUI_RebornRecord("abilities_update", {
 				rawAbilities = AZS_ABILITIES, rawSpells = AZS_SPELLS, normalized = merged,
+				textChanges = textChanges,
 			})
 		end
 	end
@@ -1259,6 +1268,23 @@ local function CurseEffectText(text)
 	return nil
 end
 
+-- Explicit ending banners observed in game (2026-11-26 session):
+-- "涌动平息了。" ends the horde-surge curse. Endings clear the
+-- matching tracked curse immediately; the duration estimate is
+-- only a fallback when no ending banner is observed.
+local CURSE_ENDINGS = {
+	{ "涌动平息", "Horde surges " },
+}
+
+local function CurseEndingEffect(text)
+	for i = 1, table.getn(CURSE_ENDINGS) do
+		if string.find(text, CURSE_ENDINGS[i][1], 1, true) then
+			return T(CURSE_ENDINGS[i][2])
+		end
+	end
+	return nil
+end
+
 local function CurseDuration(text)
 	local minutes = tonumber(string.match(text, "%((%d+)%s*мин"))
 	if minutes then
@@ -1320,8 +1346,25 @@ local function LatchCurseBanner(banner, fromHistory)
 		end
 	end
 	if not isCurse then
-		if Field(banner, "kind", 2) == "curse" and SurvivorUI_RebornRecord then
-			SurvivorUI_RebornRecord("curse_banner", { raw = banner, decision = "announcement" })
+		if Field(banner, "kind", 2) == "curse" then
+			local ending = CurseEndingEffect(text)
+			if ending and not seenCurseIds[key] then
+				seenCurseIds[key] = true
+				local remaining = {}
+				for i = 1, table.getn(activeCurses) do
+					if CurseEffectText(activeCurses[i].text) ~= ending then
+						table.insert(remaining, activeCurses[i])
+					end
+				end
+				activeCurses = remaining
+				if SurvivorUI_RebornRecord then
+					SurvivorUI_RebornRecord("curse_banner", { raw = banner, decision = "ending", effect = ending })
+				end
+				return
+			end
+			if SurvivorUI_RebornRecord then
+				SurvivorUI_RebornRecord("curse_banner", { raw = banner, decision = "announcement" })
+			end
 		end
 		return
 	end
@@ -1467,10 +1510,7 @@ local function ResolveActionSlot(key)
 	local count = table.getn(spells)
 	for index = 1, count do
 		if Field(spells[index], "key", 1) == key then
-			if SurvivorUI_SpellSlot then
-				return SurvivorUI_SpellSlot(index)
-			end
-			return index == count and 12 or index
+			return index
 		end
 	end
 	local ability = SurvivorUI_RebornAbilityByKey(key)
@@ -1527,6 +1567,11 @@ function SurvivorUI_RebornTooltipRead(key)
 		end
 	end
 	if slot and not overlay and scan.SetAction then
+		if GetActionInfo then
+			local actionType, actionId = GetActionInfo(slot)
+			out.actionType = actionType
+			out.actionId = actionId
+		end
 		local ok, err = pcall(function()
 			scan:SetOwner(UIParent, "ANCHOR_NONE")
 			scan:ClearLines()
@@ -1534,7 +1579,13 @@ function SurvivorUI_RebornTooltipRead(key)
 		end)
 		if ok then
 			ReadLines("action")
-			out.ok = true
+			if table.getn(out.lines) == 0 then
+				out.error = "empty action tooltip"
+			elseif out.actionId and ability.spell and ability.spell > 0 and out.actionId ~= ability.spell then
+				out.error = "action identity mismatch"
+			else
+				out.ok = true
+			end
 		else
 			out.error = tostring(err)
 		end
@@ -1546,7 +1597,11 @@ function SurvivorUI_RebornTooltipRead(key)
 		end)
 		if ok then
 			ReadLines("spell")
-			out.ok = true
+			if table.getn(out.lines) == 0 then
+				out.error = "empty spell tooltip"
+			else
+				out.ok = true
+			end
 		else
 			out.error = tostring(err)
 		end

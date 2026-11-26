@@ -996,6 +996,16 @@ end
 -- Scoped in a do-block: this file is at Lua's 200-local limit.
 do
 local extraButtonsReady = false
+local lastExtraButtonState = nil
+local function RecordExtraButton(state, data)
+	if state == lastExtraButtonState then
+		return
+	end
+	lastExtraButtonState = state
+	if SurvivorUI_RebornRecord then
+		SurvivorUI_RebornRecord("extra_button", data)
+	end
+end
 local function ExtraButtonsReady()
 	if extraButtonsReady then
 		return
@@ -1047,6 +1057,10 @@ function SurvivorUI_SetExtraButton(button, spell, icon)
 		frame.pendingSpell = spell
 		frame.pendingIcon = icon
 		frame.hasPending = true
+		RecordExtraButton("deferred:" .. tostring(spell), {
+			button = 12, spell = frame.spell, pendingSpell = spell,
+			visible = frame.spell ~= nil, deferred = true,
+		})
 		return
 	end
 	if frame.hasPending then
@@ -1065,12 +1079,7 @@ function SurvivorUI_SetExtraButton(button, spell, icon)
 		end
 		frame:Hide()
 		ReleaseBinding(frame)
-		if SurvivorUI_RebornCaptureNote then
-			SurvivorUI_RebornCaptureNote("extra button 12 cleared")
-		end
-		if SurvivorUI_RebornRecord then
-			SurvivorUI_RebornRecord("extra_button", { button = 12, spell = nil, visible = false })
-		end
+		RecordExtraButton("cleared", { button = 12, spell = nil, visible = false })
 		return
 	end
 	frame:SetAttribute("spell", spell)
@@ -1078,12 +1087,9 @@ function SurvivorUI_SetExtraButton(button, spell, icon)
 	frame.icon:SetTexture(icon)
 	frame:Show()
 	ClaimBinding(frame)
-	if SurvivorUI_RebornCaptureNote then
-		SurvivorUI_RebornCaptureNote("extra button 12 spell=" .. tostring(spell) .. " ownedBinding=" .. tostring(frame.ownedBinding))
-	end
-	if SurvivorUI_RebornRecord then
-		SurvivorUI_RebornRecord("extra_button", { button = 12, spell = spell, visible = true, ownedBinding = frame.ownedBinding })
-	end
+	RecordExtraButton("spell:" .. tostring(spell) .. "|owned:" .. tostring(frame.ownedBinding), {
+		button = 12, spell = spell, visible = true, ownedBinding = frame.ownedBinding,
+	})
 	if GetSpellCooldown and CooldownFrame_SetTimer then
 		local start, duration = GetSpellCooldown(spell)
 		if start and duration then

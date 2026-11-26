@@ -137,6 +137,15 @@ function Find-SavedVariables {
         } catch {}
     }
     $candidates = @()
+    $gameDirs = @("D:\Azeroth Survivors", "C:\Azeroth Survivors", "D:\Games\Azeroth Survivors", "C:\Games\Azeroth Survivors")
+    foreach ($gameDir in $gameDirs) {
+        $wtf = Join-Path $gameDir "WTF\Account"
+        if (Test-Path $wtf) {
+            Get-ChildItem -Path $wtf -Recurse -Filter "SurvivorUI.lua" -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -match 'SavedVariables' } |
+                ForEach-Object { $candidates += $_.FullName }
+        }
+    }
     $roots = @("$env:USERPROFILE", "C:\Games", "D:\Games", "C:\Program Files", "C:\Program Files (x86)")
     foreach ($root in $roots) {
         if (Test-Path $root) {
@@ -156,7 +165,14 @@ function Find-SavedVariables {
         Fail "Invalid selection."
     }
     Write-Host "Could not find the diagnostic SavedVariables file automatically."
-    $picked = Read-Host "Enter the full path to SurvivorUI.lua in your SavedVariables folder"
+    $picked = Read-Host "Enter your AZ Reborn installation directory, or the full path to SurvivorUI.lua in SavedVariables"
+    if (Test-Path $picked -PathType Container) {
+        $found = Get-ChildItem -Path $picked -Recurse -Filter "SurvivorUI.lua" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'SavedVariables' } |
+            Select-Object -First 1
+        if ($found) { return $found.FullName }
+        Fail "No SurvivorUI.lua SavedVariables file found under: $picked"
+    }
     if (-not (Test-Path $picked)) { Fail "File not found: $picked" }
     return $picked
 }

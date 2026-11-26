@@ -25,6 +25,8 @@ local sessionStart = 0
 local pendingTooltips = {}
 local pendingBuffs = {}
 local tooltipBaselines = {}
+local lastExtraButtonSignature = nil
+local lastCaptureNote = nil
 local pseudonyms = {}
 local pseudonymCount = 0
 
@@ -112,6 +114,23 @@ function SurvivorUI_RebornRecord(eventType, data)
 	if not recording or not session then
 		return
 	end
+	-- Consecutive identical observations are one state, not new
+	-- evidence: dedup extra-button states and capture notes so a
+	-- per-draw caller cannot exhaust the recording budget.
+	if eventType == "extra_button" and type(data) == "table" then
+		local signature = tostring(data.button) .. "|" .. tostring(data.spell) ..
+			"|" .. tostring(data.pendingSpell) .. "|" .. tostring(data.visible) ..
+			"|" .. tostring(data.ownedBinding) .. "|" .. tostring(data.deferred)
+		if signature == lastExtraButtonSignature then
+			return
+		end
+		lastExtraButtonSignature = signature
+	elseif eventType == "capture_note" and type(data) == "table" then
+		if data.text == lastCaptureNote then
+			return
+		end
+		lastCaptureNote = data.text
+	end
 	local copied = CopyValue(data, 0)
 	local size = EstimateSize(copied, 0)
 	local critical = CRITICAL[eventType] == true
@@ -157,6 +176,8 @@ function SurvivorUI_RebornRecordStart()
 	pendingTooltips = {}
 	pendingBuffs = {}
 	tooltipBaselines = {}
+	lastExtraButtonSignature = nil
+	lastCaptureNote = nil
 	pseudonyms = {}
 	pseudonymCount = 0
 	session = {

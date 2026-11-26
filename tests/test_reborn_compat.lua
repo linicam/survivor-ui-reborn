@@ -578,6 +578,19 @@ eq("diag: auto on starts recording", SurvivorUI_RebornRecordStatus().active, tru
 local _, autoStopped = SurvivorUI_RebornRecordAuto(false)
 eq("diag: auto off stops recording", autoStopped, true)
 eq("diag: auto off inactive", SurvivorUI_RebornRecordStatus().active, false)
+-- Repeated identical extra-button updates record one transition.
+SurvivorUI_RebornRecordStart()
+local db3 = SurvivorUIRebornDiagnostics
+local sess3 = db3.sessions[db3.order[table.getn(db3.order)]]
+local beforeDedup = table.getn(sess3.events)
+for i = 1, 300 do
+	SurvivorUI_RebornRecord("extra_button", { button = 12, spell = 20549, visible = true, ownedBinding = false })
+	SurvivorUI_RebornRecord("capture_note", { text = "extra button 12 spell=20549 ownedBinding=false" })
+end
+eq("diag: repeated extra-button state recorded once", table.getn(sess3.events), beforeDedup + 2)
+SurvivorUI_RebornRecord("extra_button", { button = 12, spell = nil, visible = false })
+eq("diag: extra-button transition recorded", table.getn(sess3.events), beforeDedup + 3)
+SurvivorUI_RebornRecordStop()
 -- Cooldown-only updates do not flood the recorder.
 SurvivorUI_RebornRecordStart()
 local db2 = SurvivorUIRebornDiagnostics
@@ -604,6 +617,8 @@ AZS_RUN = { id = "run-key-test-2" }
 SurvivorUI_RebornCheckRun()
 AZS_BANNERS = { { 7, "curse", nil, "Проклятие", "Проклятие тяготеет над тобой: орда накатывает волной (20 с)!", 20 } }
 eq("banner key: reused id in new run still counts", table.getn(SurvivorUI_RebornCurses().items), 1)
+AZS_BANNERS = { { 23, "curse", nil, "", "涌动平息了。", 24 } }
+eq("curse ending banner clears tracked curse", table.getn(SurvivorUI_RebornCurses().items), 0)
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end
