@@ -922,16 +922,26 @@ SurvivorUI_RebornAnalysis = {
 }
 button.IsShown = function() return true end
 AZSCardsFrame.IsShown = function() return true end
+button.label = { SetText = function() end }
 -- Reload this mock's Fit from a fresh native function to avoid hooking twice.
 button.Fit = function() end
 dofile("SurvivorUI/CardsNotice.lua")
 AZS_CARDS = { kind = "jewel", cards = { card } }
+button.label:SetText("Native card label")
 rendered = display
 button.Fit()
 local analyzed = marked .. "\n|cff92dce5Ideal CD 1.40s → 1.20s|r"
 eq("cards: analysis appends after native cap", rendered, analyzed)
 button.Fit()
 eq("cards: repeated analysis Fit does not duplicate", rendered, analyzed)
+local displayedHand = AZS_CARDS
+AZS_CARDS = { kind = "jewel", cards = { card } }
+SurvivorUI_RebornAnalysis.CardText = function() return "Successor estimate" end
+button.Fit()
+button.Fit()
+eq("cards: outgoing Fit keeps the displayed hand", rendered, analyzed)
+AZS_CARDS = displayedHand
+SurvivorUI_RebornAnalysis.CardText = function() return "Ideal CD 1.40s → 1.20s" end
 button.saved = { rendered }
 rendered = "Equipped item comparison"
 hintsEnabled = false

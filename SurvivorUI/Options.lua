@@ -5145,7 +5145,7 @@ if SurvivorUI_RebornAnalysis and SurvivorUI_RebornActive() then
 		{ "cards", "Card values", "Show supported skill previews, jewelry changes and cap room on cards." },
 		{ "map", "Campaign pressure reference", "Show map factors and boss templates in the tracker tooltip." },
 		{ "live", "Live Build observations", "Show recent damage, health, kills and growth in the tracker tooltip." },
-		{ "advisor", "Experimental growth advice", "Flag a supported option when recent samples show rising enemy counts or sustained low health." },
+		{ "advisor", "Experimental growth advice", "Flag a supported mitigation option when recent samples show sustained low health." },
 		{ "diagnostics", "Research diagnostics", "Add analysis observations to an explicitly enabled Reborn recording." },
 	}
 	for _, option in ipairs(analysisOptions) do

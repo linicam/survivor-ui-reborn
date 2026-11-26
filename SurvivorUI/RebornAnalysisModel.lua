@@ -70,9 +70,9 @@ function Model.Skill(card, current, share)
 			complete = false
 		end
 	end
-	-- The meter can identify a direct spell contribution. No inferred ownership of pets or proc rows.
+	-- This is a counterfactual for a matching meter row. Its contents may include proc damage.
 	if complete and share and share > 0 and share <= 1 then
-		result.direct = 100 * share * (damage * speed - 1)
+		result.meterScenario = 100 * share * (damage * speed - 1)
 	end
 	result.partial = not complete
 	return result
@@ -184,23 +184,17 @@ function Model.Summarize(samples)
 	return out
 end
 
--- These are labeled directions. The observed symptoms can have several causes.
+-- The meter cannot establish which triggered damage scales with a spell card.
+-- Only a supported mitigation option can currently be tied to a symptom.
 function Model.Advice(summary, values)
-	local output, defense, best, ties, defenseCount
-	if not summary then return output, defense end
+	if not summary or not summary.survival then return nil end
+	local defense
 	for index, value in pairs(values) do
-		if summary.buildup and not summary.survival and value.direct and value.direct > 0 then
-			if not best or value.direct > best + 0.00001 then
-				best, output, ties = value.direct, index, false
-			elseif math.abs(value.direct - best) <= 0.00001 then
-				ties = true
-			end
-		end
 		local change = value.changes and table.getn(value.changes) == 1 and value.changes[1]
-		if summary.survival and change and change.stat == "red" and change.room and change.room > 0 then
-			defense, defenseCount = index, (defenseCount or 0) + 1
+		if change and change.stat == "red" and change.room and change.room > 0 then
+			if defense then return nil end
+			defense = index
 		end
 	end
-	if ties then output = nil end
-	return output, defenseCount == 1 and defense or nil
+	return defense
 end

@@ -16,9 +16,14 @@ local function HookCardCapHints()
 		local button = getglobal("AZSCard" .. index)
 		if button and type(button.Fit) == "function" and button.detail then
 			local slot = index
-			local original, annotated, annotatedHand, refitting
+			local original, annotated, paintedHand, refitting
 			local capDisplay
 			local loggedHand
+			-- Native FillCards writes the label before fitting. Shift comparison
+			-- and late card tips only write the detail, including on an outgoing hand.
+			local tracksHand = button.label and pcall(hooksecurefunc, button.label, "SetText", function()
+				paintedHand = AZS_CARDS
+			end)
 			local function SetDetail(text)
 				refitting = true
 				button.detail:SetText(text)
@@ -35,28 +40,23 @@ local function HookCardCapHints()
 				end
 				annotated = capDisplay
 			end
-			refreshAnalysis[slot] = function()
-				if annotatedHand and annotatedHand == AZS_CARDS and AZSCardsFrame:IsShown()
-					and button:IsShown() and not button.saved then button.Fit() end
-			end
-			hooksecurefunc(button, "Fit", function()
+			local function Decorate()
 				if refitting or button.saved then return end
+				local hand = AZS_CARDS
+				if tracksHand and paintedHand ~= hand then return end
 				local display = button.detail:GetText()
 				local base = display == annotated and original or display
-				local hand = AZS_CARDS
 				local card = hand and hand.kind == "jewel" and hand.cards and hand.cards[slot]
 				capDisplay = SurvivorUI_RebornCardCapLines(card, base)
 				local updated = capDisplay
 				local analysis = SurvivorUI_RebornAnalysis
-				-- A replaced hand may still be animating out. Do not attach the
-				-- successor's estimate to already annotated outgoing text.
-				if analysis and analysis.WantsCardHints() and (display ~= annotated or hand == annotatedHand) then
+				if tracksHand and paintedHand and analysis and analysis.WantsCardHints() then
 					local ok, hint = pcall(analysis.CardText, slot)
 					if ok and hint and hint ~= "" then
 						updated = (updated and updated ~= "" and updated .. "\n" or "") .. "|cff92dce5" .. hint .. "|r"
 					end
 				end
-				original, annotated, annotatedHand = base, updated, hand
+				original, annotated = base, updated
 				if updated ~= display then
 					SetDetail(updated)
 				end
@@ -65,7 +65,12 @@ local function HookCardCapHints()
 					loggedHand = hand
 					SurvivorUI_RebornRecord("card_cap_hint", { slot = slot, mode = card.mode, text = capDisplay })
 				end
-			end)
+			end
+			hooksecurefunc(button, "Fit", Decorate)
+			refreshAnalysis[slot] = function()
+				if paintedHand and paintedHand == AZS_CARDS and AZSCardsFrame:IsShown()
+					and button:IsShown() then Decorate() end
+			end
 		end
 	end
 	if SurvivorUI_RebornAnalysis then

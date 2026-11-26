@@ -164,7 +164,7 @@ function SurvivorUI_RebornActive()
 end
 
 -- The native run sheet and caps both use whole percentages.
-function SurvivorUI_RebornStatCap(key)
+function SurvivorUI_RebornStatCap(key, observedValue)
 	if not SurvivorUI_RebornActive() or type(AZS_RUN) ~= "table" or not AZS_RUN.ph
 		or (type(AZS_ZONE) == "table" and tonumber(AZS_ZONE.hub) == 1) then
 		return nil
@@ -178,7 +178,8 @@ function SurvivorUI_RebornStatCap(key)
 		cap = tonumber(AZS_CAPS[key])
 	end
 	if not (cap and cap >= 0 and cap < math.huge) then return nil end
-	local value = type(AZS_RUNSTATS) == "table" and tonumber(AZS_RUNSTATS[key])
+	local value = observedValue
+	if value == nil and type(AZS_RUNSTATS) == "table" then value = tonumber(AZS_RUNSTATS[key]) end
 	if value and value >= 0 and value < math.huge then
 		return cap, math.max(0, cap - value)
 	end

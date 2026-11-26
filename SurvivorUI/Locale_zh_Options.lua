@@ -25,7 +25,7 @@ SurvivorUI_OPTION_WORDS.zh = {
 	["Live Build observations"] = "实时构筑观测",
 	["Show recent damage, health, kills and growth in the tracker tooltip."] = "在冒险追踪提示中显示近期伤害、生命、击杀与成长。",
 	["Experimental growth advice"] = "实验性成长建议",
-	["Flag a supported option when recent samples show rising enemy counts or sustained low health."] = "近期样本出现积怪或持续低血时，标注一项有依据的选择。",
+	["Flag a supported mitigation option when recent samples show sustained low health."] = "近期样本出现持续低血时，标注有依据的减伤选择。",
 	["Research diagnostics"] = "研究诊断",
 	["Add analysis observations to an explicitly enabled Reborn recording."] = "仅在主动录制 Reborn 诊断时附加研究观测。",
 	-- The window: the sidebar, its groups and tabs, the search, the foot.
