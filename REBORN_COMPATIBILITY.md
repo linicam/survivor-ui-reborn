@@ -341,11 +341,10 @@ unchanged in substance); the full audit is in the research notes
 
 ### Native snapshots and Stats tooltip
 
-- **Stat caps.** In a Reborn run, the Stats tooltip for Crit, Haste, Echo
+- **Stat caps.** In a Reborn run, the Stats tooltip for Crit, Cooldown Reduction, Echo
   and Dmg Reduction reads the matching `crit`, `cdr`, `echo` or `red`
   cap through `AZS_GetStatCaps()` with a per-field `AZS_CAPS` fallback.
-  Haste is the panel's label for cooldown reduction. Both caps and
-  `AZS_RUNSTATS` use whole percentages. The remaining increase uses
+  Both caps and `AZS_RUNSTATS` use whole percentages. The remaining increase uses
   percentage points and is omitted if the current field is missing.
   The run sheet values are already capped. The original-client tooltips
   retain their descriptions. [Reborn Addon API](https://azreborn.com/guides/addon-api#5-the-azs-line-azs_stats)

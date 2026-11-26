@@ -228,10 +228,8 @@ local function Pct(value)
 	return string.format("%+.0f%%", value * 100)
 end
 
--- A row's name as shown. Its label stays its key (the order and the hidden
--- rows are saved by it): Armor shows as what it is, Dmg Reduction (asked on
--- Discord where it was), though the game's own pane calls it Armor.
-local SHOWN_AS = { Armor = "Dmg Reduction" }
+-- Display names can change independently of the saved row keys.
+local SHOWN_AS = { Armor = "Dmg Reduction", Haste = "Cooldown Reduction" }
 local REBORN_CAP_KEY = { Crit = "crit", Haste = "cdr", Echo = "echo", Armor = "red" }
 local REBORN_STAT_TEXT = {
 	Crit = "The chance a spell strikes critically.",

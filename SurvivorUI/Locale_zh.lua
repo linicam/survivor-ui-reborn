@@ -87,6 +87,7 @@ SurvivorUI_WORDS.zh = {
 	["Crit Dmg"] = "暴击伤害",
 	["Damage"] = "伤害",
 	["Haste"] = "急速",
+	["Cooldown Reduction"] = "冷却缩减",
 	["Echo"] = "回响",
 	["Health"] = "生命值",
 	["Regen"] = "回复",

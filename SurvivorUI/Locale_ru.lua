@@ -87,6 +87,7 @@ SurvivorUI_WORDS.ru = {
 	["Crit Dmg"] = "Крит. урон",
 	["Damage"] = "Урон",
 	["Haste"] = "Скорость",
+	["Cooldown Reduction"] = "Снижение КД",
 	["Echo"] = "Эхо",
 	["Health"] = "Здоровье",
 	["Regen"] = "Восполнение",
