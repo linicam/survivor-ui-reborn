@@ -33,6 +33,7 @@ dofile("SurvivorUI/RebornCompat.lua")
 
 local events = dofile(fixturePath)
 local failures, checks, skipped = 0, 0, 0
+local coverage = {}
 
 local function eq(name, got, want)
 	checks = checks + 1
@@ -44,6 +45,7 @@ end
 
 for i = 1, table.getn(events) do
 	local e = events[i]
+	local before = checks
 	simTime = e.t or simTime
 	if e.type == "run_transition" then
 		currentRunId = e.data and e.data.to or e.run
@@ -72,6 +74,9 @@ for i = 1, table.getn(events) do
 	end
 	if e.type == "run_transition" then
 		-- handled above
+	elseif e.type == "abilities_request" then
+		-- The request already passed throttling in the captured session.
+		SurvivorUI_RebornRequestAbilities(true)
 	elseif e.type == "abilities_update" and e.data then
 		if e.data.spellsOnly then
 			AZS_SPELLS = e.data.rawSpells
@@ -117,8 +122,6 @@ for i = 1, table.getn(events) do
 				present, e.data.decision ~= "ending")
 		elseif e.data.effect then
 			eq("seq " .. tostring(e.seq) .. " curse effect", curses.items[1] and curses.items[1].text, e.data.effect)
-		else
-			skipped = skipped + 1
 		end
 		if e.data.expectEffectId then
 			eq("seq " .. tostring(e.seq) .. " curse effect id", curses.items[1] and curses.items[1].effectId, e.data.expectEffectId)
@@ -137,12 +140,33 @@ for i = 1, table.getn(events) do
 		local nb = SurvivorUI_RebornNextBoss()
 		eq("seq " .. tostring(e.seq) .. " boss mode", nb and nb.mode, e.data.nextBoss and e.data.nextBoss.mode)
 		eq("seq " .. tostring(e.seq) .. " boss state", nb and nb.state, e.data.nextBoss and e.data.nextBoss.state)
-	else
-		skipped = skipped + 1
+	elseif e.type == "rift_snapshot" then
+		AZS_UNITS, AZS_RIFT = e.data.units, e.data.rift
+		local bosses = SurvivorUI_RebornRiftBosses()
+		local boss
+		for _, entry in ipairs(bosses) do
+			if entry.id == e.data.id then boss = entry; break end
+		end
+		eq("seq " .. tostring(e.seq) .. " rift state", boss and boss.state, e.data.state)
+		eq("seq " .. tostring(e.seq) .. " rift missing", boss and boss.missing == true, e.data.missing == true)
+	elseif e.type == "guardian_snapshot" then
+		AZS_LAIRS_UPDATED = e.data.stamp
+		eq("seq " .. tostring(e.seq) .. " guardian time", SurvivorUI_RebornGuardianLeft(e.data.lair), e.data.left)
 	end
+	local counted = coverage[e.type] or { checked = 0, skipped = 0 }
+	coverage[e.type] = counted
+	if checks > before then counted.checked = counted.checked + 1
+	else counted.skipped = counted.skipped + 1; skipped = skipped + 1 end
 end
 
 print(string.format("\n%d checks, %d failed, %d events skipped/unsupported", checks, failures, skipped))
+local eventTypes = {}
+for kind in pairs(coverage) do table.insert(eventTypes, kind) end
+table.sort(eventTypes)
+for _, kind in ipairs(eventTypes) do
+	local counted = coverage[kind]
+	print(string.format("  %s: %d checked, %d skipped", kind, counted.checked, counted.skipped))
+end
 if checks == 0 then
 	print("FAIL replay produced zero meaningful checks")
 	os.exit(1)

@@ -433,7 +433,19 @@ local function Keep(record)
 	local last = history[1]
 	if record.rebornRunId then
 		for _, saved in ipairs(history) do
-			if saved.rebornRunId == record.rebornRunId and saved.hero == record.hero then
+			if saved.rebornRunId == record.rebornRunId and (saved.hero == record.hero or saved.summaryOnly) then
+				if saved.summaryOnly and not record.summaryOnly then
+					for key, value in pairs(record) do
+						if saved[key] == nil or key == "hero" or key == "zone" then saved[key] = value end
+					end
+					saved.summaryOnly = nil
+				end
+				if saved.buildComplete ~= true and record.buildComplete == true then
+					saved.build, saved.buildComplete = record.build, true
+				end
+				for key, value in pairs(record) do
+					if saved[key] == nil and key ~= "buildComplete" then saved[key] = value end
+				end
 				return saved
 			end
 		end
@@ -513,7 +525,31 @@ local function Settle(summary)
 		moment = nil
 	end
 	lastKept = nil
-	if not (moment and math.abs(time() - Num(moment.at)) < 60) then
+	if summaryId and not currentId and not (moment and moment.rebornRunId == summaryId) then
+		-- The HUD may already be back in a lobby or on a different hero.
+		-- Use the matching stored run or the summary alone in that case.
+		for _, saved in ipairs(History()) do
+			if saved.rebornRunId == summaryId then
+				if Num(summary.endl) == 1 and result ~= "victory" then
+					moment = saved.endless
+				else
+					moment = saved
+				end
+				break
+			end
+		end
+		if not moment or moment.rebornRunId ~= summaryId then
+			if (Num(summary.endl) == 1 and result ~= "victory")
+				or (result ~= "victory" and Settings().historyWhich == "victories") then return end
+			moment = Keep({ rebornRunId = summaryId, summaryOnly = true, buildComplete = false,
+				hero = "?", zone = "?", at = time(), when = date("%Y-%m-%d %H:%M"),
+				result = result, build = {}, time = Num(summary.t), kills = Num(summary.kills) })
+		end
+	elseif moment and moment.buildComplete == false and currentId and moment.rebornRunId == currentId
+		and not (Num(summary.endl) == 1 and result ~= "victory") then
+		moment = Keep(Snapshot(result))
+	end
+	if not (moment and ((summaryId and not currentId) or math.abs(time() - Num(moment.at)) < 60)) then
 		moment = nil
 		local last = History()[1]
 		if Num(summary.endl) == 1 and result ~= "victory" then

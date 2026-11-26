@@ -408,6 +408,11 @@ legacy matching for records without them. Build can show the native
 current spell description after receiving it for the same run and rank.
 New history records mark the Build snapshot as partial when the full
 Reborn ability snapshot was unavailable at the time of capture.
+After a run boundary the UI waits for a new request before admitting an
+ability snapshot. If an earlier request could still reply, the first
+ambiguous snapshot is discarded and the normal throttle governs a retry.
+The wire reply has no request or run ID, so this protects the observed
+boundary cases without providing protocol-level reply attribution.
 
 Debug logging is **off by default** (`SurvivorUIDB.rebornDebug`).
 Diagnostics never send addon messages except through the game's own

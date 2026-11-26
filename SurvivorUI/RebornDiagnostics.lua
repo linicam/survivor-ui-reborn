@@ -499,7 +499,7 @@ if AZS and type(AZS.On) == "function" then
 	end)
 	AZS.On("AZSLAIRS", ObserveGuardianLairs)
 	local function ObserveRift()
-		if not recording or not SurvivorUI_RebornRiftBosses then return end
+		if not SurvivorUI_RebornRiftBosses then return end
 		if SurvivorUI_RebornCheckRun then SurvivorUI_RebornCheckRun() end
 		SurvivorUI_RebornRiftBosses()
 	end

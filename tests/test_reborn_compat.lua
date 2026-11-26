@@ -978,15 +978,49 @@ eq("history identity: protocol placeholder ignored", SurvivorUI_RebornStableRunI
 local spell = { key = "fireball", rank = 3, text = "Base description" }
 AZS_ZONE.run = "azs:rabcdef01"
 AZS_API_RunId = nil
-AZS_SPELLS = { { key = "fireball", rank = 3 } }
+AZS_SPELLS = {}
+AZS_SPELLTIPS.fireball = "Current damage 125"
 compatHandlers.AZSSPELLTIP("key=fireball;text=Current damage 125")
+AZS_SPELLS = { { key = "fireball", rank = 3 } }
 local currentLines = SurvivorUI_RebornAbilityTooltipLines(spell)
 eq("spell tips: current text from native event", currentLines[3] and currentLines[3].text, "Current damage 125")
+AZS_SPELLTIPS = { fireball = "Current damage 150" }
+eq("spell tips: replaced native table invalidates older text", table.getn(SurvivorUI_RebornAbilityTooltipLines(spell)), 2)
+compatHandlers.AZSSPELLTIP("key=fireball;text=Current damage 150")
+eq("spell tips: same rank accepts refreshed text", SurvivorUI_RebornAbilityTooltipLines(spell)[3].text, "Current damage 150")
+spell.text = "Updated ability snapshot"
+eq("spell tips: changed description excludes an older native tip", table.getn(SurvivorUI_RebornAbilityTooltipLines(spell)), 2)
+spell.text = "Base description"
 spell.rank = 4
 eq("spell tips: older rank excluded", table.getn(SurvivorUI_RebornAbilityTooltipLines(spell)), 2)
 spell.rank = 3
 AZS_ZONE.run = "azs:rabcdef02"
 eq("spell tips: earlier run excluded", table.getn(SurvivorUI_RebornAbilityTooltipLines(spell)), 2)
+
+for _, sentEarly in ipairs({ false, true }) do
+	SurvivorUI_RebornForgetRun()
+	AZS_ZONE.run = "azs:r11111111"
+	AZS_ABILITIES = {}
+	AZS_SPELLS = { { key = "old_spell", rank = 1 } }
+	SurvivorUI_RebornCheckRun()
+	SurvivorUI_RebornRequestAbilities(true)
+	AZS_ZONE.run = "azs:r22222222"
+	compatHandlers.AZSZONE()
+	if sentEarly then SurvivorUI_RebornRequestAbilities(true) end
+	AZS_ABILITIES = { { key = "old_passive", passive = true, rank = 1 } }
+	AZS_ABILITIES_UPDATED = 901
+	if sentEarly then compatHandlers.AZSABILITIES() end
+	local partial = SurvivorUI_RebornAbilities()
+	eq("run boundary: late reply does not complete new build", partial.complete, false)
+	eq("run boundary: old passive and old action bar excluded", table.getn(partial.all), 0)
+	SurvivorUI_RebornRequestAbilities(true)
+	AZS_SPELLS = { { key = "new_spell", rank = 1 } }
+	AZS_ABILITIES = { { key = "new_passive", passive = true, rank = 1 } }
+	AZS_ABILITIES_UPDATED = 902
+	eq("run boundary: new reply completes via stamp reader", SurvivorUI_RebornAbilities().complete, true)
+	compatHandlers.AZSZONE()
+	eq("run boundary: stage sharing run ID keeps accepted data", SurvivorUI_RebornAbilities().complete, true)
+end
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

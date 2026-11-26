@@ -131,6 +131,10 @@ local lastRecordedSignature = nil
 local lastRecordedTexts = {}
 local lastRequestCardsStamp = nil
 local requestRunId = nil
+local blockedAbilityTable, rejectedAbilityTable, blockedSpellsTable
+local rejectNextAbilityReply, requireAbilityRequest
+local acceptedAbilities
+local observedAbilityTable, observedSpellsTable
 local abilitiesRequested = false
 local rankHistory = {}  -- [key] = { rank, firstSeen, increases }
 local rankEvents = {}   -- array of { key, from, to, at }
@@ -248,6 +252,7 @@ local racialSampleStamp = nil
 local eventCurses = {}
 local riftBosses = {}
 local riftBossOrder = {}
+local portalState, portalGeneration = nil, 0
 local guardianSamples = {}
 local seenCurseIds = {}
 local curseBoundary = {}
@@ -274,6 +279,8 @@ end
 
 local function ResetOwnCaches()
 	abilitiesCache = nil
+	acceptedAbilities = nil
+	observedAbilityTable, observedSpellsTable = nil, nil
 	abilitiesStamp = nil
 	spellsStamp = nil
 	abilitiesSeen = {}
@@ -292,6 +299,7 @@ local function ResetOwnCaches()
 	activeCurses = {}
 	riftBosses = {}
 	riftBossOrder = {}
+	portalState, portalGeneration = nil, 0
 	guardianSamples = {}
 	racialCooldownSample = nil
 	racialSampleStamp = AZS_ABILITIES_UPDATED
@@ -311,6 +319,13 @@ local function ResetOwnCaches()
 	end
 end
 
+local function GuardAbilityBoundary()
+	rejectNextAbilityReply = rejectNextAbilityReply or requestRunId ~= nil
+	requireAbilityRequest = true
+	blockedAbilityTable, blockedSpellsTable = AZS_ABILITIES, AZS_SPELLS
+	rejectedAbilityTable = nil
+end
+
 -- Call on every draw / poll that already runs: cheap (one string compare).
 -- Returns true when a new run started in this call.
 function SurvivorUI_RebornCheckRun()
@@ -318,6 +333,7 @@ function SurvivorUI_RebornCheckRun()
 	local id = SurvivorUI_RebornRunId()
 	if id and id ~= lastRunId then
 		local first = lastRunId == nil
+		if not first then GuardAbilityBoundary() end
 		lastRunId = id
 		if SurvivorUI_RebornRecord then
 			SurvivorUI_RebornRecord("run_transition", { to = id, first = first })
@@ -340,6 +356,7 @@ function SurvivorUI_RebornCheckRun()
 	if not id and lastRunId ~= nil then
 		local run = AZS_RUN
 		if not (type(run) == "table" and run.ph == "playing") then
+			GuardAbilityBoundary()
 			lastRunId = nil
 			ResetOwnCaches()
 			for _, fn in pairs(resetWatchers) do
@@ -355,6 +372,8 @@ end
 -- treats the run as new. Does not touch SavedVariables.
 function SurvivorUI_RebornForgetRun()
 	lastRunId = nil
+	blockedAbilityTable, rejectedAbilityTable, blockedSpellsTable = nil, nil, nil
+	rejectNextAbilityReply, requireAbilityRequest = nil, nil
 	ResetOwnCaches()
 end
 
@@ -603,6 +622,25 @@ end
 -- (the live bar line updates every second; the snapshot is a
 -- requested reply and can be older). Order: snapshot order first,
 -- then spells-only abilities in bar order.
+local function ReadAbilitySnapshot()
+	local rows = AZS_ABILITIES
+	if type(rows) ~= "table" or table.getn(rows) == 0
+		or rows == blockedAbilityTable or rows == rejectedAbilityTable then return nil end
+	if rows == acceptedAbilities then return rows end
+	if rejectNextAbilityReply or (requireAbilityRequest and (not requestRunId or requestRunId ~= SurvivorUI_RebornRunId())) then
+		rejectedAbilityTable = rows
+		rejectNextAbilityReply, requestRunId = nil, nil
+		return nil
+	end
+	requestRunId, requireAbilityRequest = nil, nil
+	return rows
+end
+
+local function CheckAbilityRun()
+	local run = SurvivorUI_RebornRunId()
+	if lastRunId and run and run ~= lastRunId then SurvivorUI_RebornCheckRun() end
+end
+
 local function RefreshAbilitiesCache()
 	local merged = {}
 	local byKey = {}
@@ -624,13 +662,14 @@ local function RefreshAbilitiesCache()
 			if a.cdmax ~= nil then keep.cdmax = a.cdmax end
 		end
 	end
-	local abilities = AZS_ABILITIES
+	local abilities = ReadAbilitySnapshot()
+	acceptedAbilities = abilities
 	if type(abilities) == "table" then
 		for i = 1, table.getn(abilities) do
 			Add(abilities[i], false)
 		end
 	end
-	local spells = AZS_SPELLS
+	local spells = AZS_SPELLS ~= blockedSpellsTable and AZS_SPELLS or nil
 	if type(spells) == "table" then
 		for i = 1, table.getn(spells) do
 			Add(spells[i], true)
@@ -640,6 +679,7 @@ local function RefreshAbilitiesCache()
 	abilitiesSeen = byKey
 	abilitiesStamp = AZS_ABILITIES_UPDATED
 	spellsStamp = AZS_SPELLS_UPDATED
+	observedAbilityTable, observedSpellsTable = AZS_ABILITIES, AZS_SPELLS
 	if SurvivorUI_RebornRecord and SurvivorUI_RebornRecording and SurvivorUI_RebornRecording() then
 		local parts = {}
 		local textChanges = {}
@@ -658,7 +698,7 @@ local function RefreshAbilitiesCache()
 		if signature ~= lastRecordedSignature then
 			lastRecordedSignature = signature
 			SurvivorUI_RebornRecord("abilities_update", {
-				rawAbilities = AZS_ABILITIES, rawSpells = AZS_SPELLS, normalized = merged,
+				rawAbilities = abilities, rawSpells = spells, normalized = merged,
 				textChanges = textChanges,
 			})
 		end
@@ -667,7 +707,7 @@ local function RefreshAbilitiesCache()
 	-- Only a genuinely new AZS_ABILITIES snapshot may move the
 	-- racial cooldown sample; AZS_SPELLS-only refreshes reuse the
 	-- same stale cd and must keep the original timestamp.
-	if AZS_ABILITIES_UPDATED ~= racialSampleStamp then
+	if abilities and AZS_ABILITIES_UPDATED ~= racialSampleStamp then
 		racialSampleStamp = AZS_ABILITIES_UPDATED
 		racialCooldownSample = nil
 		for i = 1, table.getn(merged) do
@@ -706,20 +746,22 @@ end
 -- For a re-homed racial, "has a cooldown" is judged by cdmax (the
 -- cooldown the ability has), not cd (the cooldown remaining).
 function SurvivorUI_RebornAbilities()
+	CheckAbilityRun()
 	-- The snapshot table is replaced on every line: re-read it when its
 	-- stamp moved, and re-request (throttled) when it is still empty.
-	if AZS_ABILITIES_UPDATED ~= abilitiesStamp or AZS_SPELLS_UPDATED ~= spellsStamp then
+	if AZS_ABILITIES_UPDATED ~= abilitiesStamp or AZS_SPELLS_UPDATED ~= spellsStamp
+		or AZS_ABILITIES ~= observedAbilityTable or AZS_SPELLS ~= observedSpellsTable then
 		RefreshAbilitiesCache()
 	elseif not abilitiesCache then
 		RefreshAbilitiesCache()
 	end
-	if (not abilitiesCache or table.getn(abilitiesCache) == 0) and AZS_RequestAbilities then
+	if (not abilitiesCache or table.getn(abilitiesCache) == 0 or requireAbilityRequest) and AZS_RequestAbilities then
 		SurvivorUI_RebornRequestAbilities(false)
 	end
 	local all = abilitiesCache or {}
 	local actives, passives, racials = {}, {}, {}
 	local fromAbilities = false
-	if type(AZS_ABILITIES) == "table" and table.getn(AZS_ABILITIES) > 0 then
+	if acceptedAbilities then
 		fromAbilities = true
 	end
 	for i = 1, table.getn(all) do
@@ -880,7 +922,7 @@ function SurvivorUI_RebornRequestAbilities(force)
 		return false
 	end
 	local now = Now()
-	local snapshotEmpty = type(AZS_ABILITIES) ~= "table" or table.getn(AZS_ABILITIES) == 0
+	local snapshotEmpty = requireAbilityRequest or type(AZS_ABILITIES) ~= "table" or table.getn(AZS_ABILITIES) == 0
 	local signature = BuildSignature()
 	local changed = signature ~= lastRequestSignature
 		or (AZS_CARDS_UPDATED ~= nil and AZS_CARDS_UPDATED ~= lastRequestCardsStamp)
@@ -937,13 +979,7 @@ SurvivorUI_RebornRegisterReset(function() nativeSpellTips = {} end)
 local function RegisterAbilitiesHandler()
 	if AZS and AZS.On then
 		local ok, err = pcall(AZS.On, "AZSABILITIES", function()
-			-- A delayed reply to a previous run's request must not
-			-- contaminate the new run: drop it and re-request.
-			local current = SurvivorUI_RebornRunId()
-			if requestRunId and current and requestRunId ~= current then
-				SurvivorUI_RebornRequestAbilities(true)
-				return
-			end
+			CheckAbilityRun()
 			RefreshAbilitiesCache()
 			SurvivorUI_RebornDebug("AZSABILITIES received:", AZS_ABILITIES and table.getn(AZS_ABILITIES) or 0, "abilities")
 		end)
@@ -959,14 +995,16 @@ local function RegisterAbilitiesHandler()
 				local key, description = string.match(message, "^key=([^;]+);text=(.*)$")
 				local runId = SurvivorUI_RebornRunId()
 				if not key or not runId then return end
-				nativeSpellTips[key] = nil
-				for _, spell in ipairs(AZS_SPELLS or {}) do
-					local rank = tonumber(Field(spell, "rank", 3))
-					if Field(spell, "key", 1) == key and rank and rank > 0 and description ~= "" then
-						nativeSpellTips[key] = { run = runId, rank = rank, text = description }
+				local rank
+				for _, spell in ipairs((AZS_SPELLS ~= blockedSpellsTable and AZS_SPELLS) or {}) do
+					if Field(spell, "key", 1) == key then
+						rank = tonumber(Field(spell, "rank", 3))
 						break
 					end
 				end
+				local known = abilitiesSeen[key]
+				nativeSpellTips[key] = description ~= "" and { run = runId, rank = rank,
+					text = description, baseText = known and known.text } or nil
 			end)
 		end
 		if not ok then
@@ -1066,10 +1104,22 @@ function SurvivorUI_RebornAbilityTooltipLines(ability)
 		table.insert(lines, { text = ability.text, kind = "base" })
 	end
 	local live = ability.key and nativeSpellTips[ability.key]
-	if live and live.rank == tonumber(ability.rank) and live.run == SurvivorUI_RebornRunId()
-		and live.text ~= ability.text then
-		table.insert(lines, { text = T("Current effect"), kind = "current_label" })
-		table.insert(lines, { text = live.text, kind = "current" })
+	if live and live.run == SurvivorUI_RebornRunId() and type(AZS_SPELLTIPS) == "table"
+		and AZS_SPELLTIPS[ability.key] == live.text then
+		if not live.rank and AZS_SPELLS ~= blockedSpellsTable then
+			for _, spell in ipairs(AZS_SPELLS or {}) do
+				if Field(spell, "key", 1) == ability.key then
+					live.rank = tonumber(Field(spell, "rank", 3))
+					break
+				end
+			end
+		end
+		if live.baseText == nil then live.baseText = ability.text end
+		if live.baseText == ability.text and live.rank and live.rank > 0
+			and live.rank == tonumber(ability.rank) and live.text ~= ability.text then
+			table.insert(lines, { text = T("Current effect"), kind = "current_label" })
+			table.insert(lines, { text = live.text, kind = "current" })
+		end
 	end
 	if ability.passive then
 		table.insert(lines, { text = T("Passive"), kind = "passive" })
@@ -1818,6 +1868,10 @@ function SurvivorUI_RebornRiftBosses()
 	end
 	local runNow = AZS_GetRunTime and AZS_GetRunTime() or 0
 	local riftState = type(AZS_RIFT) == "table" and AZS_RIFT.st
+	if riftState == "boss" and portalState ~= "boss" then
+		portalGeneration = portalGeneration + 1
+	end
+	if riftState then portalState = riftState end
 	local present = {}
 	if type(AZS_UNITS) == "table" then
 		for i = 1, table.getn(AZS_UNITS) do
@@ -1839,7 +1893,6 @@ function SurvivorUI_RebornRiftBosses()
 				boss.hpm = tonumber(Field(unit, "hpm", 5))
 				boss.healthShare = boss.hp and boss.hpm and boss.hpm > 0
 					and math.max(0, math.min(1, boss.hp / boss.hpm)) or nil
-				if riftState == "boss" then boss.seenDuringPortal = true end
 				boss.enraged = tonumber(Field(unit, "state", 6)) == 1 or nil
 				if boss.hp and boss.hp > 0 then
 					if (boss.missing or boss.state == "dead") and SurvivorUI_RebornRecord then
@@ -1847,8 +1900,9 @@ function SurvivorUI_RebornRiftBosses()
 					end
 					boss.state, boss.fell = "up", nil
 				end
+				if riftState == "boss" and boss.state ~= "dead" then boss.portalGeneration = portalGeneration end
 				boss.missing = nil
-				if boss.hp and boss.hp <= 0 and boss.state ~= "dead" then
+				if boss.hp == 0 and boss.state ~= "dead" then
 					boss.state = "dead"
 					boss.fell = runNow
 					if SurvivorUI_RebornRecord then
@@ -1862,7 +1916,7 @@ function SurvivorUI_RebornRiftBosses()
 	local portalBoss
 	local portalCandidates = 0
 	for _, boss in pairs(riftBosses) do
-		if boss.seenDuringPortal then
+		if portalGeneration > 0 and boss.portalGeneration == portalGeneration then
 			portalBoss = boss
 			portalCandidates = portalCandidates + 1
 		end
