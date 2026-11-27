@@ -1409,6 +1409,10 @@ end
 -- or nil. Callers must display the aggregate separately and must never
 -- attribute it to a single piece.
 function SurvivorUI_RebornJewelry(force)
+	-- The original game also exposes the Meter API. Its loadout does not
+	-- replace inventory jewelry in the Build List or Run History.
+	if not SurvivorUI_RebornActive() then return { items = {}, source = "none", duplicates = 0 } end
+
 	local now = Now()
 	if not force and jewelryCache and now - lastLoadoutAt < 2 then
 		return jewelryCache

@@ -276,6 +276,7 @@ eq("rank history: increases reset", SurvivorUI_RebornRankIncreases("fireball"), 
 -- Jewelry (DEFENSIVE shapes: loadout source fields are not documented)
 -- ===========================================================================
 resetGame()
+AZS_RequestAbilities = function() end
 AZS_ZONE = { run = "azs:r33333333" }
 AZS_GetMeterContext = function() return { runId = "azs:r33333333", ownerId = "hero:Test" } end
 AZS_GetMeterLoadout = function(req)
@@ -320,6 +321,7 @@ check("jewelry error: code kept", jew.error and jew.error.code == "NO_RUN")
 
 -- AZSGEAR fallback when there is no loadout function (DEFENSIVE shape).
 resetGame()
+AZS_RUN = { ph = "playing", nbm = "time" }
 AZS_GetMeterLoadout = nil
 AZSGEAR = {
 	{ key = "accuria", name = "Band of Accuria", icon = "INV_Jewelry_Ring_15", slot = "ring", rank = 4 },
@@ -330,6 +332,7 @@ eq("jewelry gear fallback: items", table.getn(jew.items), 1)
 
 -- Aggregate g* shares are reported as an aggregate, never per-item.
 resetGame()
+AZS_RequestAbilities = function() end
 AZS_STATS = { gdmg = 0.25, gcd = 0.1, ghp = 0 }
 AZS_GetMeterLoadout = function(req) return { runJewelry = {}, sources = {} } end
 jew = SurvivorUI_RebornJewelry(true)
@@ -340,6 +343,7 @@ check("jewelry aggregate: not on the item", table.getn(jew.items) == 0)
 
 -- Unknown / empty loadout shape: no crash, source none.
 resetGame()
+AZS_RequestAbilities = function() end
 AZS_GetMeterLoadout = function(req) return {} end
 jew = SurvivorUI_RebornJewelry(true)
 eq("jewelry empty shape: source none", jew.source, "none")
@@ -443,6 +447,7 @@ eq("round2 tooltip: event timestamp", evs[1] and evs[1].at, 72)
 -- Jewelry: same sourceKey with two distinct itemInstanceKeys merges
 -- (count 2); two different pieces both ranked 55 stay distinct;
 -- slots come from sourceKey.
+AZS_RequestAbilities = function() end
 AZS_GetMeterLoadout = function(req)
 	return {
 		runJewelry = {
@@ -506,6 +511,7 @@ AZS_RUN = {}
 check("audit detection: meter loadout alone is not Reborn", SurvivorUI_RebornActive() == false)
 AZS_RequestAbilities = savedRequest
 resetGame()
+AZS_RequestAbilities = function() end
 AZS_ZONE = { run = "azs:r44444444" }
 AZS_GetMeterContext = function() return { runId = "azs:r44444444", localOwnerId = "hero:me" } end
 AZS_GetMeterLoadout = function()
@@ -537,6 +543,7 @@ AZS_RequestAbilities = goodRequest
 check("pr4 request: retry after failure allowed", SurvivorUI_RebornRequestAbilities(true) == true)
 resetGame()
 AZS_ZONE = { run = "azs:r66666666" }
+AZS_RequestAbilities = function() end
 AZS_GetMeterContext = function() return { runId = "azs:r66666666", localOwnerId = "hero:me" } end
 AZS_GetMeterLoadout = function() return { runJewelry = {}, sources = {} } end
 local jew3 = SurvivorUI_RebornJewelry(true)
@@ -844,6 +851,7 @@ eq("stats: original client ignored", SurvivorUI_RebornStatCap("cdr"), nil)
 dofile("SurvivorUI/LocaleData.lua")
 dofile("SurvivorUI/Locale.lua")
 dofile("SurvivorUI/Locale_zh.lua")
+AZS_RequestAbilities = function() end
 AZS_ZONE.rname = "Human"
 local locale = "en"
 AZS_GetMeterCapabilities = function() return { languageCode = locale } end
