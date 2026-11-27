@@ -3019,10 +3019,13 @@ local PAGES = {
 	{ "Not DoTs", "ground", BuildGround },
 	{ "Reduction", "armor", BuildArmor },
 	{ "Speed", "reach", BuildReach },
-	{ "Marks", "marks", BuildMarks },
-	{ "Sets", "sets", BuildSets },
-	{ "Jewels", "jewels", BuildJewels },
 }
+
+if not SurvivorUI_RebornActive() then
+	table.insert(PAGES, { "Marks", "marks", BuildMarks })
+	table.insert(PAGES, { "Sets", "sets", BuildSets })
+end
+table.insert(PAGES, { "Jewels", "jewels", BuildJewels })
 
 local divider = window:CreateTexture(nil, "ARTWORK")
 divider:SetTexture(FLAT)

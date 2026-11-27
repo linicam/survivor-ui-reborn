@@ -1643,14 +1643,6 @@ end
 
 local page = pages.global
 Header(page, "Global", "Settings for the whole addon: its font, its color and its size, and the mouse cursor.")
-if SurvivorUI_RebornGearOpen and SurvivorUI_RebornActive() then
-	Button(page, "Open Gear & Difficulty", 200, 0, function()
-		if SurvivorUI_RebornGearOpen("show") then panel:Hide() end
-	end)
-	page.y = page.y - 28
-	Check(page, "Enable Gear & Difficulty", SurvivorUI_RebornGearEnabled, SurvivorUI_RebornGearToggle,
-		"Read current equipment in Dalaran and Campaigns. Compare difficulty and plan upgrades in Campaigns.")
-end
 Subheader(page, "Font")
 FontPicker(page, "Global font",
 	function() return SurvivorUI_GlobalFont and SurvivorUI_GlobalFont() end,

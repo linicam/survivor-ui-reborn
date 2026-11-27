@@ -1,5 +1,13 @@
 # Gear & Difficulty Analyzer
 
+**Historical reference.** The analyzer and simulator were built for the
+pre-0.8.0 deterministic equipment system. They are suspended following the
+random-loot overhaul. The addon manifest omits the legacy modules on all
+clients. Existing preferences and baselines remain available as historical
+data. Use the game's equipment interface for current gear.
+
+## Historical workflow
+
 Enter the Campaign map and difficulty you want to evaluate. Open **Survivor UI → Global → Open Gear & Difficulty** or use `/sui gear` in the world. The native character window's **Upgrades** button opens the same tool. Hover an equipped slot there for its next-star and next-tier previews. In Dalaran the tool opens directly to the Equipment Simulator with current equipment, quotes and set comparisons. Enter a Campaign for map comparisons and upgrade plans.
 
 Use **Set 100% Baseline** on a familiar configuration for each class. The addon stores the actual map, tier, reported modifiers, equipped item identities, model inputs, active sets, game/data version and time. A later selection leaves the saved configuration in place until you use **Update 100% Baseline**. Compatible inputs are reevaluated under the current model, even when the server build or model version changes. The UI calls out changed modeled baseline values. Uninterpretable or unsupported configurations remain stored with an explanation. Legacy map-only references and cached gear are left on disk for compatibility and stay outside the live analysis.
