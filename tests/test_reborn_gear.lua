@@ -387,7 +387,12 @@ function CreateFrame(kind, name, parent)
 	function w:Disable() self.disabled = true end
 	function w:RegisterEvent(key) self.events[key] = true end
 	function w:UnregisterEvent(key) self.events[key] = nil end
-	function w:GetStringHeight() return 14 end
+	function w:GetStringHeight()
+		if type(self.text) ~= "string" then return 14 end
+		local text = string.gsub(string.gsub(self.text, "|c%x%x%x%x%x%x%x%x", ""), "|r", "")
+		local glyphs = #string.gsub(text, "[\128-\191]", "")
+		return 14 * math.max(1, math.ceil(glyphs * 6 / math.max(1, self.width or 200)))
+	end
 	function w:SetWidth(value) self.width = value end
 	function w:SetHeight(value) self.height = value end
 	function w:SetScale(value) self.scale = value end
@@ -411,10 +416,17 @@ function CreateFrame(kind, name, parent)
 	function w:SetVerticalScroll(value) self.offset = value end
 	function w:SetBackdropColor(r, g, b, a) self.backgroundAlpha = a end
 	function w:SetTextColor(r, g, b) self.textColor = { r, g, b } end
+	function w:SetPoint(...) self.point = { ... } end
+	function w:ClearAllPoints() self.point = nil end
+	function w:SetScrollChild(child) self.scrollChild = child end
 	table.insert(widgets, w)
-	for _, method in ipairs({ "SetPoint", "ClearAllPoints", "SetAllPoints", "SetBackdrop", "SetBackdropBorderColor",
-		"SetScrollChild", "SetJustifyH", "SetTexture", "SetFont", "SetAlpha", "SetThumbTexture",
+	for _, method in ipairs({ "SetAllPoints", "SetBackdrop", "SetBackdropBorderColor",
+		"SetJustifyH", "SetTexture", "SetFont", "SetAlpha", "SetThumbTexture",
 		"SetVertexColor", "SetOrientation", "SetClampedToScreen" }) do w[method] = function() end end
+	if kind == "GameTooltip" then
+		for _, method in ipairs({ "SetOwner", "SetText", "IsOwned", "AddLine", "Hide" }) do w[method] = GameTooltip[method] end
+		function w:NumLines() return #self.lines end
+	end
 	return w
 end
 function SurvivorUI_GoldButton(parent, width, _, _, caption)
@@ -487,6 +499,14 @@ function hooksecurefunc(target, method, callback)
 end
 
 dofile("SurvivorUI/RebornGear.lua")
+local originalSearch, searchCalls, searchLimit = P.Search, 0
+function P.Search(catalog, context, actual, reference, allowed, budget)
+	searchCalls = searchCalls + 1
+	return originalSearch(catalog, context, actual, reference, allowed, searchLimit or budget)
+end
+local function Named(name)
+	for _, widget in ipairs(widgets) do if widget.name == "SurvivorUIRebornGear" .. name then return widget end end
+end
 local function Find(kind, text, children)
 	local function Visible(widget)
 		while widget do
@@ -497,6 +517,7 @@ local function Find(kind, text, children)
 	end
 	for _, w in ipairs(widgets) do
 		local caption = type(w.text) == "table" and w.text.text or w.text
+		if w.kind == "Button" and w.lines then caption = w.lines[1].text end
 		if w.kind == kind and Visible(w) and (not children or w.parent == children)
 			and type(caption) == "string" and string.find(caption, text, 1, true) then return w end
 	end
@@ -532,13 +553,20 @@ local function HoverIcon(slot, planned)
 	for _, row in ipairs(widgets) do
 		if row.slot == slot and row.shown and row.iconButton.shown and (row.plan ~= nil) == planned then
 			row.iconButton.scripts.OnEnter()
-			return table.concat(GameTooltip.lines, "\n")
+			local tip = Named("Tooltip")
+			if tip.shown then return table.concat(tip.lines, "\n") end
 		end
 	end
 end
-local function TooltipColor(text)
-	for i, line in ipairs(GameTooltip.lines) do
-		if string.find(line, text, 1, true) then return GameTooltip.colors[i] end
+local function TooltipColor(text, tip)
+	tip = tip or GameTooltip
+	for i, line in ipairs(tip.lines) do
+		if string.find(line, text, 1, true) then return tip.colors[i] end
+	end
+end
+local function StatCells(parent, label)
+	for _, row in ipairs(widgets) do
+		if row.parent == parent and row.shown and row.label and row.label.text == label then return row.cells end
 	end
 end
 local function VisiblePanel()
@@ -563,10 +591,12 @@ assert(Find("FontString", "Waiting for the game's world snapshot"))
 Zone("elwynn", 0, "warlock", "a")
 assert(Find("FontString", "Warlock · Elwynn Forest · Normal"))
 assert(Find("FontString", "Current equipment unavailable"))
-assert(Find("Button", "Set Current Configuration").disabled)
+assert(Find("Button", "Set 100% Baseline").disabled)
+assert(Find("FontString", "Waiting for equipment"))
 local head = { slot = "0", rarity = "0", stars = "0", icon = "INV_Test", name = "Test item" }
 Armor({ head })
 assert(not Find("FontString", "100% reference:"))
+assert(Find("FontString", "Comparable baseline required"))
 local tooltip = dollSlot:Hover()
 assert(dollSlot.hooks == 1 and string.find(tooltip, "Native tooltip", 1, true))
 assert(string.find(tooltip, "408 gold", 1, true) and string.find(tooltip, "Next tier", 1, true))
@@ -579,12 +609,12 @@ AZSInspect:Hide()
 assert(not GameTooltip.shown)
 AZSInspect.shown = true
 Armor({ head })
-Click("Set Current Configuration")
+Click("Set 100% Baseline")
 local saved = assert(SurvivorUIDB.rebornGear.baselines.warlock)
 assert(saved.zone == "elwynn" and saved.level == 0 and saved.at == 1234 and saved.modifiers.affixes == "")
 assert(saved.pieces[1].name == "Test item" and saved.pieces[1].stars == 0 and Find("FontString", "Combined pressure 100.0%"))
 assert(Find("FontString", "No upgrade is needed for this target"))
-assert(Find("FontString", "Lower pressure is better"))
+assert(Find("FontString", "Lower is better"))
 assert(string.find(dollSlot:Hover(), "Combined pressure 100.0% →", 1, true))
 assert(TooltipColor("Damage +")[2] == 1 and TooltipColor("Combined pressure 100.0% →")[2] == 1)
 assert(not Find("FontString", "Output uses gear Damage"))
@@ -602,36 +632,38 @@ Click("Equipment Simulator")
 local edit = assert(SlotMenu("head", "legendary"))
 edit()
 assert(string.find(HoverIcon("head", false), "Simulated item · Legendary", 1, true))
-assert(TooltipColor("Damage +")[2] == 1)
+assert(TooltipColor("Damage +", Named("Tooltip"))[2] == 1)
+assert(Named("Tooltip").backgroundAlpha == 1 and not GameTooltip:IsOwned(Named("Tooltip")))
 local changeStar = assert(SlotMenu("head", 2, "stars"))
 changeStar()
-assert(not GameTooltip.shown, "simulator edits clear tooltips")
+assert(not Named("Tooltip").shown, "simulator edits clear its tooltip")
 assert(string.find(HoverIcon("head", false), "★2 → ★3", 1, true))
 assert(string.find(HoverIcon("shoulders", false), "Empty slot", 1, true))
-assert(Find("FontString", "Compared with actual gear") and Find("FontString", "Replacement gear is hypothetical"))
+assert(StatCells(Named("Results"), "Combined pressure") and Find("FontString", "Replacement acquisition is conditional"))
 assert(SlotMenu("head", "common"))()
 assert(string.find(HoverIcon("head", false), "Simulated item · Common", 1, true), "manual simulator allows lower tiers")
 assert(SlotMenu("head", "legendary"))()
 assert(saved.pieces[1].stars == 0 and saved.pieces[1].tier == "common" and head.rarity == "0")
 Armor({ head })
-assert(Find("FontString", "Replacement gear is hypothetical"), "duplicate native gear updates preserve the simulation")
+assert(Find("FontString", "Replacement acquisition is conditional"), "duplicate native gear updates preserve the simulation")
 AZS_ZONE = P.Copy(AZS_ZONE)
 AZS_ZONE.aff = 2
 handlers.AZSZONE()
-assert(Find("FontString", "Replacement gear is hypothetical"), "replaced equivalent zone and legacy affix metadata keep state")
+assert(Find("FontString", "Replacement acquisition is conditional"), "replaced equivalent zone and legacy affix metadata keep state")
 Click("Load Plan B")
-assert(not Find("FontString", "Replacement gear is hypothetical"))
+assert(not Find("FontString", "Replacement acquisition is conditional"))
 Click("Difficulty & Upgrade Planner")
 assert(not Find("Button", "Reset to Actual Equipment"))
 edit()
-assert(not Find("FontString", "Replacement gear is hypothetical"), "stale dropdown callbacks cannot edit the planner")
+assert(not Find("FontString", "Replacement acquisition is conditional"), "stale dropdown callbacks cannot edit the planner")
 
 Zone("naxx", 1, "warlock", "b")
 assert(Find("FontString", "Naxxramas · Heroic I") and Find("FontString", "Current equipment unavailable"))
 assert(Find("FontString", "Additional difficulty rules are omitted for the target"))
-assert(Find("Button", "Set Current Configuration").disabled)
+assert(Find("Button", "Update 100% Baseline").disabled)
 Armor({ head })
 assert(VisiblePanel().scripts.OnUpdate, "both plans are event-triggered, then sliced")
+assert(Find("FontString", "Searching equipment combinations…"))
 Click("Equipment Simulator")
 assert(not VisiblePanel().scripts.OnUpdate, "simulator editing suspends optimizer work")
 Click("Difficulty & Upgrade Planner")
@@ -640,23 +672,67 @@ assert(Find("FontString", "Plan A") and Find("FontString", "Plan B"))
 local planned = assert(HoverIcon("head", true))
 assert(string.find(planned, "Planned item Common ★0 →", 1, true))
 assert(string.find(planned, "Isolated item combined pressure", 1, true) and string.find(planned, "Full plan combined pressure", 1, true))
-assert(TooltipColor("Full plan combined pressure")[2] == 1)
+assert(TooltipColor("Full plan combined pressure", Named("Tooltip"))[2] == 1)
+local gearPane, effectsPane = Named("Equipment"), Named("Effects")
+assert(gearPane.point[5] == Named("Results").point[5] and gearPane.point[4] + gearPane.width < effectsPane.point[4])
+assert(Find("FontString", "Equipment slot") and StatCells(effectsPane.scrollChild, "Damage"))
+local lastStat = StatCells(effectsPane.scrollChild, "Gold find")[1].parent
+assert(-lastStat.point[5] + lastStat.height <= effectsPane.height, "standard viewport fits all core attributes")
+local planA, planB = assert(Find("Button", "Plan A")), assert(Find("Button", "Plan B"))
+assert(planA.lit and not planB.lit and string.find(planA.lines[2].text, "gold") and string.find(planB.lines[2].text, "gold"))
+local searched = searchCalls
+local damageA = StatCells(effectsPane.scrollChild, "Damage")[2].text
+local pressureA = StatCells(Named("Results"), "Combined pressure")[2].text
+Click("Plan B · Stars only")
+assert(planB.lit and not planA.lit and searchCalls == searched and not VisiblePanel().scripts.OnUpdate)
+local damageB = StatCells(effectsPane.scrollChild, "Damage")[2].text
+assert(damageB ~= damageA, "selection updates the complete right-hand configuration")
 Click("Equipment Simulator")
-assert(not GameTooltip.shown)
+assert(SlotMenu("head", 2, "stars"))()
+local independentlyEditedDamage = StatCells(effectsPane.scrollChild, "Damage")[2].text
+Click("Difficulty & Upgrade Planner")
+Click("Plan A · Current expansion drops")
+assert(StatCells(effectsPane.scrollChild, "Damage")[2].text == damageA and not Named("Tooltip").shown)
+Click("Equipment Simulator")
+assert(StatCells(effectsPane.scrollChild, "Damage")[2].text == independentlyEditedDamage)
+Click("Difficulty & Upgrade Planner")
+local function PlanRows()
+	local count = 0
+	for _, row in ipairs(widgets) do if row.parent == gearPane.scrollChild and row.shown and row.slot then count = count + 1 end end
+	return count
+end
+local changedRows = PlanRows()
+Click("Show full equipment")
+assert(PlanRows() >= changedRows and Find("Button", "Show changes only"))
+Click("Show changes only")
+assert(PlanRows() == changedRows)
+Click("Load in Simulator")
+assert(StatCells(effectsPane.scrollChild, "Damage")[2].text == damageA)
+assert(StatCells(Named("Results"), "Combined pressure")[2].text == pressureA)
+assert(searchCalls == searched)
+Click("Equipment Simulator")
+assert(not Named("Tooltip").shown)
 Click("Load Plan A")
 assert(Find("FontString", "Calculable upgrade gold:") and not VisiblePanel().scripts.OnUpdate)
 if Find("Button", "Reset to Actual Equipment") then Click("Reset to Actual Equipment") end
 assert(SlotMenu("head", false))()
 local lostDamage = assert(Find("FontString", "-8.40 pp"))
 assert(lostDamage.textColor[1] == 1 and lostDamage.textColor[2] < 0.6)
-local noChange = assert(Find("FontString", "—"))
+local noChange = StatCells(effectsPane.scrollChild, "Critical strike")[3]
 assert(noChange.textColor[1] == 0.72 and noChange.textColor[2] == 0.73)
-assert(string.find(Find("FontString", "Compared with actual gear").text, "|cffff8484+", 1, true), "higher pressure is red")
+local morePressure = StatCells(Named("Results"), "Combined pressure")[3]
+assert(string.find(morePressure.text, "+", 1, true) and morePressure.textColor[1] == 1, "higher pressure is red")
 assert(Find("Button", "Reset to Actual Equipment"))
 Click("Reset to Actual Equipment")
-assert(Find("FontString", "Calculable upgrade gold: 0") and not Find("FontString", "Changes and acquisition"))
+assert(Find("FontString", "Calculable upgrade gold: 0") and Find("Button", "Reset to Actual Equipment").disabled)
 Click("Difficulty & Upgrade Planner")
 assert(saved == SurvivorUIDB.rebornGear.baselines.warlock)
+searchLimit = 1
+Zone("shadowmoon", 5, "warlock", "budget")
+Armor({ head })
+DrainSearch()
+assert(Find("FontString", "reachability unproven"))
+searchLimit = nil
 AZS_ZONE.affixes = { "Sanguine", "Explosive" }
 handlers.AZSZONE()
 assert(Find("FontString", "Current equipment unavailable"), "in-place modifier changes invalidate gear")
@@ -668,7 +744,7 @@ AZS_ZONE.mode = "swarm"
 handlers.AZSZONE()
 Armor({ head })
 assert(Find("FontString", "Campaign pressure and plans are unavailable in this mode"))
-assert(not VisiblePanel().scripts.OnUpdate and not Find("Button", "Set Current Configuration"))
+assert(not VisiblePanel().scripts.OnUpdate and not Find("Button", "Update 100% Baseline"))
 AZS_ZONE.zone, AZS_ZONE.dt, AZS_ZONE.heroic = "elwynn", 0, 0
 Armor({ head })
 assert(Find("FontString", "Waiting for the game's world snapshot"), "armor before an announced zone is rejected")
@@ -683,23 +759,23 @@ assert(GameTooltip:IsOwned(foreign) and GameTooltip.shown)
 assert(Find("FontString", "Current equipment unavailable"), "a replaced run ID invalidates the inherited gear")
 Zone("naxx", 0, "paladin", "c")
 Armor({})
-Click("Set Current Configuration")
+Click("Set 100% Baseline")
 assert(#SurvivorUIDB.rebornGear.baselines.paladin.pieces == 0 and SurvivorUIDB.rebornGear.baselines.warlock == saved)
 Zone("dalaran", 0, "paladin", "d")
 assert(Find("FontString", "Enter a Campaign to compare map difficulty"))
-assert(not Find("Button", "Set Current Configuration") and not Find("Button", "Difficulty & Upgrade Planner"))
+assert(not Find("Button", "Update 100% Baseline") and not Find("Button", "Difficulty & Upgrade Planner"))
 assert(not Find("FontString", "Combined pressure") and not Find("FontString", "Plan A") and not Find("FontString", "100% reference:"))
 Armor({ head })
 assert(Find("FontString", "Equipment attributes") and Find("FontString", "Actual") and Find("FontString", "Simulated"))
 assert(Find("FontString", "Output") and Find("FontString", "Survival") and Find("FontString", "Utility"))
 assert(SlotMenu("head", "legendary"))()
 assert(Find("FontString", "pp") and Find("FontString", "%"), "only the delta column uses percentage points")
-assert(Find("FontString", "Calculable upgrade gold") and Find("FontString", "Changes and acquisition"))
+assert(Find("FontString", "Calculable upgrade gold") and Find("FontString", "Worn:"))
 assert(not string.find(HoverIcon("head", false), "pressure", 1, true))
 assert(SurvivorUIDB.rebornGear.baselines.paladin.zone == "naxx" and head.rarity == "0")
 Zone("elwynn", 0, "paladin", "physical-hub", nil, 1)
 Armor({ head })
-assert(Find("FontString", "Enter a Campaign") and not Find("Button", "Set Current Configuration") and not VisiblePanel().scripts.OnUpdate)
+assert(Find("FontString", "Enter a Campaign") and not Find("Button", "Update 100% Baseline") and not VisiblePanel().scripts.OnUpdate)
 WorldEvent()
 assert(not VisiblePanel():IsShown() and not VisiblePanel().scripts.OnUpdate)
 assert(SurvivorUI_RebornGearOpen("show") and Find("FontString", "Waiting for the game's world snapshot"))
@@ -727,10 +803,14 @@ Zone("elwynn", 0, "warlock", "f")
 Armor({ head })
 assert(SurvivorUI_RebornGearOpen("show") and Find("FontString", "综合压力 100.0%"))
 assert(string.find(dollSlot:Hover(), "408 金币", 1, true) and string.find(dollSlot:Hover(), "下一品质", 1, true))
-Click("装备模拟器")
+Click("Equipment Simulator") -- This persistent tab was built before the mock switched locale.
+GameTooltip:SetOwner(foreign)
+GameTooltip:SetText("Unrelated tooltip")
+GameTooltip:Show()
 assert(string.find(HoverIcon("head", false), "模拟装备", 1, true))
 VisiblePanel():Hide()
-assert(not GameTooltip.shown, "closing the analyzer clears only its own tip")
+assert(not Named("Tooltip").shown and GameTooltip:IsOwned(foreign) and GameTooltip.shown)
+GameTooltip:Hide()
 
 -- The host menu handles Escape before special windows. Check the analyzer's
 -- input path, without claiming that a mocked event dispatch proves native focus.
@@ -739,20 +819,30 @@ UIParent:SetWidth(525)
 UIParent:SetHeight(420)
 assert(SurvivorUI_RebornGearOpen("simulator"))
 local panel = VisiblePanel()
-local shade, popup, scroller, scrollbar, keyTimer
+local shade, popup, keyTimer
 for _, widget in ipairs(widgets) do
 	if widget.parent == UIParent and widget ~= panel and widget.strata == "FULLSCREEN_DIALOG" then shade = widget end
 	if widget.parent == panel and widget.items then popup = widget end
-	if widget.parent == panel and widget.kind == "ScrollFrame" then scroller = widget end
-	if widget.parent == panel and widget.kind == "Slider" then scrollbar = widget end
 end
-assert(panel.width == 485 and panel.height == 380 and panel.backgroundAlpha == 1)
+near(panel.width * panel.scale, 493)
+near(panel.height * panel.scale, 388)
+assert(panel.backgroundAlpha == 1 and gearPane.point[4] == effectsPane.point[4] and gearPane.point[5] > effectsPane.point[5])
 assert(shade.shown and shade.mouse and shade.wheel and shade.level == nil and panel.level > shade:GetFrameLevel())
 assert(panel.keyboard and GameMenuFrame.shown and popup:GetFrameLevel() > panel:GetFrameLevel())
 assert(Find("FontString", "装备属性") and Find("FontString", "辅助"))
-assert(scrollbar.shown)
-scroller.scripts.OnMouseWheel(scroller, -1)
-assert(scroller.offset == 44)
+local fixedSummary = Named("Results").point
+local previousContext = Named("Context").point
+gearPane.scripts.OnMouseWheel(gearPane, -1)
+assert(gearPane.offset > 0 and effectsPane.offset == 0)
+effectsPane.scripts.OnMouseWheel(effectsPane, -1)
+assert(effectsPane.offset > 0 and gearPane.offset <= 44)
+local effectOffset, editSearches = effectsPane.offset, searchCalls
+local localizedStar = assert(SlotMenu("head", 2, "stars"))
+assert(not HoverIcon("head", false), "an open popup suppresses analyzer tooltips")
+localizedStar()
+assert(effectsPane.offset == effectOffset and searchCalls == editSearches)
+assert(Named("Context").point == previousContext and Named("Results").point[5] <= fixedSummary[5])
+assert(StatCells(effectsPane.scrollChild, "伤害")[3].text:find("个百分点"))
 local function OpenTier()
 	for _, row in ipairs(widgets) do
 		if row.slot == "head" and row.shown and row.tier and row.tier.shown then row.tier.scripts.OnClick(); return end
@@ -776,19 +866,19 @@ keyTimer.scripts.OnUpdate()
 assert(not popup.shown and panel.shown and GameMenuFrame.shown)
 OpenTier()
 assert(popup.shown)
-scroller.scripts.OnMouseWheel(scroller, -1)
-assert(not popup.shown and scroller.offset == 88)
+gearPane.scripts.OnMouseWheel(gearPane, -1)
+assert(not popup.shown and gearPane.offset > 44 and effectsPane.offset == effectOffset)
 HoverIcon("head", false)
 panel.scripts.OnKeyDown(panel, "ESCAPE")
 clock = 0.34
 keyTimer.scripts.OnUpdate()
 assert(not panel.shown and not panel.keyboard and not shade.shown and not keyTimer.scripts.OnUpdate)
-assert(GameMenuFrame.shown and not GameTooltip.shown, "dismissing the analyzer leaves the native menu and clears its own tooltip")
+assert(GameMenuFrame.shown and not Named("Tooltip").shown, "dismissing the analyzer leaves the native menu and clears its own tooltip")
 assert(not panel.events.DISPLAY_SIZE_CHANGED and not panel.events.UI_SCALE_CHANGED)
 assert(SurvivorUI_RebornGearOpen("show") and panel.events.DISPLAY_SIZE_CHANGED and panel.events.UI_SCALE_CHANGED)
 UIParent:SetWidth(465)
 panel.scripts.OnEvent(panel, "DISPLAY_SIZE_CHANGED")
-near(panel.width, 432)
+near(panel.width * panel.scale, 433)
 assert(panel.scale < 1 and shade.shown)
 assert(SurvivorUI_T("Close") == "关闭")
 Click("Close") -- The persistent frame was built while the mock was enUS.
@@ -802,6 +892,32 @@ Armor({ head })
 dollSlot:Hover()
 WorldEvent()
 assert(not GameTooltip.shown, "world entry clears the tracked native extension")
+
+-- Feed each view the same completed plan across a real set threshold. The
+-- mock controls candidate selection only; both views run the real evaluator.
+function P.Search(_, context, actual, reference, drops)
+	local target = drops and P.Replace(context.pieces, "chest", "common", 1) or context.pieces
+	local _, quote = P.Changes(cat, context.pieces, target, drops, context.class)
+	return { pieces = target, gold = quote.gold, complete = true,
+		after = P.Difficulty(context.demand, drops and Eval(target) or actual, reference).combined }
+end
+Zone("naxx", 1, "warlock", "set-comparison")
+Armor({ { slot = 0, rarity = 0, stars = 1 }, { slot = 1, rarity = 0, stars = 1 },
+	{ slot = 2, rarity = 0, stars = 0 }, { slot = 3, rarity = 0, stars = 1 } })
+assert(SurvivorUI_RebornGearOpen("show"))
+local set = assert(Find("FontString", "套装激活"))
+local fullDamage = StatCells(effectsPane.scrollChild, "伤害")[2].text
+local setPressure = StatCells(Named("Results"), "综合压力")[2].text
+local setLabel = set.text
+Click("方案 B · 仅升星")
+assert(not Find("FontString", "套装激活"))
+Click("方案 A · 当前资料片掉落")
+Click("Load in Simulator")
+assert(Find("FontString", "可计算的升级金币：408") and Find("FontString", setLabel))
+assert(StatCells(effectsPane.scrollChild, "伤害")[2].text == fullDamage)
+assert(StatCells(Named("Results"), "综合压力")[2].text == setPressure)
+P.Search = originalSearch
+WorldEvent()
 
 -- Load the real recorder for the native feed and late-start integration.
 dofile("SurvivorUI/RebornDiagnostics.lua")
