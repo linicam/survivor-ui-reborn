@@ -215,7 +215,25 @@ local _, unknownQuote = P.Changes(cat, outputCase.pieces, unknown.maxGear.pieces
 assert(unknown.complete and unknown.excluded and not unknown.unreachable and unknown.verifiedBestOutputPressure <= 100)
 assert(unknownQuote.unknown and unknown.maxGear.gold == unknownQuote.gold)
 assert(RunOutput(4, 3).unreachable, "even known unpriced paths cannot reach this output target")
-cat.tiers.common.starFactor = savedStarFactor
+do
+	local unpricedBudget = Finish(P.Search(cat, outputCase, outputActual, outputRef, nil, 5000, P.Policy({ budget = 20000 })))
+	assert(unpricedBudget.excluded and unpricedBudget.unreachable and unpricedBudget.affordable.gold == 0)
+	cat.tiers.common.starFactor = savedStarFactor
+	assert(P.Policy({}).target == 100 and P.Policy({}).protectSets and P.Policy({}).budget == nil)
+	assert(P.Policy({ budget = 0 }).budget == 0 and P.Policy({ protectSets = false }).protectSets == false)
+	assert(P.Policy({ target = math.huge, budget = -1 }).target == 100 and P.Policy({ budget = 0.1 }).budget == nil)
+	outputCase.demand = { output = outputRef.demand.output * 1.04, survival = outputRef.demand.survival * 3 }
+	for _, budget in ipairs({ 0, 407, 408, 409, 20000 }) do
+		local solved = Finish(P.Search(cat, outputCase, outputActual, outputRef, nil, 5000, P.Policy({ budget = budget })))
+		local chosen = solved.affordable or solved
+		assert(solved.minimumTargetCost == 408 and solved.complete and chosen.complete)
+		assert(chosen.gold == (budget < 408 and 0 or 408) and (chosen.outputPressure <= 100) == (budget >= 408))
+end
+local meets = Finish(P.Search(cat, outputCase, outputActual, outputRef, nil, 5000, P.Policy({ budget = 20000, target = 150 })))
+assert(meets.minimumTargetCost == 0 and meets.gold == 0 and meets.maxGear.gold > 0)
+local truncated = Finish(P.Search(cat, outputCase, outputActual, outputRef, nil, 1, P.Policy({ budget = 1200, target = 80 })))
+assert(not truncated.complete and not truncated.unreachable and not truncated.affordable.complete and truncated.affordable.gold <= 1200)
+end
 AZS_GEN.pieces.slots[0].stats = headStats
 
 -- Independent exhaustive oracle: every available star combination is evaluated
@@ -338,6 +356,16 @@ assert(kept.legendary[1].pieces == 4 and kept.common[1].pieces == 4, "both compe
 assert(bothProtected.unreachable and bothProtected.maxGear.protectedHolds == 8)
 local maxSets = Eval(bothProtected.maxGear.pieces).sets
 assert(maxSets.legendary[1].pieces == 4 and maxSets.common[1].pieces == 4)
+do
+	local unprotected = Finish(P.Search(cat, mixed, twoSets, twoSetsRef, { exotic = true }, 12000,
+		P.Policy({ protectSets = false, budget = 0 })))
+	local protectedBudget = Finish(P.Search(cat, mixed, twoSets, twoSetsRef, { exotic = true }, 12000, P.Policy({ budget = 0 })))
+	assert(unprotected.affordable.complete and unprotected.affordable.gold == 0)
+	assert(unprotected.affordable.outputPressure < protectedBudget.affordable.outputPressure)
+	assert(not Eval(unprotected.maxGear.pieces).sets.legendary and not Eval(unprotected.maxGear.pieces).sets.common)
+	local lost = P.Execution(cat, mixed, twoSets, unprotected.maxGear.pieces, twoSetsRef, { exotic = true })
+	assert(not lost.preserves and lost.gold == unprotected.maxGear.gold)
+end
 AZS_GEN.setBonuses[1].text = knownText
 
 -- Five actual Legendary pieces compete to fill four protected slots. One is
@@ -373,6 +401,10 @@ rogueCase.demand.output = rogueRef.demand.output * 15
 local unknownDrop = Finish(P.Search(cat, rogueCase, rogueActual, rogueRef, { exotic = true }, 12000))
 assert(unknownDrop.complete and unknownDrop.unverifiedDrops and not unknownDrop.unreachable)
 assert(not P.BySlot(unknownDrop.maxGear.pieces).off_hand, "unknown drop is excluded from the reference configuration")
+do
+	local unknownBudget = Finish(P.Search(cat, rogueCase, rogueActual, rogueRef, { exotic = true }, 12000, P.Policy({ budget = 0 })))
+	assert(unknownBudget.affordable.gold == 0 and not unknownBudget.unreachable and unknownBudget.unverifiedDrops)
+end
 
 -- Quality is not a substitute for the computed Damage of a configuration.
 local scaleSlot, scaleProfile = cat.tiers.exotic.slot, cat.tiers.exotic.profile
@@ -469,6 +501,122 @@ for index, stats in pairs(armorStats) do AZS_GEN.pieces.slots[index].stats = sta
 G.DropSlot = originalDrop
 cat.pieces.scale.top = savedTop
 
+-- Independently enumerate a mixed-quality space with one eligible empty
+-- slot and two worn choices. Check both target cost and affordable output.
+local function BudgetOracles()
+	local context = P.Copy(source)
+	context.pieces = {}
+	for i = 1, 9 do
+		if i ~= 3 then table.insert(context.pieces, Item(keys[i], i == 1 and "rare" or i == 9 and "common" or "mythic",
+			(i == 1 or i == 9) and 2 or 5)) end
+	end
+	local actualGear = Eval(context.pieces)
+	local reference = P.Reference(context, actualGear)
+	local choices = {}
+	local combinations = {}
+	local function Enumerate(i, gold, rank, allowDrops)
+		if i > 9 then
+			local pieces = {}
+			for _, key in ipairs(keys) do if choices[key] then table.insert(pieces, choices[key]) end end
+			table.insert(combinations, { pieces = pieces, evaluation = Eval(pieces), gold = gold, rank = rank })
+			return
+		end
+		local slot = keys[i]
+		local before = P.BySlot(context.pieces)[slot]
+		local function Stars(tier, first, rankCost)
+			local additional = 0
+			for s = first, 5 do
+				if s > first then additional = additional + priceTable[tier][s] end
+				choices[slot] = Item(slot, tier, s)
+				Enumerate(i + 1, gold + additional, rank + rankCost, allowDrops)
+			end
+		end
+		if before then Stars(before.tier, before.stars, 0)
+		else choices[slot] = nil; Enumerate(i + 1, gold, rank, allowDrops) end
+		if allowDrops and (i == 1 or i == 3 or i == 9) then Stars("exotic", 0, before and 10 or 1) end
+	end
+	local count = 0
+	for _, mode in ipairs({ "A", "B" }) do
+		local allowed = mode == "A" and { exotic = true } or nil
+		combinations = {}
+		Enumerate(1, 0, 0, allowed)
+		for _, target in ipairs({ 72, 100, 118, 175 }) do
+			context.demand.output = 1.4 * reference.demand.output
+			for _, budget in ipairs({ 0, 2365, 2366, 8125, 24000, 50000, 170000 }) do
+				local minimum, winner, winnerPressure
+				local currentPressure = P.Difficulty(context.demand, actualGear, reference).output
+				for _, row in ipairs(combinations) do
+					local pressure = P.Difficulty(context.demand, row.evaluation, reference).output
+					local meets = pressure <= target
+					if meets then minimum = math.min(minimum or math.huge, row.gold) end
+					if row.gold <= budget then
+						local winnerMeets = winner and winnerPressure <= target
+						local cheaper = winner and (row.gold < winner.gold or (row.gold == winner.gold and row.rank < winner.rank))
+						if not winner or (meets and (not winnerMeets or cheaper))
+							or (not meets and not winnerMeets and (pressure < winnerPressure - 1e-10
+								or (math.abs(pressure - winnerPressure) < 1e-10 and cheaper))) then
+							winner, winnerPressure = row, pressure
+						end
+					end
+				end
+				local solution = Finish(P.Search(cat, context, actualGear, reference, allowed, 20000,
+					P.Policy({ target = target, budget = budget })))
+				local chosen = solution.affordable or solution
+				assert(solution.complete and chosen.complete and solution.minimumTargetCost == minimum)
+				local _, quote = P.Changes(cat, context.pieces, chosen.pieces, allowed, context.class)
+				assert(chosen.gold == quote.gold and chosen.gold == winner.gold and chosen.gold <= budget)
+				if currentPressure <= target then
+					assert(chosen.acquisitionRank == 0 and chosen.gold == 0)
+				elseif winnerPressure <= target then
+					assert(chosen.outputPressure <= target and chosen.acquisitionRank == winner.rank)
+				else
+					near(chosen.outputPressure, winnerPressure)
+					assert(chosen.acquisitionRank == winner.rank)
+				end
+				count = count + 1
+			end
+		end
+	end
+	assert(count == 56)
+end
+BudgetOracles()
+
+local function ExecutionTransition()
+	local context = P.Copy(source)
+	context.pieces = {}
+	for i = 1, 8 do
+		context.pieces[i] = Item(keys[i], "common", (i == 1 or i == 2 or i == 7 or i == 8) and 1 or 0)
+	end
+	local equipped = Eval(context.pieces)
+	local reference = P.Reference(context, equipped)
+	local target = P.Replace(context.pieces, "head", "exotic", 2)
+	target = P.Replace(target, "shoulders", "exotic", 1)
+	target = P.Replace(target, "chest", "common", 2)
+	target = P.Replace(target, "legs", "common", 1)
+	local drops = { exotic = true }
+	local sequence = P.Execution(cat, context, equipped, target, reference, drops)
+	local _, quote = P.Changes(cat, context.pieces, target, drops, context.class)
+	assert(sequence.preserves and sequence.gold == quote.gold)
+	local acquired, total = {}, 0
+	for _, step in ipairs(sequence.steps) do
+		assert(step.afterSets.common and step.afterSets.common[1].pieces == 4)
+		if step.kind == "acquire" then
+			assert(step.stars == 0 and step.quote.kind == "farm")
+			acquired[step.slot] = true
+		else
+			assert(step.stars > step.from)
+			if step.tier == "exotic" then assert(acquired[step.slot] and step.from == 0) end
+		end
+		total = total + step.quote.gold
+		assert(total == step.cumulative and step.output)
+	end
+	local final = P.BySlot(sequence.pieces)
+	for _, piece in ipairs(target) do assert(P.SamePiece(piece, final[piece.slot])) end
+end
+AZS_GEN.setBonuses[1].text = "Unquantified combat"
+ExecutionTransition()
+AZS_GEN.setBonuses[1].text = knownText
+
 -- Event and widget mocks follow the native zone-before-armor sync contract.
 local widgets, handlers, commands = {}, {}, {}
 function CreateFrame(kind, name, parent)
@@ -477,6 +625,8 @@ function CreateFrame(kind, name, parent)
 	function w:CreateTexture() return CreateFrame("Texture", nil, self) end
 	function w:SetScript(key, fn) self.scripts[key] = fn end
 	function w:SetText(text) self.text = text end
+	function w:GetText() return self.text end
+	function w:ClearFocus() if self.scripts.OnEditFocusLost then self.scripts.OnEditFocusLost(self) end end
 	function w:Show() self.shown = true end
 	function w:Hide()
 		local before = self.shown
@@ -523,7 +673,7 @@ function CreateFrame(kind, name, parent)
 	table.insert(widgets, w)
 	for _, method in ipairs({ "SetAllPoints", "SetBackdrop", "SetBackdropBorderColor",
 		"SetJustifyH", "SetTexture", "SetFont", "SetAlpha", "SetThumbTexture",
-		"SetVertexColor", "SetOrientation", "SetClampedToScreen" }) do w[method] = function() end end
+		"SetVertexColor", "SetOrientation", "SetClampedToScreen", "SetAutoFocus", "SetMaxLetters", "SetTextInsets" }) do w[method] = function() end end
 	if kind == "GameTooltip" then
 		for _, method in ipairs({ "SetOwner", "SetText", "IsOwned", "AddLine", "Hide" }) do w[method] = GameTooltip[method] end
 		function w:NumLines() return #self.lines end
@@ -601,9 +751,9 @@ end
 
 dofile("SurvivorUI/RebornGear.lua")
 local originalSearch, searchCalls, searchLimit = P.Search, 0
-function P.Search(catalog, context, actual, reference, allowed, budget)
+function P.Search(catalog, context, actual, reference, allowed, limit, policy)
 	searchCalls = searchCalls + 1
-	return originalSearch(catalog, context, actual, reference, allowed, searchLimit or budget)
+	return originalSearch(catalog, context, actual, reference, allowed, searchLimit or limit, policy)
 end
 local function Named(name)
 	for _, widget in ipairs(widgets) do if widget.name == "SurvivorUIRebornGear" .. name then return widget end end
@@ -627,6 +777,17 @@ local function Click(text)
 	local button = assert(Find("Button", text), text)
 	assert(not button.disabled, text)
 	button.scripts.OnClick()
+end
+local function Input(key)
+	for _, widget in ipairs(widgets) do
+		if widget.kind == "EditBox" and widget.key == key then return widget end
+	end
+end
+local function Enter(key, value)
+	local box = assert(Input(key))
+	box.scripts.OnEditFocusGained()
+	box:SetText(value)
+	box.scripts.OnEnterPressed()
 end
 local function Zone(key, level, class, run, affixes, hub)
 	AZS_ZONE = { hub = hub or (key == "dalaran" and 1 or 0), zone = key, dt = level, heroic = level, class = class, run = run, affixes = affixes }
@@ -712,7 +873,7 @@ AZSInspect.shown = true
 Armor({ head })
 Click("Set 100% Baseline")
 local saved = assert(SurvivorUIDB.rebornGear.baselines.warlock)
-assert(saved.zone == "elwynn" and saved.level == 0 and saved.at == 1234 and saved.modifiers.affixes == "")
+assert(saved.zone == "elwynn" and saved.level == 0 and saved.origin == "campaign" and saved.at == 1234 and saved.modifiers.affixes == "")
 assert(saved.pieces[1].name == "Test item" and saved.pieces[1].stars == 0)
 assert(StatCells(Named("Results"), "Output pressure")[1].text == "100.0%")
 assert(StatCells(Named("Results"), "Survival pressure")[1].text == "100.0%")
@@ -774,13 +935,14 @@ Click("Difficulty & Upgrade Planner")
 DrainSearch()
 assert(Find("FontString", "Plan A") and Find("FontString", "Plan B"))
 local planned = assert(HoverIcon("head", true))
-assert(string.find(planned, "Planned item Common ★0 →", 1, true))
-assert(string.find(planned, "Item only · Output pressure", 1, true) and string.find(planned, "Full plan · Output pressure", 1, true))
+assert(string.find(planned, "Planned item Test item · Common ★0 →", 1, true))
+assert(not string.find(planned, "pressure", 1, true) and not string.find(planned, "Set ", 1, true))
+assert(string.find(planned, "Damage +", 1, true) and string.find(planned, "obtain item through drops", 1, true))
 local gearPane, effectsPane = Named("Equipment"), Named("Effects")
 assert(gearPane.point[5] == Named("Results").point[5] and gearPane.point[4] + gearPane.width < effectsPane.point[4])
 assert(Find("FontString", "Equipment slot") and StatCells(effectsPane.scrollChild, "Damage"))
 local lastStat = StatCells(effectsPane.scrollChild, "Gold find")[1].parent
-assert(-lastStat.point[5] + lastStat.height <= effectsPane.height, "standard viewport fits all core attributes")
+assert(-lastStat.point[5] + lastStat.height <= effectsPane.height + 30, "standard viewport shows the core attribute groups")
 local planA, planB = assert(Find("Button", "Plan A")), assert(Find("Button", "Plan B"))
 assert(planA.lit and not planB.lit and string.find(planA.lines[2].text, "gold") and string.find(planB.lines[2].text, "gold"))
 local searched = searchCalls
@@ -830,6 +992,33 @@ Click("Reset to Actual Equipment")
 assert(Find("FontString", "Calculable upgrade gold: 0") and Find("Button", "Reset to Actual Equipment").disabled)
 Click("Difficulty & Upgrade Planner")
 assert(saved == SurvivorUIDB.rebornGear.baselines.warlock)
+do
+	local beforeSettings = searchCalls
+	local targetBox = Input("target")
+	targetBox.scripts.OnEditFocusGained()
+	targetBox:SetText("8")
+	targetBox:SetText("80")
+	assert(searchCalls == beforeSettings)
+	targetBox.scripts.OnEnterPressed()
+	assert(searchCalls == beforeSettings + 2 and SurvivorUIDB.rebornGear.target == 80)
+	Enter("budget", "0")
+	assert(searchCalls == beforeSettings + 4 and SurvivorUIDB.rebornGear.budget == 0)
+	Click("Protect sets: On")
+	assert(searchCalls == beforeSettings + 6 and SurvivorUIDB.rebornGear.protectSets == false)
+	assert(Find("FontString", "Plans may sacrifice set effects"))
+	DrainSearch()
+	assert(Find("FontString", "Modeled budget left: 0"))
+	Click("Execution order")
+	assert(Find("FontString", "Obtain and equip") and searchCalls == beforeSettings + 6)
+	Click("Show equipment")
+	Enter("budget", "-1")
+	assert(Find("FontString", "Enter whole gold") and SurvivorUIDB.rebornGear.budget == 0)
+	Enter("budget", "")
+	Click("Protect sets: Off")
+	Click("Reset")
+	assert(P.Policy(SurvivorUIDB.rebornGear).target == 100 and SurvivorUIDB.rebornGear.budget == nil)
+	assert(saved == SurvivorUIDB.rebornGear.baselines.warlock)
+end
 searchLimit = 1
 Zone("shadowmoon", 5, "warlock", "budget")
 Armor({ head })
@@ -907,25 +1096,46 @@ Armor({})
 Click("Set 100% Baseline")
 assert(#SurvivorUIDB.rebornGear.baselines.paladin.pieces == 0 and SurvivorUIDB.rebornGear.baselines.warlock == saved)
 Zone("dalaran", 0, "paladin", "d")
-assert(Find("FontString", "Enter a Campaign to compare map difficulty"))
-assert(not Find("Button", "Update 100% Baseline") and not Find("Button", "Difficulty & Upgrade Planner"))
-assert(not StatCells(Named("Results"), "Output pressure") and not Find("FontString", "Plan A") and not Find("FontString", "100% reference:"))
+assert(Find("FontString", "Theoretical Campaign preview"))
+assert(not Find("Button", "Update 100% Baseline") and Find("Button", "Difficulty & Upgrade Planner"))
+assert(not StatCells(Named("Results"), "Output pressure") and not Find("FontString", "Plan A") and Find("FontString", "100% reference:"))
 Armor({ head })
+Click("Select target map")
+Click("Elwynn Forest")
+maps.elwynn[9] = 1
+Click("Normal")
+assert(not Find("Button", "Heroic II"))
+Click("Heroic I")
+maps.elwynn[9] = nil
+DrainSearch()
+assert(StatCells(Named("Results"), "Output pressure") and Find("FontString", "Plan A"))
+assert(SurvivorUIDB.rebornGear.baselines.paladin.zone == "naxx")
+Click("Equipment Simulator")
+assert(SlotMenu("head", "legendary"))()
+Click("Difficulty & Upgrade Planner")
+Click("Update 100% Baseline")
+assert(SurvivorUIDB.rebornGear.baselines.paladin.zone == "elwynn"
+	and SurvivorUIDB.rebornGear.baselines.paladin.level == 1
+	and SurvivorUIDB.rebornGear.baselines.paladin.origin == "dalaran"
+	and SurvivorUIDB.rebornGear.baselines.warlock == saved)
+Click("Equipment Simulator")
 assert(Find("FontString", "Equipment attributes") and Find("FontString", "Actual") and Find("FontString", "Simulated"))
 assert(Find("FontString", "Output") and Find("FontString", "Survival") and Find("FontString", "Utility"))
-assert(SlotMenu("head", "legendary"))()
 assert(Find("FontString", "pp") and Find("FontString", "%"), "only the delta column uses percentage points")
 assert(Find("FontString", "Calculable upgrade gold") and Find("FontString", "Worn:"))
-assert(not string.find(HoverIcon("head", false), "pressure", 1, true))
-assert(SurvivorUIDB.rebornGear.baselines.paladin.zone == "naxx" and head.rarity == "0")
+assert(string.find(HoverIcon("head", false), "pressure", 1, true))
+assert(SurvivorUIDB.rebornGear.baselines.paladin.pieces[1].tier == "common" and head.rarity == "0")
 Zone("elwynn", 0, "paladin", "physical-hub", nil, 1)
 Armor({ head })
-assert(Find("FontString", "Enter a Campaign") and not Find("Button", "Update 100% Baseline") and not VisiblePanel().scripts.OnUpdate)
+assert(Find("FontString", "Theoretical Campaign preview") and not Find("Button", "Update 100% Baseline") and not VisiblePanel().scripts.OnUpdate)
 WorldEvent()
 assert(not VisiblePanel():IsShown() and not VisiblePanel().scripts.OnUpdate)
 assert(SurvivorUI_RebornGearOpen("show") and Find("FontString", "Waiting for the game's world snapshot"))
 Zone("naxx", 0, "warlock", "e")
+assert(Find("FontString", "Warlock · Naxxramas · Normal") and not Find("Button", "Heroic I"))
+assert(Find("FontString", "Current equipment unavailable"))
 Armor({ head })
+SurvivorUIDB.rebornGear.hubMap, SurvivorUIDB.rebornGear.hubDifficulty = nil, nil
 AZSInspect.unit = "party1"
 AZSInspect:RefreshDoll({ head })
 assert(dollSlot:Hover() == "Native tooltip")
@@ -947,6 +1157,7 @@ function SurvivorUI_T(text) return SurvivorUI_WORDS.zh[text] or text end
 Zone("elwynn", 0, "warlock", "f")
 Armor({ head })
 assert(SurvivorUI_RebornGearOpen("show") and StatCells(Named("Results"), "输出压力")[1].text == "100.0%")
+assert(Find("FontString", "目标输出压力") and Find("FontString", "金币预算") and Find("Button", "保护套装：开启"))
 assert(string.find(dollSlot:Hover(), "408 金币", 1, true) and string.find(dollSlot:Hover(), "下一品质", 1, true))
 Click("查看说明")
 assert(Find("FontString", "默认显示经济方案"))
@@ -1043,10 +1254,10 @@ assert(not GameTooltip.shown, "world entry clears the tracked native extension")
 
 -- Feed each view the same completed plan across a real set threshold. The
 -- mock controls candidate selection only; both views run the real evaluator.
-function P.Search(_, context, actual, reference, drops)
+function P.Search(_, context, actual, reference, drops, _, policy)
 	local target = drops and P.Replace(context.pieces, "chest", "common", 1) or context.pieces
 	local _, quote = P.Changes(cat, context.pieces, target, drops, context.class)
-	return { pieces = target, gold = quote.gold, complete = true,
+	return { pieces = target, gold = quote.gold, complete = true, target = policy.target,
 		outputPressure = P.Difficulty(context.demand, drops and Eval(target) or actual, reference).output }
 end
 Zone("naxx", 1, "warlock", "set-comparison")
@@ -1108,13 +1319,13 @@ assert(initial.ordering.world < initial.ordering.zone and initial.ordering.zone 
 assert(initial.ordering.associatedArmor == initial.ordering.armor)
 assert(initial.resolution.map == "unknown_campaign_key" and initial.resolution.difficulty == "ready")
 assert(initial.resolution.equipment == "ready" and not initial.resolution.saveBaseline)
-assert(initial.resolution.planA == "unknown_campaign_key" and initial.resolution.planB == "unknown_campaign_key")
+assert(initial.resolution.planA == "hub_without_campaign_target" and initial.resolution.planB == "hub_without_campaign_target")
 assert(initial.armor.source == "AZS_ARMOR" and initial.armor.rows[1].stars == 1)
 assert(initial.rawZone.fields.map == 571 and not initial.rawZone.fields.hero)
 assert(initial.cvarCandidates.azsDifficulty.value == "1")
 assert(initial.cvarCandidates.azsMenuMapZone.status == "absent")
 assert(initial.cvarCandidates.azsModeShown.status == "query_error" and not initial.cvarCandidates.azsModeShown.value)
-assert(Last("sync_request").resolution.pressure == "unknown_campaign_key")
+assert(Last("sync_request").resolution.pressure == "hub_without_campaign_target")
 
 handlers.AZSZONE("zone=dalaran;dt=0;heroic=0;hub=1;selected_zone=naxx;selected_tier=1;owner_token=PrivateTokenText")
 local zoneEvent = Last("AZSZONE")

@@ -63,6 +63,89 @@ end
 return Scenario
 """
 
+RECORDED = """
+local P, G = SurvivorUI_RebornGearPlanner, SurvivorUI_RebornGearModel
+local M, maps = SurvivorUI_RebornAnalysisModel, SurvivorUI_RebornMapReference
+local cat = assert(G.Catalog(AZS_GEN))
+local context = { class = "warlock", zone = "naxx", level = 0, demand = M.GearDemand(maps.naxx, 0), pieces = {} }
+local stars = { 1, 1, 0, 0, 0, 0, 1, 1, 0 }
+for i, level in ipairs(stars) do
+    context.pieces[i] = { slot = cat.pieces.slots[i - 1].key, tier = i == 9 and "exotic" or "legendary", stars = level }
+end
+local actual = assert(P.Evaluate(cat, context.class, context.pieces))
+local reference = assert(P.Reference(context, actual))
+context.zone, context.level = "shadowmoon", 1
+context.demand = M.GearDemand(maps[context.zone], context.level)
+local allowed = assert(P.DropTiers(cat, maps, maps[context.zone][7]))
+local expected = {
+    A = { { 332.2927, 165, 165648 }, { 332.2927, 115.2099, 447498 } },
+    B = { { 338.4984, 165, 142802 }, { 338.4984, 118.0221, 398052 } }
+}
+local function Check(result, drops, row)
+    local evaluation = P.Evaluate(cat, context.class, result.pieces)
+    local pressure = P.Difficulty(context.demand, evaluation, reference)
+    local _, quote = P.Changes(cat, context.pieces, result.pieces, drops, context.class)
+    assert(math.abs(pressure.output - result.outputPressure) < P.tolerance and quote.gold == result.gold)
+    if row then
+        assert(math.abs(pressure.output - row[1]) < 0.00005 and math.abs(pressure.survival - row[2]) < 0.00005
+            and result.gold == row[3])
+    end
+end
+return function(mode, target, budget)
+    local drops = mode == "A" and allowed or nil
+    local policy = P.Policy and P.Policy({ target = target, budget = budget })
+    local start = BenchmarkClock()
+    local result = P.Search(cat, context, actual, reference, drops, 150000, policy)
+    local updates = 0
+    while result.worker do P.Step(result, 240); updates = updates + 1 end
+    local elapsed = 1000 * (BenchmarkClock() - start)
+    assert(not result.error, result.error)
+    local chosen = result.affordable or result
+    Check(result, drops, target == 100 and expected[mode][1] or nil)
+    Check(chosen, drops)
+    if target == 100 then
+        Check(result.maxGear, drops, expected[mode][2])
+        assert(result.complete and result.unreachable)
+        if P.Execution then
+            local sequence = P.Execution(cat, context, actual, result.maxGear.pieces, reference, drops)
+            assert(sequence.preserves and sequence.gold == result.maxGear.gold)
+            for _, step in ipairs(sequence.steps) do
+                assert(step.afterSets.legendary and step.afterSets.legendary[1].pieces == 4)
+            end
+            local final = P.BySlot(sequence.pieces)
+            for _, piece in ipairs(result.maxGear.pieces) do assert(P.SamePiece(piece, final[piece.slot])) end
+        end
+    end
+    if budget then assert(chosen.gold <= budget) end
+    if target == 410 then assert(chosen.gold == 0 and result.minimumTargetCost == 0) end
+    return result.visited, result.affordable and result.affordable.visited or 0, updates, chosen.outputPressure,
+        chosen.gold, result.minimumTargetCost, result.complete, chosen.complete, elapsed
+end
+"""
+
+
+def recorded_benchmark(lua, repeat):
+    lua.globals().BenchmarkClock = perf_counter
+    run = lua.execute(RECORDED)
+    has_budget = lua.globals().SurvivorUI_RebornGearPlanner.Policy is not None
+    for mode in ("A", "B"):
+        cases = [(100, None)]
+        if has_budget:
+            cost = run(mode, 370, None)[5]
+            assert cost and cost > 0
+            cases += [(370, cost), (370, cost - 1), (100, 60000), (100, 0), (410, 60000)]
+        for target, budget in cases:
+            results = [run(mode, target, budget) for _ in range(repeat)]
+            nodes, budget_nodes, updates, output, spent, minimum, complete, budget_complete, _ = results[0]
+            assert all(row[:-1] == results[0][:-1] for row in results)
+            if target == 370 and budget == minimum:
+                assert output <= target and spent == minimum
+            if target == 370 and budget == minimum - 1:
+                assert output > target
+            print(f"recorded/{mode} target={target} budget={budget}: nodes={nodes}+{budget_nodes}, updates={updates}, "
+                  f"output={output:.4f}%, gold={spent}, target cost={minimum}, complete={complete}/{budget_complete}, "
+                  f"offline solver wall median={median(row[-1] for row in results):.3f} ms")
+
 
 def benchmark(lua, repeat):
     scenario = lua.execute(SCENARIOS)
@@ -107,6 +190,7 @@ def main():
     parser.add_argument("--source-root", type=Path, default=Path(__file__).resolve().parents[1],
                         help="checkout or exported source revision to benchmark")
     parser.add_argument("--repeat", type=int, default=5, help="deterministic searches per sample for timing")
+    parser.add_argument("--recorded", action="store_true", help="verify and benchmark the recorded Warlock loadout")
     args = parser.parse_args()
     if args.repeat < 1:
         parser.error("--repeat must be positive")
@@ -116,7 +200,10 @@ def main():
         lua.globals().dofile(str(args.source_root / "SurvivorUI" / f"{module}.lua"))
     if args.gear_csv:
         verify(lua, args.gear_csv)
-    benchmark(lua, args.repeat)
+    if args.recorded:
+        recorded_benchmark(lua, args.repeat)
+    else:
+        benchmark(lua, args.repeat)
 
 
 if __name__ == "__main__":
