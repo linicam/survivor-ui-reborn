@@ -23,9 +23,8 @@
 --     reload, and no request is sent automatically.
 --   * AZS_SPELLS ({ key, spell, rank, cd, cdmax }) keeps its action-bar
 --     layout only: it is NOT the full learned-ability list.
---   * AZS_GetMeterLoadout() returns a loadout whose data include AZSGEAR;
---     the AZSGEAR row shape is NOT published in the docs, so jewelry
---     parsing here is defensive and every field is probed, never assumed.
+--   * AZSGEAR updates the current AZS_GEAR rows. Native localized text
+--     gives the per-item effects. Meter may report the effect amount as rank.
 --   * AZS_STATS g* fields (ghp, gdmg, gcd, ...) are AGGREGATE jewelry
 --     contributions, never per-item effects. They are reported as an
 --     aggregate and never attributed to an individual piece.
@@ -141,14 +140,13 @@ local rankEvents = {}   -- array of { key, from, to, at }
 local jewelryCache = nil
 local equipmentRun, equipmentReady
 local equipment = {}
-local jewelryError = nil
-local lastLoadoutAt = 0
+local endObservation, priorEndObservation
 ------------------------------------------------------------------------------
 -- Detection and run identity
 
 -- True when the Reborn-only signals are present. The original game also
 -- exposes AZS_RUN / AZS_SPELLS, so those alone do not prove Reborn; the
--- snapshot ability API and the meter loadout are the Reborn signals, with
+-- snapshot ability API supplies the Reborn signal, with
 -- nbm/rift fields as a fallback. When none of these is present the
 -- helpers below return nil / empty and callers keep original behaviour.
 function SurvivorUI_RebornActive()
@@ -164,9 +162,6 @@ function SurvivorUI_RebornActive()
 	return false
 end
 
-function SurvivorUI_RebornRandomGear()
-	return SurvivorUI_RebornActive() and type(AZS_GEN) == "table" and type(AZS_GEN.itemRules) == "table"
-end
 
 -- The native run sheet and caps both use whole percentages.
 function SurvivorUI_RebornStatCap(key, observedValue)
@@ -303,8 +298,6 @@ local function ResetOwnCaches()
 	rankHistory = {}
 	rankEvents = {}
 	jewelryCache = nil
-	jewelryError = nil
-	lastLoadoutAt = 0
 	activeCurses = {}
 	riftBosses = {}
 	riftBossOrder = {}
@@ -382,6 +375,7 @@ end
 function SurvivorUI_RebornForgetRun()
 	lastRunId = nil
 	equipmentRun, equipmentReady, equipment = nil, nil, {}
+	endObservation, priorEndObservation = nil, nil
 	blockedAbilityTable, rejectedAbilityTable, blockedSpellsTable = nil, nil, nil
 	rejectNextAbilityReply, requireAbilityRequest = nil, nil
 	ResetOwnCaches()
@@ -393,11 +387,23 @@ local function EquipmentRun()
 	end
 end
 
--- Native globals can survive a run boundary. Only accept a replacement
--- delivered by the native router after this world's zone snapshot.
+-- Only native events establish freshness. Own the scalar rows so an in-place
+-- mutation cannot change an accepted observation without a new event.
 local function ObserveEquipment(kind, rows)
 	if equipmentReady and equipmentRun == EquipmentRun() and type(rows) == "table" then
-		equipment[kind] = rows
+		local snapshot = {}
+		for index, row in ipairs(rows) do
+			if type(row) == "table" then
+				local copy = {}
+				for key, value in pairs(row) do
+					if type(value) == "string" or type(value) == "number" then copy[key] = value end
+				end
+				snapshot[index] = copy
+			else
+				snapshot[index] = false
+			end
+		end
+		equipment[kind] = snapshot
 		if kind == "jewelry" then jewelryCache = nil end
 	end
 end
@@ -406,6 +412,52 @@ function SurvivorUI_RebornEquipmentObservations()
 	if equipmentReady and equipmentRun == EquipmentRun() then
 		return equipment
 	end
+end
+
+function SurvivorUI_RebornEquipmentPhase()
+	local observations = SurvivorUI_RebornEquipmentObservations()
+	if observations and observations.endless ~= nil then
+		return SurvivorUI_RebornStableRunId(equipmentRun), observations.endless
+	end
+end
+
+function SurvivorUI_RebornEndObservation()
+	return endObservation, priorEndObservation
+end
+
+local function ObserveEnd()
+	local summary = AZS_GetRunSummary and AZS_GetRunSummary() or AZS_END
+	if type(summary) ~= "table" or (summary.result ~= "victory" and summary.result ~= "defeat"
+		and summary.result ~= "dead" and summary.result ~= "left") then return end
+	local run = SurvivorUI_RebornEquipmentPhase()
+	local claimed = summary.runId or summary.run
+	if not run then return end
+	local endless = summary.result ~= "victory" and (equipment.endless == true or tonumber(summary.endl) == 1)
+	if (claimed and SurvivorUI_RebornStableRunId(claimed) ~= run) or (equipment.endless and not endless) then
+		equipment.pendingLoot = nil
+		return
+	end
+	local rows = equipment
+	if equipment.endless == false and endless then rows = {} end
+	local copy = {}
+	for key, value in pairs(summary) do
+		if type(value) == "string" or type(value) == "number" then copy[key] = value end
+	end
+	local rewards = rows.pendingLoot
+	rows.pendingLoot = nil
+	local previous = endObservation
+	local repeatEnd = previous and previous.run == run and previous.endless == endless
+		and previous.summary.result == copy.result and tonumber(previous.summary.t) == tonumber(copy.t)
+	if not rewards and repeatEnd then rewards = previous.equipment.finalLoot end
+	if previous and (previous.run ~= run or previous.endless ~= endless) then
+		priorEndObservation = previous
+	end
+	rows.finalLoot = rewards
+	endObservation = { run = run, endless = endless, summary = copy,
+		hero = UnitName and UnitName("player"), zone = AZS_ZONE.zname,
+		down = (repeatEnd and previous.down) or (SurvivorUI_InParty and SurvivorUI_InParty()
+			and SurvivorUI_IsDown and SurvivorUI_IsDown()),
+		equipment = { jewelry = rows.jewelry, armor = rows.armor, finalLoot = rewards } }
 end
 
 ------------------------------------------------------------------------------
@@ -1029,18 +1081,15 @@ local function RegisterAbilitiesHandler()
 			pcall(AZS.On, "AZSGEAR", function() ObserveEquipment("jewelry", AZS_GEAR) end)
 			pcall(AZS.On, "AZSARMOR", function() ObserveEquipment("armor", AZS_ARMOR) end)
 			pcall(AZS.On, "AZSENDLOOT", function() ObserveEquipment("pendingLoot", AZS_END_LOOT) end)
-			pcall(AZS.On, "AZSEND", function()
-				if equipmentReady and equipmentRun == EquipmentRun() then
-					if equipment.pendingLoot then equipment.finalLoot = equipment.pendingLoot end
-					equipment.pendingLoot = nil
-				end
-			end)
+			pcall(AZS.On, "AZSEND", ObserveEnd)
 			pcall(AZS.On, "AZSRUN", function()
-				if equipmentReady and equipmentRun == EquipmentRun() and not equipment.endless
-					and AZS_RUN and tonumber(AZS_RUN.endless) == 1
-					and (AZS_RUN.ph == "playing" or AZS_RUN.ph == "choosing") then
-					equipment.finalLoot = nil
-					equipment.endless = true
+				if equipmentReady and equipmentRun == EquipmentRun() and AZS_RUN and not equipment.endless then
+					local endless = tonumber(AZS_RUN.endless) == 1
+					if endless and equipment.endless == false then
+						equipment = {}
+						jewelryCache = nil
+					end
+					equipment.endless = endless
 				end
 			end)
 			pcall(AZS.On, "AZSSPELLTIP", function(message)
@@ -1197,18 +1246,7 @@ function SurvivorUI_RebornBuildTooltipPlan(ability)
 end
 
 ------------------------------------------------------------------------------
--- Jewelry: native World snapshots, with Meter metadata on older clients.
---
--- AZS_GetMeterLoadout({ apiVersion=1, runId, ownerId }) returns
--- loadout.runJewelry = { { sourceKey } } and loadout.sources[sourceKey]
--- = { name, ... }. The docs do not publish the source fields, so every
--- field is read defensively from either the entry or its source, and any
--- of name/icon/slot/rarity may be absent. Its source rank can be an effect
--- amount. A loadout error is kept
--- (code/message) and reported by diagnostics, never silently swallowed.
--- Refresh at most once per 2 seconds; callers poll already, so this adds
--- no new timer.
-
+-- The Meter loadout is available only to the explicit raw diagnostics probe.
 local function LoadoutOwner()
 	if AZS_GetMeterContext then
 		local ok, context = pcall(AZS_GetMeterContext)
@@ -1219,39 +1257,7 @@ local function LoadoutOwner()
 	return nil, nil
 end
 
--- fields is an array of candidate field names, tried in order, source
--- first then entry. (An explicit array, not ..., so this works the same
--- under Lua 5.1 and later versions.)
-local function SourceField(source, entry, fields)
-	if type(source) == "table" then
-		for i = 1, table.getn(fields) do
-			if source[fields[i]] ~= nil then return source[fields[i]] end
-		end
-	end
-	if type(entry) == "table" then
-		for i = 1, table.getn(fields) do
-			if entry[fields[i]] ~= nil then return entry[fields[i]] end
-		end
-	end
-	return nil
-end
-
--- The slot word for a jewelry piece, localized. The source id is
--- tried first: the docs say source ids are "jewel:<slot>", and in
--- practice the payload often carries no slot/kind/type word at all,
--- which is how every piece used to fall back to "Jewelry". The
--- slot/kind/type fields are the fallback; "Jewelry" is the last
--- resort, never an invented slot. Returns the localized word.
-local function SlotLabelOf(raw, sourceKey)
-	if sourceKey then
-		local _, _, word = string.find(tostring(sourceKey), "^jewel:([%a]+)")
-		if word then
-			local w = string.lower(word)
-			if w == "neck" or w == "amulet" or w == "necklace" then return T("Neck") end
-			if w == "ring" then return T("Ring") end
-			if w == "trinket" then return T("Trinket") end
-		end
-	end
+local function SlotLabelOf(raw)
 	if raw and raw ~= "" then
 		local s = string.lower(tostring(raw))
 		if string.find(s, "neck") or string.find(s, "amulet") then return T("Neck") end
@@ -1282,120 +1288,6 @@ local function IconTextureOf(icon)
 	end
 	return Candidate(icon.texture) or Candidate(icon.path) or Candidate(icon.icon)
 		or Candidate(icon.file) or Candidate(icon[1])
-end
-
--- Official static jewelry identities (azreborn.com/data/v1): itemKey -> name, icon.
-local JEWELRY_STATIC = {
-	["abomination_jar"] = { "Tiny Abomination in a Jar", "INV_Alchemy_EnchantedVial" },
-	["accuria"] = { "Band of Accuria", "INV_Jewelry_Ring_15" },
-	["animated_chain"] = { "Animated Chain Necklace", "INV_Jewelry_Necklace_01" },
-	["archimtiros"] = { "Archimtiros' Ring of Reckoning", "INV_Jewelry_Ring_40" },
-	["ashen_band"] = { "Ashen Band of Destruction", "INV_Jewelry_Ring_84" },
-	["bell_of_enraging_resonance"] = { "Bell of Enraging Resonance", "INV_Misc_Bell_01" },
-	["blackhand"] = { "Blackhand's Breadth", "INV_Misc_ArmorKit_09" },
-	["blooddrinker"] = { "Blooddrinker's Band", "INV_Jewelry_Ring_49Naxxramas" },
-	["bloodlust_brooch"] = { "Bloodlust Brooch", "INV_Misc_MonsterScales_15" },
-	["carrot"] = { "Carrot on a Stick", "INV_Misc_Food_54" },
-	["chosen"] = { "Mark of the Chosen", "INV_Jewelry_Talisman_08" },
-	["crusade"] = { "Darkmoon Card: Crusade", "INV_Misc_Ticket_Tarot_Crusade" },
-	["dark_iron"] = { "Heavy Dark Iron Ring", "INV_Jewelry_Ring_14" },
-	["darkmoon"] = { "Amulet of the Darkmoon", "INV_Jewelry_Necklace_14" },
-	["darkmoon_volcano"] = { "Darkmoon Card: Volcano", "INV_Misc_Ticket_Tarot_Elemental_01" },
-	["deathbringer"] = { "Deathbringer's Will", "INV_Jewelry_Trinket_04" },
-	["devoured"] = { "Ring of the Devoured", "INV_Jewelry_Ring_AhnQiraj_05" },
-	["dragonslayer"] = { "Master Dragonslayer's Ring", "INV_Jewelry_Ring_41" },
-	["dragonspine"] = { "Dragonspine Trophy", "INV_Misc_Bone_03" },
-	["dragonwrath"] = { "Dragonwrath, Tarecgosa's Rest", "INV_Staff_99" },
-	["earthstrike"] = { "Earthstrike", "Spell_Nature_AbolishMagic" },
-	["elder_council_signet"] = { "Signet of the Elder Council", "INV_Jewelry_Ring_67" },
-	["eldre_thalas"] = { "Royal Seal of Eldre'Thalas", "INV_Jewelry_Talisman_10" },
-	["elementium_signet"] = { "Elementium Signet", "INV_Jewelry_Ring_54" },
-	["enlightenment"] = { "Choker of Enlightenment", "INV_Jewelry_Necklace_10" },
-	["eye_of_hakkar"] = { "The Eye of Hakkar", "INV_Jewelry_Necklace_22" },
-	["fallen_dragon"] = { "Pendant of the Fallen Dragon", "INV_Jewelry_Necklace_12" },
-	["fangs_of_the_father"] = { "Fangs of the Father", "INV_Weapon_ShortBlade_96" },
-	["fire_lord"] = { "Choker of the Fire Lord", "INV_Jewelry_Amulet_05" },
-	["foreign_object"] = { "Dislodged Foreign Object", "INV_Jewelry_Trinket_01" },
-	["fury_of_angerforge"] = { "Fury of Angerforge", "INV_Misc_Head_Dragon_Black" },
-	["greatness"] = { "Darkmoon Card: Greatness", "INV_Inscription_TarotGreatness" },
-	["guldan_skull"] = { "The Skull of Gul'dan", "INV_Misc_Bone_ElfSkull_01" },
-	["heart_of_ignacious"] = { "Heart of Ignacious", "INV_Misc_Orb_05" },
-	["hoj"] = { "Hand of Justice", "INV_Jewelry_Talisman_01" },
-	["hourglass"] = { "Hourglass of the Unraveller", "INV_Gizmo_KhoriumPowerCore" },
-	["insignia"] = { "Insignia of the Horde", "INV_Jewelry_TrinketPVP_02" },
-	["jeklik"] = { "Jeklik's Opaline Talisman", "INV_Jewelry_Necklace_03" },
-	["lifegiving"] = { "Lifegiving Gem", "INV_Misc_Gem_Pearl_05" },
-	["madness"] = { "Madness of the Betrayer", "Spell_Shadow_Charm" },
-	["malice_stone"] = { "Malice Stone Pendant", "INV_Jewelry_Necklace_29Naxxramas" },
-	["mark_of_fordring"] = { "Mark of Fordring", "INV_Jewelry_Talisman_07" },
-	["onyxia_blood"] = { "Onyxia Blood Talisman", "Spell_Shadow_LifeDrain" },
-	["onyxia_tooth"] = { "Onyxia Tooth Pendant", "INV_Jewelry_Necklace_09" },
-	["phylactery"] = { "Phylactery of the Nameless Lich", "INV_Jewelry_Trinket_03" },
-	["prestor"] = { "Prestor's Talisman of Connivery", "INV_Jewelry_Necklace_17" },
-	["quick_strike"] = { "Quick Strike Ring", "INV_Jewelry_Ring_07" },
-	["remote"] = { "Gnomish Universal Remote", "INV_Misc_PocketWatch_01" },
-	["seal_damned"] = { "Seal of the Damned", "INV_Jewelry_Ring_51Naxxramas" },
-	["shadowmourne"] = { "Shadowmourne", "INV_Axe_113" },
-	["soulstone"] = { "Major Soulstone", "INV_Misc_Orb_04" },
-	["south_seas_kelp"] = { "Pristine Enchanted South Seas Kelp", "INV_Jewelry_Necklace_26" },
-	["spell_power"] = { "Ring of Spell Power", "INV_Jewelry_Ring_38" },
-	["star_of_mystaria"] = { "Star of Mystaria", "INV_Enchant_EssenceMagicLarge" },
-	["steadfast_might"] = { "Medallion of Steadfast Might", "INV_Jewelry_Amulet_03" },
-	["talvash"] = { "Talvash's Enhancing Necklace", "INV_Jewelry_Necklace_02" },
-	["tep"] = { "Talisman of Ephemeral Power", "INV_Misc_StoneTablet_11" },
-	["theralions_mirror"] = { "Theralion's Mirror", "Spell_Nature_MirrorImage" },
-	["thoridal"] = { "Thori'dal, the Stars' Fury", "INV_Weapon_Bow_39" },
-	["tsunami"] = { "Tsunami Talisman", "Spell_Nature_UnrelentingStorm" },
-	["valanyr"] = { "Val'anyr, Hammer of Ancient Kings", "INV_Mace_99" },
-	["vek_nilash"] = { "Amulet of Vek'nilash", "INV_Jewelry_Necklace_AhnQiraj_01" },
-	["violet_eye"] = { "Pendant of the Violet Eye", "INV_Trinket_Naxxramas02" },
-	["war_horn"] = { "Horn of the Warchief", "INV_Misc_Horn_01" },
-	["warglaives"] = { "Warglaives of Azzinoth", "INV_Weapon_Glave_01" },
-	["woven_ivy"] = { "Woven Ivy Necklace", "INV_Misc_Herb_15" },
-}
-
-local function NormaliseJewelryEntry(entry, source)
-	-- Instance identity comes from itemInstanceKey
-	-- (gear:<category>:<itemKey>). The shared meter source record
-	-- is category attribution: its name/rank/icon belong to one
-	-- item and must not be copied onto other instances.
-	local instanceKey = entry and entry.itemInstanceKey or nil
-	local itemKey = instanceKey and string.match(tostring(instanceKey), "^gear:[^:]+:(.+)$") or nil
-	local sourceMatches = source and itemKey and source.itemKey == itemKey
-	local name, icon, rarity
-	if sourceMatches then
-		name = SourceField(source, entry, { "name", "displayName" })
-		icon = IconTextureOf(SourceField(source, entry, { "icon", "texture" }))
-		rarity = SourceField(source, entry, { "rarity", "quality" })
-	else
-		local static = itemKey and JEWELRY_STATIC[itemKey] or nil
-		if static then
-			name = SurvivorUI_Native and SurvivorUI_Native(static[1]) or static[1]
-			icon = static[2] ~= "" and ("Interface\\Icons\\" .. static[2]) or nil
-		end
-		if not instanceKey then
-			name = SourceField(source, entry, { "name", "displayName" })
-			icon = IconTextureOf(SourceField(source, entry, { "icon", "texture" }))
-			rarity = SourceField(source, entry, { "rarity", "quality" })
-		elseif not itemKey then
-			name = SourceField(nil, entry, { "name", "displayName" })
-			icon = IconTextureOf(SourceField(nil, entry, { "icon", "texture" }))
-			rarity = SourceField(nil, entry, { "rarity", "quality" })
-		end
-	end
-	local slot = SourceField(source, entry, { "slot", "kind", "type", "category" })
-	local sourceKey = entry and entry.sourceKey or nil
-	local key = itemKey or SourceField(nil, entry, { "sourceKey", "key", "id" })
-	if type(rarity) == "number" then
-		rarity = tostring(rarity)
-	end
-	local slotLabel = SlotLabelOf(slot, sourceKey)
-	return {
-		name = name, icon = icon, slot = slotLabel,
-		slotRaw = slot, key = key, rarity = rarity,
-		sourceKey = sourceKey or key, count = 1,
-		instanceKey = entry and entry.itemInstanceKey or nil,
-	}
 end
 
 -- Identity: itemInstanceKey identifies a distinct owned piece
@@ -1452,127 +1344,50 @@ local function NativeJewelry(rows)
 	return items, complete
 end
 
--- Returns { items, source, error, aggregate }.
--- source: "loadout" | "gear" | "inventory" | "none".
--- aggregate: the AZS_STATS g* shares (whole-character jewelry totals),
--- or nil. Callers must display the aggregate separately and must never
--- attribute it to a single piece.
-function SurvivorUI_RebornJewelry(force)
-	-- The original game also exposes the Meter API. Its loadout does not
-	-- replace inventory jewelry in the Build List or Run History.
-	if not SurvivorUI_RebornActive() then return { items = {}, source = "none", duplicates = 0 } end
-
-	local now = Now()
-	local run = EquipmentRun()
-	local observed = SurvivorUI_RebornEquipmentObservations()
+-- Explicit observations are used for an end message's frozen equipment.
+-- Live callers only see native rows accepted in the current run.
+function SurvivorUI_RebornJewelry(force, observations)
+	if not observations and not SurvivorUI_RebornActive() then
+		return { items = {}, source = "none", duplicates = 0 }
+	end
+	local observed = observations or SurvivorUI_RebornEquipmentObservations()
 	local native = observed and observed.jewelry
-	local randomGear = SurvivorUI_RebornRandomGear()
-	if not force and jewelryCache and jewelryCache.run == run and jewelryCache.native == native and jewelryCache.randomGear == randomGear
-		and now - lastLoadoutAt < 2 then
+	if not observations and not force and jewelryCache and jewelryCache.native == native then
 		return jewelryCache
 	end
-	lastLoadoutAt = now
-	local items = {}
-	local source = "none"
-	local err = nil
-	local rawJewelry = nil
-	local preDedup = nil
-	local complete = false
-	if native then
-		items, complete = NativeJewelry(native)
-		source = "gear"
-	elseif not randomGear and AZS_GetMeterLoadout then
-		local runId, ownerId = LoadoutOwner()
-		local request = { apiVersion = 1 }
-		if runId then request.runId = runId end
-		if ownerId then request.ownerId = ownerId end
-		local ok, loadout, loadoutErr = pcall(AZS_GetMeterLoadout, request)
-		if ok and type(loadout) == "table" then
-			local runJewelry = loadout.runJewelry
-			rawJewelry = { runJewelry = runJewelry, sources = loadout.sources }
-			if type(runJewelry) == "table" then
-				-- Authoritative even when empty: an empty in-run
-				-- list must not fall back to permanent equipment.
-				source = "loadout"
-				for i = 1, table.getn(runJewelry) do
-					local entry = runJewelry[i]
-					local src = nil
-					if type(loadout.sources) == "table" and entry and entry.sourceKey then
-						src = loadout.sources[entry.sourceKey]
-					end
-					local item = NormaliseJewelryEntry(entry, src)
-					if item.name or item.key then
-						table.insert(items, item)
-					end
-				end
-			end
-		elseif ok and loadout == nil and type(loadoutErr) == "table" then
-			err = loadoutErr
-			jewelryError = loadoutErr
-		elseif not ok then
-			err = { code = "call_failed", message = tostring(loadout) }
-			jewelryError = err
-		end
-	end
-	-- 2. AZSGEAR global, if the game exposes it (undocumented shape).
-	if source == "none" and not randomGear and type(AZSGEAR) == "table" and table.getn(AZSGEAR) > 0 then
-		for i = 1, table.getn(AZSGEAR) do
-			local item = NormaliseJewelryEntry(AZSGEAR[i], nil)
-			if item.name or item.key then
-				table.insert(items, item)
-			end
-		end
-		if table.getn(items) > 0 then
-			source = "gear"
-		end
-	end
-	local duplicates = 0
-	preDedup = items
-	if not native then items, duplicates = DedupJewelryItems(items) end
-	-- 3. Aggregate jewelry shares from AZS_STATS (never per-item).
-	local aggregate = nil
-	if type(AZS_STATS) == "table" then
-		local fields = { "ghp", "gdmg", "gcd", "gcrit", "gcm", "garm", "garea", "gcnt", "gecho", "gspd", "greg", "gpick", "ggold" }
-		for i = 1, table.getn(fields) do
-			local v = AZS_STATS[fields[i]]
-			if v ~= nil and Num(v) ~= 0 then
-				aggregate = aggregate or {}
-				aggregate[fields[i]] = Num(v)
+	local items, complete = {}, false
+	if native then items, complete = NativeJewelry(native) end
+	local snapshot = { items = items, source = native and "gear" or "none", duplicates = 0,
+		complete = complete, native = native }
+	if observations then return snapshot end
+	local stats = AZS_STATS
+	if type(stats) == "table" then
+		for _, key in ipairs({ "ghp", "gdmg", "gcd", "gcrit", "gcm", "garm", "garea", "gcnt", "gecho", "gspd", "greg", "gpick", "ggold" }) do
+			local value = tonumber(stats[key])
+			if value and value ~= 0 then
+				snapshot.aggregate = snapshot.aggregate or {}
+				snapshot.aggregate[key] = value
 			end
 		end
 	end
-	jewelryCache = { items = items, source = source, error = err, aggregate = aggregate,
-		duplicates = duplicates, complete = complete, native = native, randomGear = randomGear, run = run }
+	jewelryCache = snapshot
 	if SurvivorUI_RebornRecording and SurvivorUI_RebornRecording() then
-		local parts = {}
-		for i = 1, table.getn(items) do
-			parts[i] = tostring(items[i].instanceKey or items[i].key) .. ":" .. tostring(items[i].effect) ..
-				":" .. tostring(items[i].name) .. ":" .. tostring(items[i].rarity) .. ":" .. tostring(items[i].icon)
+		local parts = { tostring(EquipmentRun()), snapshot.source }
+		for _, item in ipairs(items) do
+			table.insert(parts, tostring(item.instanceKey) .. ":" .. tostring(item.effect)
+				.. ":" .. tostring(item.name) .. ":" .. tostring(item.rarity) .. ":" .. tostring(item.icon))
 		end
 		local signature = table.concat(parts, ";")
 		if signature ~= captureJewelrySignature then
 			captureJewelrySignature = signature
 			SurvivorUI_RebornRecord("jewelry_update", {
-				source = source, raw = rawJewelry, gear = native or (not randomGear and AZSGEAR or nil),
-				preDedup = preDedup, items = items,
-				aggregate = aggregate, duplicates = duplicates,
+				source = snapshot.source, gear = native, preDedup = items, items = items,
+				aggregate = snapshot.aggregate, duplicates = 0,
 			})
 		end
 	end
-	return jewelryCache
+	return snapshot
 end
-
-function SurvivorUI_RebornJewelryError()
-	return jewelryError
-end
-
--- In-run jewelry is per-run: forget the loadout cache on a new run so a
--- stale list can never leak into the next run.
-SurvivorUI_RebornRegisterReset(function()
-	jewelryCache = nil
-	jewelryError = nil
-	lastLoadoutAt = 0
-end)
 
 ------------------------------------------------------------------------------
 -- Curses (verified in game 2026-11-26): a curse effect arrives as a
@@ -2385,16 +2200,11 @@ function SurvivorUI_RebornProbe()
 	end
 	local jew = SurvivorUI_RebornJewelry(true)
 	Add("jewelry source=" .. tostring(jew.source) .. " items=" .. tostring(table.getn(jew.items))
-		.. " loadoutFn=" .. tostring(AZS_GetMeterLoadout ~= nil)
-		.. " AZSGEAR=" .. (type(AZSGEAR) == "table" and tostring(table.getn(AZSGEAR)) .. " rows" or "(absent)"))
-	if jew.error then
-		Add("jewelry error: code=" .. tostring(jew.error.code) .. " message=" .. tostring(jew.error.message))
-	end
+		.. " complete=" .. tostring(jew.complete))
 	for i = 1, table.getn(jew.items) do
 		local item = jew.items[i]
-		Add(string.format("  jewelry: slot=%s name=%s rank=%s rarity=%s key=%s count=%s icon=%s",
-			tostring(item.slot), tostring(item.name), tostring(item.rank), tostring(item.rarity), tostring(item.key),
-			tostring(item.count or 1), tostring(item.icon)))
+		Add(string.format("  jewelry: slot=%s name=%s amount=%s rarity=%s key=%s icon=%s",
+			tostring(item.slot), tostring(item.name), tostring(item.amount), tostring(item.rarity), tostring(item.key), tostring(item.icon)))
 	end
 	if jew.duplicates and jew.duplicates > 0 then
 		Add("  jewelry duplicates merged this snapshot: " .. tostring(jew.duplicates))
@@ -2766,15 +2576,11 @@ function SurvivorUI_RebornSlash(argument)
 		return
 	elseif arg == "jewelry" then
 		local jew = SurvivorUI_RebornJewelry(true)
-		Say(string.format("Survivor UI (Reborn): jewelry source=%s items=%d duplicates merged=%d", tostring(jew.source), table.getn(jew.items), jew.duplicates or 0))
-		if jew.error then
-			Say("  loadout error: code=" .. tostring(jew.error.code) .. " message=" .. tostring(jew.error.message))
-		end
+		Say(string.format("Survivor UI (Reborn): jewelry source=%s items=%d complete=%s", tostring(jew.source), table.getn(jew.items), tostring(jew.complete)))
 		for i = 1, table.getn(jew.items) do
 			local item = jew.items[i]
-			Say(string.format("  %s name=%s rank=%s rarity=%s key=%s count=%s icon=%s",
-				tostring(item.slot), tostring(item.name), tostring(item.rank), tostring(item.rarity), tostring(item.key),
-				tostring(item.count or 1), tostring(item.icon)))
+			Say(string.format("  %s name=%s amount=%s rarity=%s key=%s icon=%s",
+				tostring(item.slot), tostring(item.name), tostring(item.amount), tostring(item.rarity), tostring(item.key), tostring(item.icon)))
 		end
 		if jew.aggregate then
 			local parts = {}

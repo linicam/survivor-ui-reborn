@@ -80,6 +80,8 @@ local handlers, emitted = {}, {}
 AZS = { On = function(prefix, fn) handlers[prefix] = fn end }
 local apiCalls, meterCalls, capCalls = 0, 0, 0
 local recording = false
+local observedGear
+function SurvivorUI_RebornEquipmentObservations() return { jewelry = observedGear } end
 function SurvivorUI_RebornActive() apiCalls = apiCalls + 1; return true end
 function SurvivorUI_RebornRunId() return AZS_ZONE.run end
 function SurvivorUI_T(key) return key end
@@ -91,11 +93,12 @@ function SurvivorUI_RebornStatCap(key, observed)
 	assert(key == "red")
 	return AZS_CAPS.red, math.max(0, AZS_CAPS.red - observed)
 end
-local ambiguous
+local ambiguous, wrongMeterRun
 function AZS_GetMeterSnapshot(query)
 	meterCalls = meterCalls + 1
 	assert(query.scope == "self" and query.apiVersion == 1 and query.windowSeconds == 20)
-	return { totals = { windowAmount = 100, recentRate = { status = "ready", elapsedSeconds = 20, value = 5 } },
+	return { context = { runId = wrongMeterRun or query.runId },
+		totals = { windowAmount = 100, recentRate = { status = "ready", elapsedSeconds = 20, value = 5 } },
 		rows = { { windowAmount = 46, sourceKey = "a" }, { windowAmount = 54, sourceKey = "b" } },
 		sources = { a = { kind = "ability", abilityKey = "shadow_bolt", spellIds = { 686 } },
 			b = { kind = ambiguous and "ability" or "other", abilityKey = "shadow_bolt", spellIds = { 686 } } } }
@@ -126,34 +129,31 @@ for time = 0, 25, 5 do tick(time, 40 + time) end
 AZS_SPELLS_UPDATED = 0
 assert(not analysis.CardText(1))
 AZS_SPELLS_UPDATED = 2
-local text = assert(analysis.CardText(1))
-assert(string.find(text, "+29.9%", 1, true) and meterCalls == 1)
-assert(analysis.CardText(1) == text and meterCalls == 1, "same hand reuses native meter result")
-ambiguous = true
-AZS_CARDS = { kind = "spell", cards = { card } }
-assert(not string.find(analysis.CardText(1), "DPS", 1, true), "duplicate matching sources are ambiguous")
-ambiguous = nil
-analysis.AddTrackerTooltip(tooltip)
-assert(#lines > 3)
 SurvivorUIDB.rebornAnalysis.map = true
-function SurvivorUI_RebornRandomGear() return true end
+SurvivorUIDB.rebornAnalysis.advisor = true
+for _, generated in ipairs({ false, {}, { other = "future" }, { itemRules = {} } }) do
+	AZS_GEN = generated or nil
+	assert(not analysis.CardText(1), "missing or changed capabilities never enable theoretical skill advice")
+	assert(meterCalls == 0, "the card path does not ask Meter for a hypothetical calculation")
+end
 local previouslyMeasured = #lines
-assert(not analysis.CardText(1), "0.8.0 withholds theoretical skill advice")
 analysis.AddTrackerTooltip(tooltip)
-assert(#lines > previouslyMeasured, "measured observations remain")
+assert(#lines > previouslyMeasured and meterCalls == 1, "measured observations remain")
 for _, line in ipairs(lines) do assert(not line:find("Campaign reference", 1, true)) end
-SurvivorUI_RebornRandomGear = nil
+wrongMeterRun = "azs:r00000009"
+local staleLines = {}
+analysis.AddTrackerTooltip({ AddLine = function(_, line) table.insert(staleLines, line) end })
+assert(#staleLines > 0, "local measured trends need no Meter response")
+for _, line in ipairs(staleLines) do assert(not line:find("Recent effective DPS", 1, true)) end
+wrongMeterRun = nil
 analysis.Toggle("cards")
-analysis.Toggle("advisor")
 for time = 30, 45, 5 do tick(time, 65, 25) end
 AZS_CARDS = { kind = "jewel", cards = { { mode = "grow", detail = "Damage reduction=4%=7%=+" } } }
-assert(analysis.CardText(1) == "Low health · mitigation option", "advisor has independent access to card model")
-analysis.Toggle("advisor")
-assert(not analysis.CardText(1))
+assert(not analysis.CardText(1), "a saved advisor toggle cannot recommend an option")
 analysis.Toggle("cards")
 AZS_UNITS = { { kind = "boss", id = 15, hp = 2500 } }
 AZS_CARDS = { kind = "spell", cards = { card } }
-assert(not string.find(analysis.CardText(1), "DPS", 1, true), "boss boundary invalidates damage window")
+assert(not analysis.CardText(1), "a new hand does not reactivate the calculation")
 AZS_CARDS = { kind = "jewel", cards = { { mode = "grow", detail = "Damage reduction=4%=7%=+" } } }
 assert(string.find(analysis.CardText(1), "3.0 pp to cap", 1, true))
 AZS_STATS, AZS_STATS_UPDATED = { arm = 0.59 }, 3
@@ -191,11 +191,12 @@ for time = 8, 23, 5 do tick(time, 4) end
 assert(emitted[#emitted - 1].kind == "analysis_pick_window")
 assert(emitted[#emitted - 1].data.status == "window_unavailable", "missing earlier window is explicit")
 AZS_CARDS = { kind = "jewel", cards = { { mode = "amulet", name = "New amulet", slot = "amulet" } } }
-AZS_GEAR = { { slot = "amulet", name = "Previous amulet", amount = 2 } }
+observedGear = { { slot = "amulet", name = "Previous amulet", amount = 2 } }
+AZS_GEAR = { { slot = "amulet", name = "Stale amulet", amount = 9 } }
 handlers.AZSCARDS()
 analysis.RecordPick(AZS_CARDS, 1)
 assert(emitted[#emitted].data.data.gearSlot[1].name == "Previous amulet")
-AZS_GEAR = { { slot = "amulet", name = "New amulet", amount = 1 } }
+observedGear = { { slot = "amulet", name = "New amulet", amount = 1 } }
 tick(24, 4)
 assert(emitted[#emitted].kind == "analysis_pick_result" and emitted[#emitted].data.status == "observed_change")
 assert(emitted[#emitted].data.data.gearSlot[1].name == "New amulet")

@@ -5146,9 +5146,7 @@ if SurvivorUI_RebornAnalysis and SurvivorUI_RebornActive() then
 		{ "live", "Live Build observations", "Show recent damage, health, kills and growth in the tracker tooltip." },
 		{ "diagnostics", "Research diagnostics", "Add analysis observations to an explicitly enabled Reborn recording." },
 	}
-	if not SurvivorUI_RebornRandomGear() then
-		table.insert(analysisOptions, 4, { "advisor", "Experimental growth advice", "Flag a supported mitigation option when recent samples show sustained low health." })
-	end
+
 	for _, option in ipairs(analysisOptions) do
 		local key = option[1]
 		Check(page, option[2], function() return SurvivorUI_RebornAnalysis.IsSet(key) end,

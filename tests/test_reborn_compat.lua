@@ -273,81 +273,35 @@ eq("rank history: rank fall restarts, no new event", table.getn(SurvivorUI_Rebor
 eq("rank history: increases reset", SurvivorUI_RebornRankIncreases("fireball"), 0)
 
 -- ===========================================================================
--- Jewelry (DEFENSIVE shapes: loadout source fields are not documented)
+-- Jewelry stays closed until a scoped native World observation arrives.
+-- Neither a missing capability nor an unknown generated schema enables Meter.
 -- ===========================================================================
 resetGame()
 AZS_RequestAbilities = function() end
 AZS_ZONE = { run = "azs:r33333333" }
-AZS_GetMeterContext = function() return { runId = "azs:r33333333", ownerId = "hero:Test" } end
-AZS_GetMeterLoadout = function(req)
-	return {
-		runJewelry = { { sourceKey = "jewel:ring:accuria" }, { sourceKey = "jewel:trinket:carrot" } },
-		sources = {
-			["jewel:ring:accuria"] = { name = "Band of Accuria", icon = "INV_Jewelry_Ring_15", slot = "ring", rank = "IV", rarity = "epic" },
-			["jewel:trinket:carrot"] = { name = "Carrot on a Stick", icon = "INV_Misc_Food_33", slot = "trinket", rank = "V", rarity = "uncommon" },
-		},
-	}
+AZSGEAR = { { key = "accuria", name = "Stale Ring", rank = 4 } }
+local staleRequests = 0
+AZS_GetMeterLoadout = function()
+	staleRequests = staleRequests + 1
+	return { runJewelry = { { sourceKey = "jewel:ring:accuria" } },
+		sources = { ["jewel:ring:accuria"] = { name = "Stale Ring", rank = 296 } } }
 end
-local jew = SurvivorUI_RebornJewelry(true)
-eq("jewelry loadout: source", jew.source, "loadout")
-eq("jewelry loadout: items", table.getn(jew.items), 2)
-eq("jewelry loadout: first name", jew.items[1].name, "Band of Accuria")
-eq("jewelry loadout: first slot", jew.items[1].slot, "Ring")
-eq("jewelry loadout: source rank is not an enhancement", jew.items[1].rank, nil)
-eq("jewelry loadout: first rarity", jew.items[1].rarity, "epic")
--- Repeated call: no duplication.
-jew = SurvivorUI_RebornJewelry(true)
-eq("jewelry loadout: no duplication on refresh", table.getn(jew.items), 2)
-
--- Repeated upgrade of the same item: rank updates, still one entry.
-AZS_GetMeterLoadout = function(req)
-	return {
-		runJewelry = { { sourceKey = "jewel:ring:accuria" } },
-		sources = {
-			["jewel:ring:accuria"] = { name = "Band of Accuria", icon = "INV_Jewelry_Ring_15", slot = "ring", rank = "V", rarity = "epic" },
-		},
-	}
+for _, generated in ipairs({ false, {}, { unrelated = true }, { itemRules = {} } }) do
+	AZS_GEN = generated or nil
+	local unknown = SurvivorUI_RebornJewelry(true)
+	eq("jewelry capability transition: no fallback source", unknown.source, "none")
+	eq("jewelry capability transition: no fallback rows", #unknown.items, 0)
 end
-jew = SurvivorUI_RebornJewelry(true)
-eq("jewelry upgrade: still one item", table.getn(jew.items), 1)
-eq("jewelry upgrade: changed source rank is still unknown", jew.items[1].rank, nil)
+eq("jewelry capability transition: no Meter calls", staleRequests, 0)
+AZS_GEN = nil
 
--- Loadout error: kept, source none, no crash.
-AZS_GetMeterLoadout = function(req) return nil, { code = "NO_RUN", message = "no run", retryable = false } end
-jew = SurvivorUI_RebornJewelry(true)
-eq("jewelry error: source none", jew.source, "none")
-eq("jewelry error: items empty", table.getn(jew.items), 0)
-check("jewelry error: code kept", jew.error and jew.error.code == "NO_RUN")
-
--- AZSGEAR fallback when there is no loadout function (DEFENSIVE shape).
-resetGame()
-AZS_RUN = { ph = "playing", nbm = "time" }
-AZS_GetMeterLoadout = nil
-AZSGEAR = {
-	{ key = "accuria", name = "Band of Accuria", icon = "INV_Jewelry_Ring_15", slot = "ring", rank = 4 },
-}
-jew = SurvivorUI_RebornJewelry(true)
-eq("jewelry gear fallback: source", jew.source, "gear")
-eq("jewelry gear fallback: items", table.getn(jew.items), 1)
-
--- Aggregate g* shares are reported as an aggregate, never per-item.
-resetGame()
-AZS_RequestAbilities = function() end
+-- Aggregate g* data remains usable for diagnostics without attributing it to an item.
 AZS_STATS = { gdmg = 0.25, gcd = 0.1, ghp = 0 }
-AZS_GetMeterLoadout = function(req) return { runJewelry = {}, sources = {} } end
-jew = SurvivorUI_RebornJewelry(true)
+local jew = SurvivorUI_RebornJewelry(true)
 check("jewelry aggregate: present", jew.aggregate ~= nil)
 eq("jewelry aggregate: gdmg", jew.aggregate and jew.aggregate.gdmg, 0.25)
 check("jewelry aggregate: zero ghp not reported", jew.aggregate and jew.aggregate.ghp == nil)
 check("jewelry aggregate: not on the item", table.getn(jew.items) == 0)
-
--- Unknown / empty loadout shape: no crash, source none.
-resetGame()
-AZS_RequestAbilities = function() end
-AZS_GetMeterLoadout = function(req) return {} end
-jew = SurvivorUI_RebornJewelry(true)
-eq("jewelry empty shape: source none", jew.source, "none")
-eq("jewelry empty shape: items empty", table.getn(jew.items), 0)
 
 -- ===========================================================================
 -- Curses (VERIFIED in game: kind="curse" banner + AZS_BUFFS row)
@@ -444,9 +398,7 @@ local evs = SurvivorUI_RebornRankEventsFor("demonic_empowerment")
 eq("round2 tooltip: one rank event", table.getn(evs), 1)
 eq("round2 tooltip: event timestamp", evs[1] and evs[1].at, 72)
 
--- Jewelry: same sourceKey with two distinct itemInstanceKeys merges
--- (count 2); two different pieces both ranked 55 stay distinct;
--- slots come from sourceKey.
+-- The opt-in raw diagnostic retains Meter provenance for research.
 AZS_RequestAbilities = function() end
 AZS_GetMeterLoadout = function(req)
 	return {
@@ -463,18 +415,6 @@ AZS_GetMeterLoadout = function(req)
 		},
 	}
 end
-local jew = SurvivorUI_RebornJewelry(true)
--- Distinct itemInstanceKeys are distinct owned pieces: no merge.
-eq("round2 jewelry: distinct instances stay distinct", table.getn(jew.items), 4)
-eq("round2 jewelry: no duplicates merged", jew.duplicates, 0)
-eq("round2 jewelry: slot from sourceKey (ring)", jew.items[1].slot, "Ring")
-eq("round2 jewelry: slot from sourceKey (ring 2)", jew.items[2].slot, "Ring")
-eq("round2 jewelry: slot from sourceKey (trinket)", jew.items[3].slot, "Trinket")
-eq("round2 jewelry: slot from sourceKey (neck)", jew.items[4].slot, "Neck")
-check("round2 jewelry: two 55s are distinct pieces", jew.items[1].name ~= jew.items[3].name)
-eq("round2 jewelry: category icon is unverified for this instance", jew.items[1].icon, nil)
-eq("round2 jewelry: rarity kept, not invented", jew.items[4].rarity, "epic")
-check("round2 jewelry: rank-55 ring has no rarity", jew.items[1].rarity == nil)
 local raw = SurvivorUI_RebornJewelryRawLines()
 local rawJoined = table.concat(raw, "\n")
 check("round2 jewelry raw: dumps source fields", string.find(rawJoined, "jewel:ring:1", 1, true) ~= nil and string.find(rawJoined, "Tribal Mark", 1, true) ~= nil)
@@ -520,9 +460,7 @@ AZS_GetMeterLoadout = function()
 		{ category = "ring", slotId = 1, sourceKey = "jewel:ring" },
 	}, sources = { ["jewel:ring"] = { name = "Band", rank = 10, kind = "item" } } }
 end
-local jew2 = SurvivorUI_RebornJewelry(true)
-eq("audit jewelry: unverified identity never merges", table.getn(jew2.items), 2)
-eq("audit jewelry: no instance key, no acquisition count", jew2.items[1].count, 1)
+eq("audit jewelry: unverified categories remain unavailable", SurvivorUI_RebornJewelry(true).source, "none")
 
 -- PR4 follow-up regressions.
 resetGame()
@@ -547,7 +485,7 @@ AZS_RequestAbilities = function() end
 AZS_GetMeterContext = function() return { runId = "azs:r66666666", localOwnerId = "hero:me" } end
 AZS_GetMeterLoadout = function() return { runJewelry = {}, sources = {} } end
 local jew3 = SurvivorUI_RebornJewelry(true)
-eq("pr4 jewelry: empty loadout is authoritative", jew3.source, "loadout")
+eq("pr4 jewelry: empty loadout cannot establish known empty", jew3.source, "none")
 eq("pr4 jewelry: empty loadout has no items", table.getn(jew3.items), 0)
 resetGame()
 AZS_ZONE = { run = "azs:r77777777" }
@@ -781,28 +719,6 @@ eq("guardian: negative left unsupported", SurvivorUI_RebornGuardianLeft(lair), n
 lair.left = 0
 AZS_LAIRS_UPDATED = 4
 eq("guardian: zero is valid", SurvivorUI_RebornGuardianLeft(lair), 0)
--- Jewelry: distinct instances sharing category sources (session 004 seq 374).
-AZS_GetMeterLoadout = function()
-	return {
-		runJewelry = {
-			{ category = "trinket", slotId = 1, sourceKey = "jewel:trinket", itemInstanceKey = "gear:trinket:chosen", effectSourceKeys = {} },
-			{ category = "trinket", slotId = 2, sourceKey = "jewel:trinket", itemInstanceKey = "gear:trinket:insignia", effectSourceKeys = {} },
-			{ category = "ring", slotId = 3, sourceKey = "jewel:ring", itemInstanceKey = "gear:ring:quick_strike", effectSourceKeys = {} },
-			{ category = "ring", slotId = 4, sourceKey = "jewel:ring", itemInstanceKey = "gear:ring:accuria", effectSourceKeys = {} },
-		},
-		sources = {
-			["jewel:ring"] = { itemKey = "accuria", name = "埃库利亚指环", rank = 520, icon = { path = "Interface\\Icons\\INV_Jewelry_Ring_15" } },
-			["jewel:trinket"] = { itemKey = "insignia", name = "部落徽记", rank = 54, icon = { path = "Interface\\Icons\\INV_Jewelry_Talisman_08" } },
-		},
-	}
-end
-local jew004 = SurvivorUI_RebornJewelry(true)
-eq("jewelry004: four rows", table.getn(jew004.items), 4)
-eq("jewelry004: chosen not insignia", jew004.items[1].name ~= "部落徽记", true)
-eq("jewelry004: chosen rank unknown", jew004.items[1].rank, nil)
-eq("jewelry004: insignia amount is not an enhancement", jew004.items[2].rank, nil)
-eq("jewelry004: quick_strike not accuria", jew004.items[3].name ~= "埃库利亚指环", true)
-eq("jewelry004: accuria amount is not an enhancement", jew004.items[4].rank, nil)
 -- Event curses expire as notifications, not at run end.
 AZS_GetRunTime = function() return 200 end
 AZS_BANNERS = { { 57, "curse", nil, "", "诅咒降临：精英正在伏击你！", 1239 } }
@@ -855,25 +771,9 @@ AZS_RequestAbilities = function() end
 AZS_ZONE.rname = "Human"
 local locale = "en"
 AZS_GetMeterCapabilities = function() return { languageCode = locale } end
-local localeTime = 1000
+local locale, localeTime = "zh", 1000
+AZS_GetMeterCapabilities = function() return { languageCode = locale } end
 GetTime = function() return localeTime end
-AZS_GetMeterLoadout = function()
-	return {
-		runJewelry = {
-			{ sourceKey = "jewel:trinket", itemInstanceKey = "gear:trinket:tep" },
-		},
-		sources = { ["jewel:trinket"] = { itemKey = "insignia", name = "Insignia", rank = 25 } },
-	}
-end
-eq("jewelry locale: English fallback", SurvivorUI_RebornJewelry(true).items[1].name, "Talisman of Ephemeral Power")
-locale, localeTime = "zh", 1002
-local zhJewelry = SurvivorUI_RebornJewelry(true).items[1]
-eq("jewelry locale: Chinese fallback", zhJewelry.name, "短暂能量护符")
-eq("jewelry locale: instance unchanged", zhJewelry.instanceKey, "gear:trinket:tep")
-eq("jewelry locale: meter attribution retained", zhJewelry.sourceKey, "jewel:trinket")
-eq("jewelry locale: shared source rank ignored", zhJewelry.rank, nil)
-
-AZS_RequestAbilities = function() end
 AZS_RUNSTATS = { crit = 100, cdr = 79 }
 AZS_CAPS = { crit = 100, cdr = 80 }
 local card = { mode = "grow", detail = "暴击几率=76.9%=83.7%=+^冷却缩减=10%=11%=+" }
@@ -1095,6 +995,7 @@ AZS_GEAR = sample033
 compatHandlers.AZSGEAR()
 eq("native jewelry: stale table before zone is unavailable", SurvivorUI_RebornJewelry().source, "none")
 compatHandlers.AZSZONE()
+compatHandlers.AZSRUN()
 eq("native jewelry: retained table after zone is unavailable", SurvivorUI_RebornJewelry().source, "none")
 compatHandlers.AZSGEAR()
 local native = SurvivorUI_RebornJewelry()
@@ -1124,6 +1025,7 @@ compatHandlers.AZSARMOR()
 AZS_END_LOOT = { { rarity = 4, name = "Reward" } }
 compatHandlers.AZSENDLOOT()
 eq("equipment: final is unavailable during pending notification", SurvivorUI_RebornEquipmentObservations().finalLoot, nil)
+AZS_END = { result = "victory", t = 1200 }
 compatHandlers.AZSEND()
 eq("equipment: final after matching end", SurvivorUI_RebornEquipmentObservations().finalLoot[1].name, "Reward")
 AZS_RUN.endless = 1

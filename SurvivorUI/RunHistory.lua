@@ -148,6 +148,14 @@ end
 -- run is kept, or just after.
 local pendingTalent             -- { amount, at }: come before the run was kept
 local awaitingTalent            -- the moment kept, its line not come yet
+local awaitingEndless
+
+local function TalentScope()
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+		local id, endless = SurvivorUI_RebornEquipmentPhase()
+		return id, endless
+	end
+end
 
 -- An item's tooltip, read off a tooltip of the addon's own (unseen).
 local scanner = CreateFrame("GameTooltip", "SurvivorUIHistoryScan", nil, "GameTooltipTemplate")
@@ -167,13 +175,17 @@ end
 -- calls know nothing of them), in a line kept with the run, the tree first:
 -- "0:Concussion:5|1:Flurry:3". Read every 15 sec in a run too: the run over, the
 -- game may no longer give them.
-local picksHeld
+local picksHeld, rebornPicks
 
 function SurvivorUI_RunPicks()
 	if not (AZS_GetMeterLoadout and AZS_GetMeterContext) then
 		return nil
 	end
 	local context = AZS_GetMeterContext()
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+		local id = TalentScope()
+		if not id or not context or not context.runId or SurvivorUI_RebornStableRunId(context.runId) ~= id then return nil end
+	end
 	local loadout = context and AZS_GetMeterLoadout({ apiVersion = 1, runId = context.runId, ownerId = context.localOwnerId })
 	if not loadout then
 		return nil
@@ -198,7 +210,13 @@ picksWatch:SetScript("OnUpdate", function()
 	if this.wait >= 15 then
 		this.wait = 0
 		if AZS_GetPhase and AZS_GetPhase() == "playing" then
-			picksHeld = SurvivorUI_RunPicks() or picksHeld
+			if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+				local id, endless = TalentScope()
+				local picks = id and SurvivorUI_RunPicks()
+				if picks then rebornPicks = { id = id, endless = endless, picks = picks } end
+			else
+				picksHeld = SurvivorUI_RunPicks() or picksHeld
+			end
 		end
 	end
 end)
@@ -207,7 +225,7 @@ end)
 -- as photos. "going" (an endless run's moment taken while it lasts): not the
 -- tooltips that show in GameTooltip, which would close one open under the
 -- mouse.
-local function Snapshot(phase)
+local function Snapshot(phase, observations)
 	local run, zone = AZS_RUN or {}, AZS_ZONE or {}
 	local seconds = Num(run.t)
 	local _, classKey = UnitClass("player")
@@ -269,13 +287,13 @@ local function Snapshot(phase)
 		record.build, record.buildComplete = SurvivorUI_BuildSnapshot()
 	end
 	if SurvivorUI_GearSnapshot then
-		record.gear, record.gearStatus = SurvivorUI_GearSnapshot()
+		record.gear, record.gearStatus = SurvivorUI_GearSnapshot(observations)
 	end
 	if SurvivorUI_ArmorSnapshot then
-		record.armor, record.armorSet, record.armorStatus = SurvivorUI_ArmorSnapshot()
+		record.armor, record.armorSet, record.armorStatus = SurvivorUI_ArmorSnapshot(observations)
 	end
 	if SurvivorUI_RebornFinalLootSnapshot and SurvivorUI_RebornActive() then
-		record.loot, record.lootStatus = SurvivorUI_RebornFinalLootSnapshot()
+		record.loot, record.lootStatus = SurvivorUI_RebornFinalLootSnapshot(observations)
 	else
 		record.loot = SurvivorUI_LootList and SurvivorUI_LootList(12) or {}
 	end
@@ -295,7 +313,15 @@ local function Snapshot(phase)
 	record.jumps = SurvivorUI_RunJumps and (SurvivorUI_RunJumps()) or nil
 	-- A co-op run: the party, each hero's damage as the game's party meter had it (Party.lua).
 	record.party = SurvivorUI_PartySnapshot and SurvivorUI_PartySnapshot() or nil
-	record.picks = SurvivorUI_RunPicks() or picksHeld
+	record.picks = SurvivorUI_RunPicks()
+	if record.rebornRunId then
+		local id, endless = TalentScope()
+		if not record.picks and rebornPicks and rebornPicks.id == id and rebornPicks.endless == endless then
+			record.picks = rebornPicks.picks
+		end
+	elseif not record.picks then
+		record.picks = picksHeld
+	end
 	-- Fallen: what struck last, the last hits, the damage taken by kind (RunPanel.lua).
 	if phase == "dead" and SurvivorUI_DeathRecap then
 		record.death = SurvivorUI_DeathRecap()
@@ -333,11 +359,15 @@ end
 
 -- The talent line for a moment just kept: come already, or awaited.
 local function TalentFor(moment)
-	if pendingTalent and math.abs(time() - pendingTalent.at) < 30 then
+	local id, endless = TalentScope()
+	if moment.rebornRunId and id ~= moment.rebornRunId then return end
+	if pendingTalent and pendingTalent.run == id and pendingTalent.endless == endless
+		and math.abs(time() - pendingTalent.at) < 30 then
 		moment.talentXp = pendingTalent.amount
 		awaitingTalent = nil
 	else
 		awaitingTalent = moment
+		awaitingEndless = endless
 	end
 	pendingTalent = nil
 end
@@ -434,39 +464,49 @@ local function SameRun(last, record)
 	return apart >= 0 and apart < 120 and math.abs((Num(record.time) - Num(last.time)) - apart) <= 3
 end
 
+do
+local function RebornHistory(id)
+	if id then
+		for _, saved in ipairs(History()) do
+			if saved.rebornRunId == id then return saved end
+		end
+	end
+end
+
+local function BetterObservation(old, new)
+	return (old == "unavailable" and (new == "partial" or new == "observed"))
+		or (old == "partial" and new == "observed")
+end
+
 local function Keep(record)
 	local history = History()
 	local last = history[1]
-	if record.rebornRunId then
-		for _, saved in ipairs(history) do
-			if saved.rebornRunId == record.rebornRunId and (saved.hero == record.hero or saved.summaryOnly) then
-				if saved.summaryOnly and not record.summaryOnly then
-					for key, value in pairs(record) do
-						if saved[key] == nil or key == "hero" or key == "zone" then saved[key] = value end
-					end
-					saved.summaryOnly = nil
-				end
-				if saved.buildComplete ~= true and record.buildComplete == true then
-					saved.build, saved.buildComplete = record.build, true
-				end
-				if saved.gearStatus and (record.gearStatus == "observed"
-					or (saved.gearStatus == "unavailable" and record.gearStatus == "partial")) then
-					saved.gear, saved.gearStatus = record.gear, record.gearStatus
-				end
-				if saved.armorStatus == "unavailable" and record.armorStatus == "partial" then
-					saved.armor, saved.armorStatus = record.armor, record.armorStatus
-				end
-				if saved.lootStatus == "unavailable" and record.lootStatus and record.lootStatus ~= "unavailable" then
-					saved.loot, saved.lootStatus = record.loot, record.lootStatus
-				end
-				for key, value in pairs(record) do
-					local historicPayload = (key == "gearStatus" and saved.gear)
-						or (key == "armorStatus" and saved.armor) or (key == "lootStatus" and saved.loot)
-					if saved[key] == nil and key ~= "buildComplete" and not historicPayload then saved[key] = value end
-				end
-				return saved
+	local saved = RebornHistory(record.rebornRunId)
+	if saved then
+		if saved.result ~= record.result or (saved.hero ~= record.hero and not saved.summaryOnly) then return saved end
+		if saved.summaryOnly and not record.summaryOnly then
+			saved.hero, saved.zone, saved.summaryOnly = record.hero, record.zone, nil
+		end
+		if saved.buildComplete ~= true and record.buildComplete == true then
+			saved.build, saved.buildComplete = record.build, true
+		end
+		if not saved.rebornSettled then
+			if BetterObservation(saved.gearStatus, record.gearStatus) then
+				saved.gear, saved.gearStatus = record.gear, record.gearStatus
+			end
+			if BetterObservation(saved.armorStatus, record.armorStatus) then
+				saved.armor, saved.armorSet, saved.armorStatus = record.armor, record.armorSet, record.armorStatus
+			end
+			if BetterObservation(saved.lootStatus, record.lootStatus) then
+				saved.loot, saved.lootStatus = record.loot, record.lootStatus
 			end
 		end
+		for key, value in pairs(record) do
+			local equipment = key == "gear" or key == "armor" or key == "armorSet" or key == "loot"
+				or key == "gearStatus" or key == "armorStatus" or key == "lootStatus"
+			if saved[key] == nil and key ~= "buildComplete" and not equipment then saved[key] = value end
+		end
+		return saved
 	end
 	local distinctRuns = last and last.rebornRunId and record.rebornRunId
 	-- The same run kept already (a reload on the end screen): not again.
@@ -528,52 +568,90 @@ local SUMMARY_FIELDS = {
 	dealt = "dmg", taken = "taken", gold = "gold", caches = "chests", magnets = "magnets",
 }
 
--- The game's own end of the run (AZS_GetRunSummary): the moment the watcher
--- just kept for it brought to the end screen's numbers; an endless run's
--- moment taken while it lasted, brought to its end; else, a run the watcher
--- did not see end (left from the menu), kept now.
-local function Settle(summary)
+local function ApplySummary(moment, summary, result)
+	for field, key in pairs(SUMMARY_FIELDS) do
+		if summary[key] ~= nil then moment[field] = Num(summary[key]) end
+	end
+	moment.result = result
+end
+
+local function SettleReborn(summary, id, endless, ending)
+	local result = END_RESULTS[summary.result] or "dead"
+	local observations = ending and ending.equipment
+	local entry = RebornHistory(id)
+	if endless and not (entry and entry.result == "victory") then return false end
+	local moment = entry
+	if endless then moment = entry.endless end
+	if not moment and result ~= "victory" and not endless and Settings().historyWhich == "victories" then return false end
+
+	local liveId, liveEndless
+	if SurvivorUI_RebornEquipmentPhase then liveId, liveEndless = SurvivorUI_RebornEquipmentPhase() end
+	if liveId == id and liveEndless == endless and (not moment or moment.buildComplete == false)
+		and not (moment and moment.rebornSettled) then
+		local fresh = Snapshot(result, observations or {})
+		if endless then
+			if not moment then TalentFor(fresh) end
+			entry.endless = fresh
+			moment = fresh
+		else
+			moment = Keep(fresh)
+		end
+	elseif not moment then
+		moment = { rebornRunId = id, summaryOnly = true, buildComplete = false,
+			hero = ending and ending.hero or "?", zone = ending and ending.zone or "?",
+			at = time(), when = date("%Y-%m-%d %H:%M"),
+			result = result, build = {}, time = Num(summary.t), kills = Num(summary.kills),
+			gearStatus = "unavailable", armorStatus = "unavailable", lootStatus = "unavailable" }
+		if endless then entry.endless = moment else moment = Keep(moment) end
+	end
+
+	if moment.rebornSettled and (moment.result ~= result or (summary.t ~= nil and moment.rebornEndTime ~= nil
+		and Num(summary.t) ~= moment.rebornEndTime)) then return false end
+	if observations then
+		-- At the first native end, an explicit empty or a partial observation
+		-- also supersedes an earlier complete snapshot. Repeat ends can only
+		-- supply missing evidence for the same outcome.
+		local function Accept(field, status)
+			local old = moment[field.."Status"]
+			if not old and moment[field] then return false end
+			return status ~= "unavailable" and status ~= nil
+				and (not moment.rebornSettled or BetterObservation(old, status))
+		end
+		local gear, gearStatus = SurvivorUI_GearSnapshot(observations)
+		local armor, armorSet, armorStatus = SurvivorUI_ArmorSnapshot(observations)
+		local loot, lootStatus = SurvivorUI_RebornFinalLootSnapshot(observations)
+		if Accept("gear", gearStatus) then moment.gear, moment.gearStatus = gear, gearStatus end
+		if Accept("armor", armorStatus) then moment.armor, moment.armorSet, moment.armorStatus = armor, armorSet, armorStatus end
+		if Accept("loot", lootStatus) then moment.loot, moment.lootStatus = loot, lootStatus end
+	end
+	ApplySummary(moment, summary, result)
+	if summary.dealt ~= nil then moment.dealt = Num(summary.dealt) end
+	if summary.caches ~= nil then moment.caches = Num(summary.caches) end
+	if summary.txp ~= nil then moment.talentXp = Num(summary.txp) end
+	moment.rebornSettled = true
+	if summary.t ~= nil then moment.rebornEndTime = Num(summary.t) end
+end
+
+-- The original client keeps its timestamp-based end and Endless handling.
+local function Settle(summary, observed)
+	if observed then
+		return SettleReborn(summary, observed.run, observed.endless, observed)
+	end
 	local rawId = summary.runId or summary.run
 	local summaryId = rawId and SurvivorUI_RebornStableRunId and SurvivorUI_RebornStableRunId(rawId)
-	local currentId = SurvivorUI_RebornStableRunId and SurvivorUI_RebornStableRunId()
-	if summaryId and currentId and summaryId ~= currentId then return false end
+	if summaryId then
+		local currentId = SurvivorUI_RebornStableRunId()
+		if currentId and currentId ~= summaryId then return false end
+		return SettleReborn(summary, summaryId, Num(summary.endl) == 1 and summary.result ~= "victory")
+	end
 	local result = END_RESULTS[summary.result] or "dead"
 	local moment = lastKept
-	if moment and moment.rebornRunId and (summaryId or currentId) and moment.rebornRunId ~= (summaryId or currentId) then
-		moment = nil
-	end
 	lastKept = nil
-	if summaryId and not currentId and not (moment and moment.rebornRunId == summaryId) then
-		-- The HUD may already be back in a lobby or on a different hero.
-		-- Use the matching stored run or the summary alone in that case.
-		for _, saved in ipairs(History()) do
-			if saved.rebornRunId == summaryId then
-				if Num(summary.endl) == 1 and result ~= "victory" then
-					moment = saved.endless
-				else
-					moment = saved
-				end
-				break
-			end
-		end
-		if not moment or moment.rebornRunId ~= summaryId then
-			if (Num(summary.endl) == 1 and result ~= "victory")
-				or (result ~= "victory" and Settings().historyWhich == "victories") then return end
-			moment = Keep({ rebornRunId = summaryId, summaryOnly = true, buildComplete = false,
-				hero = "?", zone = "?", at = time(), when = date("%Y-%m-%d %H:%M"),
-				result = result, build = {}, time = Num(summary.t), kills = Num(summary.kills),
-				gearStatus = "unavailable", armorStatus = "unavailable", lootStatus = "unavailable" })
-		end
-	elseif moment and moment.buildComplete == false and currentId and moment.rebornRunId == currentId
-		and not (Num(summary.endl) == 1 and result ~= "victory") then
-		moment = Keep(Snapshot(result))
-	end
-	if not (moment and ((summaryId and not currentId) or math.abs(time() - Num(moment.at)) < 60)) then
+	if not (moment and math.abs(time() - Num(moment.at)) < 60) then
 		moment = nil
 		local last = History()[1]
 		if Num(summary.endl) == 1 and result ~= "victory" then
 			if last and last.result == "victory" and last.endless and last.endless.result ~= "dead"
-				and (not (summaryId or currentId) or not last.rebornRunId or last.rebornRunId == (summaryId or currentId))
 				and math.abs(time() - Num(last.endless.at)) < 30 then
 				moment = last.endless
 			end
@@ -581,30 +659,71 @@ local function Settle(summary)
 			moment = Keep(Snapshot(result))
 		end
 	end
-	if not moment then
-		return
+	if moment then ApplySummary(moment, summary, result) end
+end
+
+local rebornWatch = {}
+function rebornWatch.SettlePending(pending, phase, id, endless, party)
+	local samePhase = pending.run == id and pending.endless == endless
+	local down = party and SurvivorUI_IsDown and SurvivorUI_IsDown()
+	if party and samePhase and down then
+		pending.down = true
+		return pending
 	end
-	if currentId and moment.rebornRunId == currentId then
-		if moment.gearStatus == "unavailable" or moment.gearStatus == "partial" then
-			local gear, status
-			if SurvivorUI_GearSnapshot then gear, status = SurvivorUI_GearSnapshot() end
-			if status == "observed" or (moment.gearStatus == "unavailable" and status == "partial") then
-				moment.gear, moment.gearStatus = gear, status
+	local active = phase == "playing" or phase == "choosing" or phase == "paused"
+	if party and samePhase and active then
+		if not pending.down then return pending end
+	elseif not (pending.down and not samePhase) then
+		if Settle(pending.summary, pending) ~= false and samePhase then rebornWatch.captured = true end
+	end
+end
+
+function rebornWatch.Update(phase, which, step)
+	local id, endless = SurvivorUI_RebornEquipmentPhase()
+	if rebornWatch.id ~= id or rebornWatch.endless ~= endless then
+		local previous = rebornWatch.endless and RebornHistory(rebornWatch.id)
+		if previous and previous.endless and previous.endless.result == "going" then
+			previous.endless.result = "left"
+		end
+		rebornWatch.id, rebornWatch.endless, rebornWatch.captured = id, endless, nil
+		rebornWatch.wait = 0
+	end
+	local party = SurvivorUI_InParty and SurvivorUI_InParty()
+	local final, prior = SurvivorUI_RebornEndObservation()
+	if rebornWatch.seen ~= final then
+		if prior and prior ~= rebornWatch.seen and prior ~= rebornWatch.prior then
+			rebornWatch.SettlePending(prior, phase, id, endless, party)
+		end
+		rebornWatch.prior = prior
+		rebornWatch.seen, rebornWatch.pending = final, final
+	end
+	if rebornWatch.pending then
+		rebornWatch.pending = rebornWatch.SettlePending(rebornWatch.pending, phase, id, endless, party)
+	end
+	if not id or (party and phase == "dead") then return end
+	local terminal = phase == "dead" or phase == "victory"
+	if terminal and not rebornWatch.captured then
+		rebornWatch.captured = true
+		if endless then
+			local entry = RebornHistory(id)
+			if phase == "dead" and entry and entry.result == "victory"
+				and (not entry.endless or entry.endless.result == "going") then
+				entry.endless = Snapshot("dead")
+				TalentFor(entry.endless)
+			end
+		elseif phase == "victory" or which ~= "victories" then
+			Keep(Snapshot(phase))
+		end
+	elseif endless and (phase == "playing" or phase == "choosing" or phase == "paused") then
+		rebornWatch.wait = rebornWatch.wait - step
+		if rebornWatch.wait <= 0 then
+			rebornWatch.wait = 10
+			local entry = RebornHistory(id)
+			if entry and entry.result == "victory" and (not entry.endless or entry.endless.result == "going") then
+				entry.endless = Snapshot("going")
 			end
 		end
-		if moment.armorStatus == "unavailable" and SurvivorUI_ArmorSnapshot then
-			moment.armor, moment.armorSet, moment.armorStatus = SurvivorUI_ArmorSnapshot()
-		end
-		if moment.lootStatus == "unavailable" and SurvivorUI_RebornFinalLootSnapshot then
-			moment.loot, moment.lootStatus = SurvivorUI_RebornFinalLootSnapshot()
-		end
 	end
-	for field, key in pairs(SUMMARY_FIELDS) do
-		if summary[key] ~= nil then
-			moment[field] = Num(summary[key])
-		end
-	end
-	moment.result = result
 end
 local watcher = CreateFrame("Frame")
 local elapsed = 0
@@ -622,6 +741,10 @@ watcher:SetScript("OnUpdate", function()
 	-- Keep: None (the options, Run History): nothing kept.
 	local which = Settings().historyWhich or "all"
 	if which == "none" then
+		return
+	end
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+		rebornWatch.Update(phase, which, step)
 		return
 	end
 	-- The game's end, come since the last look (0.102 on).
@@ -690,6 +813,7 @@ watcher:SetScript("OnUpdate", function()
 		end
 	end
 end)
+end
 
 local talent = CreateFrame("Frame")
 talent:RegisterEvent("CHAT_MSG_SYSTEM")
@@ -698,11 +822,13 @@ talent:SetScript("OnEvent", function()
 	if not amount then
 		return
 	end
-	if awaitingTalent and not awaitingTalent.talentXp then
+	local id, endless = TalentScope()
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() and not id then return end
+	if awaitingTalent and awaitingTalent.rebornRunId == id and awaitingEndless == endless and not awaitingTalent.talentXp then
 		awaitingTalent.talentXp = tonumber(amount)
 		awaitingTalent = nil
 	else
-		pendingTalent = { amount = tonumber(amount), at = time() }
+		pendingTalent = { amount = tonumber(amount), at = time(), run = id, endless = endless }
 	end
 end)
 
@@ -3129,14 +3255,26 @@ function gearDraw.FitLine(line, name, text)
 	local room = INNER - GEAR_ROW - 4
 	local tagsWide = math.min(gearDraw.Measure(text, 7), room * 0.45)
 	local nameWide = math.min(gearDraw.Measure(name, 9), room - tagsWide - 8)
-	line.label:SetText(name)
-	line.label:SetWidth(nameWide + 2)
-	line.tags:SetText(text)
 	local left = room - nameWide - 8
 	local size = 9
 	while size > 6 and gearDraw.Measure(text, size) > left do
 		size = size - 1
 	end
+	if line.runJewelry then
+		local function Fit(words, points, width)
+			if gearDraw.Measure(words, points) <= width then return words end
+			local count = string.len((string.gsub(words, "[\128-\191]", "")))
+			for index = count - 1, 1, -1 do
+				local cut = SurvivorUI_Cut(words, index).."..."
+				if gearDraw.Measure(cut, points) <= width then return cut end
+			end
+			return ""
+		end
+		name, text = Fit(name, 9, nameWide), Fit(text, size, left)
+	end
+	line.label:SetText(name)
+	line.label:SetWidth(nameWide + 2)
+	line.tags:SetText(text)
 	line.tags:SetFont(SurvivorUI_FONT, size + FONT_BUMP, "OUTLINE")
 	line.tags:SetWidth(math.min(gearDraw.Measure(text, size), left) + 2)
 end

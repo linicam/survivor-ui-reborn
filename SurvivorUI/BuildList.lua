@@ -2142,7 +2142,8 @@ local function FitTags(line, text)
 	-- The face too: one worn since (the language's, the piece's) measures anew.
 	local face, labelSize = line.label:GetFont()
 	face = face or SurvivorUI_FONT
-	local key = (line.label:GetText() or "").."|"..text.."|"..step.."|"..math.floor((labelSize or 0) + 0.5).."|"..face
+	local iconSpace = line.rebornItem and line.rebornItem.icon and GEAR_ROW or 0
+	local key = (line.label:GetText() or "").."|"..text.."|"..step.."|"..math.floor((labelSize or 0) + 0.5).."|"..face.."|"..iconSpace
 	if line.tagText == key then
 		return
 	end
@@ -2150,7 +2151,6 @@ local function FitTags(line, text)
 	-- A label not drawn yet measures nothing: sized again next time (none,
 	-- the slot and rank both off, measures nothing too).
 	line.tagText = (labelWidth > 0 or (line.label:GetText() or "") == "") and key or nil
-	local iconSpace = line.rebornItem and line.rebornItem.icon and GEAR_ROW or 0
 	local room = WIDTH - 8 - labelWidth - 10 - iconSpace
 	-- Its size told to EditCard.lua's Dress as its own (base) and as the one
 	-- it is at, so the text size is not added twice.
@@ -2186,12 +2186,15 @@ local function FitTags(line, text)
 			return
 		end
 	end
-	local first = parts[1]..SEPARATOR.."...+"
+	local first = parts[1]
+	if not line.rebornItem or table.getn(parts) > 1 then first = first..SEPARATOR.."...+" end
 	if not Fits(6, first) then
-		line.tags:SetText(CutTo(parts[1], math.max(0, room), function(shown)
+		local cut = CutTo(parts[1], math.max(0, room), function(shown)
 			line.tags:SetText(shown)
 			return line.tags:GetStringWidth()
-		end))
+		end)
+		line.tags:SetText(cut)
+		if line.rebornItem and line.tags:GetStringWidth() > room then line.tags:SetText("") end
 	end
 end
 
@@ -2378,12 +2381,8 @@ local function DrawGear()
 	if SurvivorUI_RebornCheckRun then
 		SurvivorUI_RebornCheckRun()
 	end
-	-- Reborn first: the meter loadout / AZSGEAR list, when the game gave
-	-- one. Inventory slots are the fallback (original game, or a Reborn
-	-- build where the loadout carries no jewelry). Each loadout piece
-	-- gets its own row, in its own slot: the list is one row per piece
-	-- (a sixth piece is no longer dropped), and no "empty" rows are
-	-- shown for slots the loadout does not claim.
+	-- Reborn wears one row per item from the current native World feed.
+	-- Inventory slot rows belong to the original client.
 	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry() or nil
 	if rebornJewelry and SurvivorUI_RebornActive() then
 		local count = table.getn(rebornJewelry.items)
@@ -2405,7 +2404,7 @@ local function DrawGear()
 			-- stays the existing grey. Rarity is never invented from
 			-- the rank/level number.
 			local r, g, b = RarityColor(item.rarity, item.native)
-			-- The piece's icon where the loadout gave one; the label
+			-- The piece's native icon, when available; the label
 			-- makes room for it, else sits at the row's left edge.
 			if item.icon then
 				line.icon:SetTexture(item.icon)
@@ -2901,9 +2900,9 @@ end
 
 -- For the last runs too: the jewelry lines as they read, one a slot: { label,
 -- tags, color, item, name, tip }, or { label, empty } for a slot with nothing.
-function SurvivorUI_GearSnapshot()
-	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry() or nil
-	if rebornJewelry and SurvivorUI_RebornActive() then
+function SurvivorUI_GearSnapshot(observations)
+	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry(false, observations) or nil
+	if rebornJewelry and (observations or SurvivorUI_RebornActive()) then
 		local gear = {}
 		for index = 1, table.getn(rebornJewelry.items) do
 			local item = rebornJewelry.items[index]
@@ -2957,11 +2956,11 @@ end
 -- { slot, icon, color, item, name, tip }; and the set they make, as their
 -- tooltips say it ("Field Marshal's (8/8)"): { name, count, of }, or nil.
 local ARMOR_SLOTS = { 1, 3, 15, 5, 9, 10, 6, 7, 8, 16, 17, 18 }
-function SurvivorUI_ArmorSnapshot()
+function SurvivorUI_ArmorSnapshot(observations)
 	local armor, set = {}, nil
-	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
-		local observations = SurvivorUI_RebornEquipmentObservations()
-		local wornArmor = observations and observations.armor
+	if observations or (SurvivorUI_RebornActive and SurvivorUI_RebornActive()) then
+		local snapshot = observations or SurvivorUI_RebornEquipmentObservations()
+		local wornArmor = snapshot and snapshot.armor
 		for _, row in ipairs(wornArmor or {}) do
 			local slot = type(row) == "table" and tonumber(row.slot)
 			if slot and type(row.name) == "string" and row.name ~= "" then
@@ -3008,9 +3007,9 @@ function SurvivorUI_ArmorSnapshot()
 	return armor, set
 end
 
-function SurvivorUI_RebornFinalLootSnapshot()
-	local observations = SurvivorUI_RebornEquipmentObservations()
-	local rows = observations and observations.finalLoot
+function SurvivorUI_RebornFinalLootSnapshot(observations)
+	local snapshot = observations or SurvivorUI_RebornEquipmentObservations()
+	local rows = snapshot and snapshot.finalLoot
 	if not rows then return {}, "unavailable" end
 	local loot, status = {}, "observed"
 	for _, row in ipairs(rows) do
