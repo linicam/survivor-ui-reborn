@@ -535,7 +535,7 @@ local function ShowGearTip(row)
 	panelTip:SetText(L(SLOT[row.slot]), GOLD[1], GOLD[2], GOLD[3])
 	previewOwner, previewIsNative = row.iconButton, nil
 	local comparison, change = row.comparison, row.change
-	if row.plan then
+	if row.plan or not comparison then
 		if change then
 			local catalog, class = current.catalog, current.context.class
 			local function Intrinsic(piece)
@@ -868,6 +868,21 @@ local function PlanEquipment(current, comparison, plan)
 	end
 end
 
+local function WornEquipment(current)
+	Line(equipment, T("Worn gear"), GOLD)
+	local catalog, context = current.catalog, current.context
+	local worn = Planner.BySlot(context.pieces)
+	local nameWidth = math.floor(equipment.width * 0.55)
+	for _, slot in ipairs(Planner.Slots(catalog, context.class)) do
+		local piece = worn[slot]
+		if piece then
+			local row = ItemRow(equipment, current, slot, piece, piece, nil, nil, nil, nameWidth - 31)
+			Cell(equipment, row, 1, ItemText(catalog, piece), nameWidth, equipment.width - nameWidth, "LEFT", TEXT)
+		end
+	end
+	if not next(worn) then Line(equipment, T("No equipment is worn."), MUTED) end
+end
+
 local function ExecutionRows(current, comparison, plan)
 	local area, context = equipment, current.context
 	comparison.execution = comparison.execution or Planner.Execution(current.catalog, context, current.actual,
@@ -1075,6 +1090,21 @@ local function PlanFlags(plan, variant, quote, output)
 	return table.concat(flags, " · ")
 end
 
+local function PlanningStatus(current, index)
+	local plan = searches and searches[index]
+	if not current.actual then return "Waiting for equipment" end
+	if plan and plan.worker then return "Searching equipment combinations…" end
+	if plan and plan.error then return "Upgrade search unavailable." end
+	if current.context.scope == "unsupported" then return "Campaign pressure and plans are unavailable in this mode." end
+	if not current.context.demand then
+		return current.context.hub and not current.context.zone and "Select a target map to plan upgrades."
+			or "Selected map or difficulty unavailable"
+	end
+	if not current.reference then return "Comparable baseline required" end
+	if current.current.output and index == 1 and not current.drops then return "Expansion drop data unavailable." end
+	return "Comparable output and equipment data are required."
+end
+
 local function UpdateCards(current, top)
 	local visible = activeView == "planner" and current and current.context.demand
 	local width = math.floor((windowWidth - 42) / 2)
@@ -1097,12 +1127,7 @@ local function UpdateCards(current, top)
 				end
 				status = variant == "max" and T("Quality and stars ceiling") or T(PlanStatus(plan, configuration))
 				if not stacked then limits = PlanFlags(plan, variant, quote, output) end
-			elseif plan and plan.worker then status = T("Searching equipment combinations…")
-			elseif plan and plan.error then status = T("Upgrade search unavailable.")
-			elseif current.current.output and index == 1 and not current.drops then status = T("Expansion drop data unavailable.")
-			elseif not current.actual then status = T("Waiting for equipment")
-			elseif not current.reference then status = T("Comparable baseline required")
-			else status = T("Comparable output and equipment data are required.") end
+			else status = T(PlanningStatus(current, index)) end
 			card:ClearAllPoints()
 			card:SetPoint("TOPLEFT", panel, "TOPLEFT", 16 + (index - 1) * (width + 10), -top)
 			card:SetWidth(width)
@@ -1273,9 +1298,10 @@ drawComparison = function(current, reset)
 			local configuration = SelectedConfiguration(selectedPlan)
 			if executionShown and comparison.changed then ExecutionRows(current, comparison, configuration)
 			else PlanEquipment(current, comparison, configuration) end
-		elseif planner and current.current.output and searches and searches[selectedPlan] and searches[selectedPlan].worker then
-			Line(equipment, T("Searching equipment combinations…"), MUTED)
-		elseif not planner then
+		elseif planner then
+			Line(equipment, T(PlanningStatus(current, selectedPlan)), MUTED)
+			WornEquipment(current)
+		else
 			Line(equipment, T("Gear analysis is unavailable for these game data."), MUTED)
 		end
 
@@ -1299,22 +1325,25 @@ drawComparison = function(current, reset)
 				Line(effects, T("Set changes"), GOLD)
 				for _, entry in ipairs(sets) do Line(effects, entry) end
 			end
-			if next(evaluation.opaque) or next(current.actual.opaque) then
-				Line(effects, T("Some active set effects have no quantified combat value."), MUTED)
-			end
-			if evaluation.sets and next(evaluation.sets) then
-				Line(effects, T("Active set effects · outside output model"), GOLD)
-				for _, tier in ipairs(Planner.Tiers(current.catalog)) do
-					for _, bonus in ipairs(evaluation.sets[tier] or {}) do
-						Line(effects, F("%s (%d) · %s", TierText(current.catalog, tier), bonus.pieces, SetEffect(bonus)))
-					end
+		end
+		local displayed = evaluation or current.actual
+		if next(displayed.opaque) or next(current.actual.opaque) then
+			Line(effects, T("Some active set effects have no quantified combat value."), MUTED)
+		end
+		if displayed.sets and next(displayed.sets) then
+			Line(effects, T("Active set effects · outside output model"), GOLD)
+			for _, tier in ipairs(Planner.Tiers(current.catalog)) do
+				for _, bonus in ipairs(displayed.sets[tier] or {}) do
+					Line(effects, F("%s (%d) · %s", TierText(current.catalog, tier), bonus.pieces, SetEffect(bonus)))
 				end
 			end
-			if current.context.demand and (evaluation.stats.armor or 0) > 0.6 then
-				Line(effects, T("Damage reduction is capped at 60% in this model."), MUTED)
-			end
+		end
+		if current.context.demand and (displayed.stats.armor or 0) > 0.6 then
+			Line(effects, T("Damage reduction is capped at 60% in this model."), MUTED)
 		end
 		if details then detailStart = effects.y; Details(effects, current) end
+	elseif current then
+		Line(equipment, T("Waiting for equipment"), MUTED)
 	end
 	Finish(effectHeader)
 	ConfigureActions(current, comparison)
@@ -1640,6 +1669,7 @@ local function Build()
 	simulatorTab = Button(panel, "Equipment Simulator", 145, function()
 		if activeView ~= "simulator" then showView("simulator") end
 	end, true)
+	simulatorTab:SetPoint("LEFT", plannerTab, "RIGHT", 6, 0)
 	baselineButton = Button(panel, "Set 100% Baseline", 166, SaveBaseline, true)
 
 	header = NewArea("SurvivorUIRebornGearContext")

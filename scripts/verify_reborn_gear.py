@@ -117,6 +117,30 @@ return function(mode, target, budget)
         end
     end
     if budget then assert(chosen.gold <= budget) end
+    if target == 300 and budget == 15776 then
+        local expectedPressure = mode == "A" and 366.1702 or 373.1834
+        assert(chosen.gold == 15776 and math.abs(chosen.outputPressure - expectedPressure) < 0.00005)
+        local without = P.Search(cat, context, actual, reference, drops, 150000,
+            P.Policy({ target = target, budget = budget, protectSets = false }))
+        while without.worker do P.Step(without, 240) end
+        assert(not without.error and without.unreachable and without.affordable.complete)
+        local unrestricted = without.affordable
+        assert(chosen.complete and result.unreachable and chosen.gold == unrestricted.gold
+            and math.abs(chosen.outputPressure - unrestricted.outputPressure) < P.tolerance)
+        local bySlot = P.BySlot(unrestricted.pieces)
+        for _, piece in ipairs(chosen.pieces) do assert(P.SamePiece(piece, bySlot[piece.slot])) end
+        assert(P.Evaluate(cat, context.class, chosen.pieces).sets.legendary[1].pieces == 4)
+        if mode == "A" then
+            local protected, unprotected = P.BySlot(result.maxGear.pieces), P.BySlot(without.maxGear.pieces)
+            local replacements = 0
+            for _, piece in ipairs(context.pieces) do
+                if protected[piece.slot].tier == piece.tier and unprotected[piece.slot].tier ~= piece.tier then
+                    replacements = replacements + 1
+                end
+            end
+            assert(replacements == 4)
+        end
+    end
     if target == 410 then assert(chosen.gold == 0 and result.minimumTargetCost == 0) end
     return result.visited, result.affordable and result.affordable.visited or 0, updates, chosen.outputPressure,
         chosen.gold, result.minimumTargetCost, result.complete, chosen.complete, elapsed
@@ -133,7 +157,7 @@ def recorded_benchmark(lua, repeat):
         if has_budget:
             cost = run(mode, 370, None)[5]
             assert cost and cost > 0
-            cases += [(370, cost), (370, cost - 1), (100, 60000), (100, 0), (410, 60000)]
+            cases += [(370, cost), (370, cost - 1), (300, 15776), (100, 60000), (100, 0), (410, 60000)]
         for target, budget in cases:
             results = [run(mode, target, budget) for _ in range(repeat)]
             nodes, budget_nodes, updates, output, spent, minimum, complete, budget_complete, _ = results[0]

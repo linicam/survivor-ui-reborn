@@ -917,18 +917,41 @@ local function DrainSearch()
 	end
 	error("Search failed to stop")
 end
+local function CheckTabs(plannerText, simulatorText)
+	local planner, simulator = assert(Find("Button", plannerText)), assert(Find("Button", simulatorText))
+	local point = assert(simulator.point, "R30: simulator tab must have a physical anchor")
+	assert(planner.point[1] == "TOPLEFT" and point[1] == "LEFT" and point[2] == planner and point[3] == "RIGHT")
+	assert(planner.point[4] + planner.width + point[4] + simulator.width <= planner.parent.width)
+	assert(not planner.disabled and not simulator.disabled)
+end
+local function CheckWorn(reason, count)
+	local area = Named("Equipment").scrollChild
+	assert(Find("FontString", reason) and Find("FontString", "Worn gear"))
+	local shown = 0
+	for _, row in ipairs(widgets) do
+		if row.parent == area and row.shown and row.slot then
+			assert(row.item and row.iconButton.shown and row.label.text ~= "")
+			assert(row.cells[1].text:find("★" .. row.item.stars, 1, true))
+			shown = shown + 1
+		end
+	end
+	assert(shown == count and not Find("Button", "Load in Simulator"))
+end
 
 assert(SurvivorUI_RebornGearOpen("show"))
+CheckTabs("Difficulty & Upgrade Planner", "Equipment Simulator")
 assert(Find("FontString", "Waiting for the game's world snapshot"))
 Zone("elwynn", 0, "warlock", "a")
 assert(Find("FontString", "Warlock · Elwynn Forest · Normal"))
 assert(Find("FontString", "Current equipment unavailable"))
 assert(Find("Button", "Set 100% Baseline").disabled)
 assert(Find("FontString", "Waiting for equipment"))
+assert(not Find("FontString", "Worn gear"))
 local head = { slot = "0", rarity = "0", stars = "0", icon = "INV_Test", name = "Test item" }
 Armor({ head })
 assert(not Find("FontString", "100% reference:"))
 assert(Find("FontString", "Comparable baseline required"))
+CheckWorn("Comparable baseline required", 1)
 local tooltip = dollSlot:Hover()
 assert(dollSlot.hooks == 1 and string.find(tooltip, "Native tooltip", 1, true))
 assert(string.find(tooltip, "408 gold", 1, true) and string.find(tooltip, "Next tier", 1, true))
@@ -999,6 +1022,7 @@ assert(Find("Button", "Update 100% Baseline").disabled)
 Armor({ head })
 assert(VisiblePanel().scripts.OnUpdate, "both plans are event-triggered, then sliced")
 assert(Find("FontString", "Searching equipment combinations…"))
+CheckWorn("Searching equipment combinations…", 1)
 Click("Equipment Simulator")
 assert(not VisiblePanel().scripts.OnUpdate, "simulator editing suspends optimizer work")
 Click("Difficulty & Upgrade Planner")
@@ -1198,6 +1222,7 @@ AZS_ZONE.mode = "swarm"
 handlers.AZSZONE()
 Armor({ head })
 assert(Find("FontString", "Campaign pressure and plans are unavailable in this mode"))
+CheckWorn("Campaign pressure and plans are unavailable in this mode", 1)
 assert(not VisiblePanel().scripts.OnUpdate and not Find("Button", "Update 100% Baseline"))
 AZS_ZONE.zone, AZS_ZONE.dt, AZS_ZONE.heroic = "elwynn", 0, 0
 Armor({ head })
@@ -1219,6 +1244,16 @@ Zone("dalaran", 0, "paladin", "d")
 assert(Find("FontString", "Theoretical Campaign preview"))
 assert(not Find("Button", "Update 100% Baseline") and Find("Button", "Difficulty & Upgrade Planner"))
 assert(not StatCells(Named("Results"), "Output pressure") and not Find("FontString", "Plan A") and Find("FontString", "100% reference:"))
+Armor({ { slot = 0, rarity = 0, stars = 1 }, { slot = 1, rarity = 0, stars = 1 },
+	{ slot = 2, rarity = 0, stars = 1 }, { slot = 3, rarity = 0, stars = 1 } })
+CheckTabs("Difficulty & Upgrade Planner", "Equipment Simulator")
+CheckWorn("Select a target map to plan upgrades.", 4)
+assert(Find("FontString", "Active set effects") and not StatCells(Named("Results"), "Output pressure"))
+assert(Find("FontString", "Common ★1") and not Find("FontString", "Upgrade gold"))
+assert(HoverIcon("head", false):find("Common ★1", 1, true))
+Click("Equipment Simulator")
+assert(Find("FontString", "Simulated equipment") and SlotMenu("head", "legendary"))
+Click("Difficulty & Upgrade Planner")
 Armor({ head })
 Click("Select target map")
 Click("Elwynn Forest")
@@ -1304,6 +1339,7 @@ for _, widget in ipairs(widgets) do
 	if widget.parent == panel and widget.items then popup = widget end
 end
 near(panel.width * panel.scale, 493)
+CheckTabs("Difficulty & Upgrade Planner", "Equipment Simulator")
 near(panel.height * panel.scale, 388)
 assert(panel.backgroundAlpha == 1 and gearPane.point[4] == effectsPane.point[4] and gearPane.point[5] > effectsPane.point[5])
 assert(shade.shown and shade.mouse and shade.wheel and shade.level == nil and panel.level > shade:GetFrameLevel())
@@ -1529,4 +1565,21 @@ assert(#commands == controlsBefore, "auto recording before zone arrival leaves n
 assert(SurvivorUI_RebornGearOpen("show") and #commands == controlsBefore + 1)
 assert(SurvivorUI_RebornGearOpen("show") and #commands == controlsBefore + 1)
 SurvivorUI_RebornRecordStop()
+do
+	-- Build a new panel after loading zhCN so its fixed labels use that locale.
+	VisiblePanel():Hide()
+	AZS.On = function(event, fn) handlers[event] = fn end
+	dofile("SurvivorUI/RebornGear.lua")
+	Zone("dalaran", 0, "warlock", "localized-tab")
+	Armor({ head })
+	assert(SurvivorUI_RebornGearOpen("show"))
+	CheckTabs("难度与升级规划", "装备模拟器")
+	UIParent:SetWidth(525)
+	UIParent:SetHeight(420)
+	local localizedPanel = Find("Button", "装备模拟器").parent
+	localizedPanel.scripts.OnEvent(localizedPanel, "DISPLAY_SIZE_CHANGED")
+	CheckTabs("难度与升级规划", "装备模拟器")
+	Click("装备模拟器")
+	assert(Find("FontString", "模拟穿戴"))
+end
 print("PASS: gear arithmetic, both constraints, oracle, snapshot isolation, previews, and runtime lifecycle")
