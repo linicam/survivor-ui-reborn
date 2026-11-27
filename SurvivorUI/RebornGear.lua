@@ -10,9 +10,10 @@ local POSITIVE, NEGATIVE = { 0.55, 1, 0.65 }, { 1, 0.52, 0.52 }
 local NEUTRAL = { body = { 0.12, 0.13, 0.16 }, edge = { 0.38, 0.38, 0.43 }, text = TEXT }
 local MENU_HEIGHT = 23
 local panel, shield, plannerTab, simulatorTab, baselineButton
-local header, equipment, effectHeader, effects, divider, planCards, actions
+local header, equipment, effectHeader, effects, divider, planCards, variantButtons, actions
 local popup, menuChoice, panelTip
 local view, activeView, selectedPlan = "planner", nil, 1
+local planVariants = {}
 local details, fullPlan, detailOffset, detailStart, windowWidth, windowHeight
 local observedZone, worn, state, draft, searches, rendering
 local planEffects, simulation
@@ -108,7 +109,7 @@ end
 local function ClearState()
 	ClearPreview()
 	state, draft, searches = nil, nil, nil
-	planEffects, simulation = nil, nil
+	planEffects, simulation, planVariants = nil, nil, {}
 	if panel then panel:SetScript("OnUpdate", nil) end
 end
 
@@ -188,12 +189,13 @@ local function TraceGear(trigger, wire, invalidation)
 	elseif not context.demand then pressure = "demand_unavailable"
 	elseif not current.actual then pressure = equipment
 	elseif not current.reference then pressure = "baseline_" .. baseline
-	elseif not current.current.combined then pressure = "partial_pressure"
+	elseif not current.current.output then pressure = "output_unavailable"
+	elseif not current.current.survival then pressure = "partial_pressure"
 	else pressure = "ready" end
 
 	local demand = context and context.demand
-	local plans = pressure
-	if pressure == "ready" and not current.actual.sets then plans = "sets_unavailable" end
+	local plans = pressure == "partial_pressure" and "ready" or pressure
+	if plans == "ready" and not current.actual.sets then plans = "sets_unavailable" end
 	SurvivorUI_RebornRecordGearState({
 		trigger = trigger, worldEpoch = worldEpoch, invalidation = invalidation,
 		ordering = { world = worldOrder, zone = zoneOrder, armor = armorOrder, associatedArmor = associatedArmorOrder },
@@ -203,9 +205,10 @@ local function TraceGear(trigger, wire, invalidation)
 			equipment = equipment, armorDisposition = armorDisposition, armorAssociated = associatedArmorOrder ~= nil,
 			acceptedArmorCount = associatedArmorOrder and table.getn(worn) or nil,
 			baseline = baseline, pressure = pressure,
-			planA = plans == "ready" and not current.drops and "drop_scope_unavailable" or plans, planB = plans,
-			saveBaseline = demand and demand.output ~= nil and demand.survival ~= nil
-				and current.actual ~= nil and current.actual.sets ~= nil and current.actual.survival ~= nil or false },
+			planA = plans == "ready" and not current.drops and current.current.output > 100 and "drop_scope_unavailable" or plans,
+			planB = plans,
+			saveBaseline = demand and demand.output ~= nil
+				and current.actual ~= nil and current.actual.sets ~= nil and current.actual.output ~= nil or false },
 	}, observedZone, wire)
 end
 
@@ -251,11 +254,6 @@ end
 
 local function ShortPercent(value)
 	return value and string.format("%.1f%%", value) or T("Unavailable")
-end
-
-local function DifficultyLine(result)
-	return F("Combined pressure %s · Output pressure %s · Survival pressure %s",
-		ShortPercent(result.combined), ShortPercent(result.output), ShortPercent(result.survival))
 end
 
 local function Delta(value, percent, lowerIsBetter)
@@ -338,6 +336,11 @@ local function QuoteText(quote)
 	return cost
 end
 
+local function PriceLabel(quote)
+	if not quote.unknown then return F("%d gold", quote.gold) end
+	return quote.gold > 0 and F("%d gold known", quote.gold) or T("Price unknown")
+end
+
 local function PreviewChange(tip, current, pieces, base, before, after, caption, isolated)
 	local catalog, context = current.catalog, current.context
 	local slot = after and after.slot or before.slot
@@ -358,13 +361,9 @@ local function PreviewChange(tip, current, pieces, base, before, after, caption,
 	end
 	local from = Planner.Difficulty(context.demand, base, current.reference)
 	local to = Planner.Difficulty(context.demand, evaluated, current.reference)
-	if from.combined and to.combined then
-		local color = PressureColor(from.combined, to.combined)
-		tip:AddLine(F(isolated and "Isolated item combined pressure %s → %s" or "Combined pressure %s → %s",
-			ShortPercent(from.combined), ShortPercent(to.combined)), color[1], color[2], color[3], true)
-	end
 	if (from.output and to.output) or (from.survival and to.survival) then
-		tip:AddLine(F("Output pressure %s · Survival pressure %s", PressureDelta(from.output, to.output),
+		tip:AddLine(F(isolated and "Item only · Output pressure %s · Survival pressure %s" or "Output pressure %s · Survival pressure %s",
+			PressureDelta(from.output, to.output),
 			PressureDelta(from.survival, to.survival)), TEXT[1], TEXT[2], TEXT[3], true)
 	end
 	return quote
@@ -514,8 +513,10 @@ local function ShowGearTip(row)
 		else
 			panelTip:AddLine(ItemText(current.catalog, row.item), TEXT[1], TEXT[2], TEXT[3], true)
 		end
-		local color = PressureColor(current.current.combined, comparison.pressure.combined)
-		panelTip:AddLine(F("Full plan combined pressure %s", ShortPercent(comparison.pressure.combined)), color[1], color[2], color[3], true)
+		local actual, target = current.current, comparison.pressure
+		panelTip:AddLine(F("Full plan · Output pressure %s · Survival pressure %s",
+			Colored(ShortPercent(target.output), PressureColor(actual.output, target.output)),
+			Colored(ShortPercent(target.survival), PressureColor(actual.survival, target.survival))), TEXT[1], TEXT[2], TEXT[3], true)
 	else
 		panelTip:AddLine(F("Simulated item · %s", ItemText(current.catalog, row.item)), GOLD[1], GOLD[2], GOLD[3], true)
 		if change then panelTip:AddLine(QuoteText(change.quote), TEXT[1], TEXT[2], TEXT[3], true) end
@@ -636,10 +637,10 @@ local function ItemRow(area, current, slot, item, original, comparison, plan, ch
 end
 
 local function SearchFor(current)
-	if searches or not current.current.combined or not current.actual.sets then return end
+	if searches or not current.current.output or not current.actual.sets then return end
 	local context, actual, ref = current.context, current.actual, current.reference
 	searches = {
-		current.drops and Planner.Search(current.catalog, context, actual, ref, current.drops, 150000),
+		(current.drops or current.current.output <= 100) and Planner.Search(current.catalog, context, actual, ref, current.drops, 150000),
 		Planner.Search(current.catalog, context, actual, ref, nil, 150000),
 	}
 end
@@ -647,6 +648,14 @@ end
 local function ReadyPlan(index)
 	local plan = searches and searches[index]
 	return plan and not plan.worker and not plan.error and plan or nil
+end
+
+local function SelectedConfiguration(index)
+	local plan = ReadyPlan(index)
+	if not plan then return end
+	local selected = planVariants[index] or (plan.unreachable and "max" or "economy")
+	if plan.maxGear and selected == "max" then return plan.maxGear, selected end
+	return plan, "economy"
 end
 
 local function Compare(current, pieces)
@@ -660,20 +669,18 @@ local function Compare(current, pieces)
 end
 
 local function PlanComparison(current, index)
-	local plan = ReadyPlan(index)
-	if not plan then return end
+	local configuration = SelectedConfiguration(index)
+	if not configuration then return end
 	planEffects = planEffects or {}
-	local hit = planEffects[index]
-	if not hit or hit.plan ~= plan then
-		hit = { plan = plan, comparison = Compare(current, plan.pieces) }
-		planEffects[index] = hit
+	if not planEffects[configuration] then
+		planEffects[configuration] = Compare(current, configuration.pieces)
 	end
-	return hit.comparison
+	return planEffects[configuration]
 end
 
 local function LoadPlan(index)
 	if not Read() then return end
-	local plan = ReadyPlan(index)
+	local plan = SelectedConfiguration(index)
 	if not plan then return end
 	draft, simulation = Planner.Copy(plan.pieces), nil
 	showView("simulator")
@@ -686,7 +693,7 @@ local function SaveBaseline()
 	if time then saved.at = time() end
 	Settings().baselines[saved.class] = saved
 	ClearPreview()
-	state, searches, planEffects, simulation = nil, nil, nil, nil
+	state, searches, planEffects, simulation, planVariants = nil, nil, nil, nil, {}
 	render()
 	TraceGear("baseline_saved")
 end
@@ -776,8 +783,11 @@ local function PlanEquipment(current, comparison, plan)
 	end
 	local heading = Line(area, T("Equipment slot"), GOLD, 0, nameWidth - 6)
 	Columns(heading, T("Actual"), T("Plan gear"), T("Upgrade gold"), MUTED)
+	if (plan.protectedHolds or 0) > 0 then
+		Line(area, F("Lower tier retained in %d slots to preserve active set effects.", plan.protectedHolds), MUTED)
+	end
 	if not comparison.changed then
-		Line(area, T(plan.after <= 100 and "At or below 100%. No upgrade is needed for this target."
+		Line(area, T(plan.outputPressure <= 100 and "Output target met. No upgrade is needed for this target."
 			or "This result keeps the current gear."), MUTED)
 	end
 	local original, target = Planner.BySlot(current.context.pieces), Planner.BySlot(comparison.pieces)
@@ -785,7 +795,7 @@ local function PlanEquipment(current, comparison, plan)
 		local change, after, before = comparison.changes[slot], target[slot], original[slot]
 		if change or ((fullPlan or not comparison.changed) and (after or before)) then
 			local row = ItemRow(area, current, slot, after, before, comparison, plan, change, nameWidth - 31)
-			Columns(row, ItemText(catalog, before), ItemText(catalog, after), change and F("%d gold", change.quote.gold) or "—", TEXT)
+			Columns(row, ItemText(catalog, before), ItemText(catalog, after), change and PriceLabel(change.quote) or "—", TEXT)
 			if change then Cell(area, row, 4, Acquisition(change, true), 26, area.width - 26, "LEFT", MUTED, row.height) end
 		end
 	end
@@ -835,7 +845,7 @@ local function EquipmentControls(current, slot, simulated, actual, comparison)
 	end
 	if change then
 		local actualLabel = F("Worn: %s", ItemText(current.catalog, actual))
-		local cost = F("%d gold", change.quote.gold)
+		local cost = PriceLabel(change.quote)
 		Cell(area, row, 1, F("%s · %s · %s", actualLabel, cost, Acquisition(change)),
 			26, area.width - 26, "LEFT", MUTED, row.height)
 	end
@@ -868,16 +878,17 @@ local function EquipmentStats(area, actual, simulated)
 	end
 end
 
-local PRESSURE = { { "combined", "Combined pressure" }, { "output", "Output pressure" }, { "survival", "Survival pressure" } }
+local PRESSURE = { { "output", "Output pressure" }, { "survival", "Survival pressure" } }
 local function PressureRows(area, actual, target)
 	TableHeading(area, "Pressure")
 	for _, metric in ipairs(PRESSURE) do
 		local before, after = actual[metric[1]], target and target[metric[1]]
 		local delta, color = "—", MUTED
 		if before and after then delta, color = Delta(after - before, true, true) end
-		StatRow(area, T(metric[2]), before and ShortPercent(before) or "—", after and ShortPercent(after) or "—", delta, color)
+		StatRow(area, T(metric[2]), before and ShortPercent(before) or "—", after and ShortPercent(after) or "—",
+			delta, color, metric[1] == "output")
 	end
-	Line(area, T("Lower is better. Combined takes the higher pressure. Only Damage, HP and reduction count."), MUTED)
+	Line(area, T("Lower is better. Plans target output. Survival is a theoretical incoming-hit reference."), MUTED)
 end
 
 local function ContextLines(area, current, reserved)
@@ -905,7 +916,8 @@ local function ContextLines(area, current, reserved)
 		Line(area, T("Set a 100% baseline for this class to compare difficulty."), MUTED)
 	end
 	if activeView == "planner" and (current.current.output or current.current.survival) then
-		Line(area, DifficultyLine(current.current), GOLD)
+		Line(area, F("Output pressure %s · Survival pressure %s", Colored(ShortPercent(current.current.output), GOLD),
+			ShortPercent(current.current.survival)))
 	end
 	if current.issue == "updated" then Line(area, T("The saved setup was reevaluated using current model values."), MUTED) end
 	local target = context.scope == "standard-only"
@@ -921,11 +933,15 @@ local function ContextLines(area, current, reserved)
 end
 
 local function PlanStatus(plan)
-	if plan.after <= 100 then
-		return plan.complete and "Target met · priced optimum proven" or "Target met · best found"
-	elseif plan.complete and not plan.excluded then return "Above 100% · best achievable"
-	elseif plan.complete then return "Above 100% · best priced, unpriced reachability unknown"
-	else return "Above 100% · best found, reachability unproven" end
+	if plan.outputPressure <= 100 then
+		return plan.complete and "Output target met · lowest priced proven" or "Output target met · best found"
+	elseif plan.unreachable then return "Output target unreachable in this scope"
+	elseif not plan.complete then return "Search budget reached · output reachability unproven"
+	elseif plan.excluded and plan.verifiedBestOutputPressure and plan.verifiedBestOutputPressure <= 100 then
+		return "Output target possible · price incomplete"
+	elseif plan.unverifiedDrops then return "Output reachability unknown beyond verified drops"
+	elseif plan.excluded then return "Output reachability unknown with unpriced gear"
+	else return "Output reachability unproven" end
 end
 
 local function UpdateCards(current, top)
@@ -936,24 +952,32 @@ local function UpdateCards(current, top)
 		if not visible then card:Hide()
 		else
 			local plan = searches and searches[index]
+			local _, variant = SelectedConfiguration(index)
 			local comparison = PlanComparison(current, index)
 			local caption, status, limits
 			if comparison then
 				local quote = comparison.quote
-				caption = F("%s combined · %d gold", Colored(ShortPercent(plan.after),
-					PressureColor(current.current.combined, plan.after)), quote.gold)
+				local output = comparison.pressure.output
+				caption = F("%s output · %s", Colored(ShortPercent(output),
+					PressureColor(current.current.output, output)), PriceLabel(quote))
+				if plan.maxGear then
+					local name = variant == "max" and (plan.unreachable and "Max Gear" or "Max Gear reference") or "Economy"
+					caption = T(name) .. " · " .. caption
+				end
 				status = T(PlanStatus(plan))
 				local flags = {}
 				if quote.acquisition then table.insert(flags, T("Drops required · gold covers stars")) end
 				if quote.estimated then table.insert(flags, T("Price estimated")) end
 				if plan.excluded then table.insert(flags, T("Unpriced options excluded")) end
+				if plan.unverifiedDrops then table.insert(flags, T("Unverified drops excluded")) end
+				if plan.unreachable and variant == "economy" then table.insert(flags, T("Best priced output")) end
 				limits = table.concat(flags, " · ")
 			elseif plan and plan.worker then status = T("Searching equipment combinations…")
 			elseif plan and plan.error then status = T("Upgrade search unavailable.")
-			elseif current.current.combined and index == 1 and not current.drops then status = T("Expansion drop data unavailable.")
+			elseif current.current.output and index == 1 and not current.drops then status = T("Expansion drop data unavailable.")
 			elseif not current.actual then status = T("Waiting for equipment")
 			elseif not current.reference then status = T("Comparable baseline required")
-			else status = T("A comparable baseline and both pressures are required.") end
+			else status = T("Comparable output and equipment data are required.") end
 			card:ClearAllPoints()
 			card:SetPoint("TOPLEFT", panel, "TOPLEFT", 16 + (index - 1) * (width + 10), -top)
 			card:SetWidth(width)
@@ -976,14 +1000,32 @@ local function UpdateCards(current, top)
 	return height > 0 and height + 10 or 0
 end
 
+local function UpdateVariants(top)
+	local plan = activeView == "planner" and ReadyPlan(selectedPlan)
+	if not plan or not plan.maxGear then
+		for _, button in ipairs(variantButtons) do button:Hide() end
+		return 0
+	end
+	local _, active = SelectedConfiguration(selectedPlan)
+	variantButtons[1]:ClearAllPoints()
+	variantButtons[1]:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -top)
+	variantButtons[1].text:SetText(T(plan.unreachable and "Max Gear" or "Max Gear reference"))
+	for i, button in ipairs(variantButtons) do
+		Control(button, true, active == (i == 1 and "max" or "economy"))
+		button:Show()
+	end
+	return 30
+end
+
 local function Details(area, current)
 	area.y = area.y + 7
 	Line(area, T("Calculation model"), GOLD)
 	if not current.context.hub then
 		Line(area, T("Output uses gear Damage. Survival uses class starting HP, gear HP and Damage Reduction capped at 60%."), MUTED)
-		Line(area, T("Lower pressure is better. Combined pressure is the higher of output and survival."), MUTED)
-		Line(area, T("When the lower component improves, combined pressure can stay the same."), MUTED)
-		Line(area, T("Plans optimize modeled pressure. Gameplay calibration is pending. Critical chance and damage, cooldown, Echo, recovery, movement, area, talents, summons, density and encounter rules such as Rifts and Endless are excluded."), MUTED)
+		Line(area, T("Survival estimates a representative hit against effective health. Movement, skills, talents and special encounter rules can change actual survival."), MUTED)
+		Line(area, T("This equipment comparison cannot predict clear or death probabilities."), MUTED)
+		Line(area, T("Critical chance and damage, cooldown, Echo, area and special skill effects are shown separately from modeled output."), MUTED)
+		Line(area, T("Max Gear shows the known quality and star ceiling with set protection. Economy minimizes modeled output pressure, then cost when the target is out of reach."), MUTED)
 		if current.reference and current.context.demand then
 			local map, old = current.context.demand, current.reference.demand
 			Line(area, F("Map demand vs. baseline · enemy health %s · first boss hit %s",
@@ -1093,8 +1135,8 @@ drawComparison = function(current, reset)
 			if quote.estimated then table.insert(flags, T("Price estimated")) end
 			if flags[1] then Line(effectHeader, table.concat(flags, " · "), MUTED) end
 		elseif planner and comparison then
-			PlanEquipment(current, comparison, ReadyPlan(selectedPlan))
-		elseif planner and current.current.combined and searches and searches[selectedPlan] and searches[selectedPlan].worker then
+			PlanEquipment(current, comparison, SelectedConfiguration(selectedPlan))
+		elseif planner and current.current.output and searches and searches[selectedPlan] and searches[selectedPlan].worker then
 			Line(equipment, T("Searching equipment combinations…"), MUTED)
 		elseif not planner then
 			Line(equipment, T("Gear analysis is unavailable for these game data."), MUTED)
@@ -1148,7 +1190,7 @@ render = function()
 	if showBaseline then
 		baselineButton:Show()
 		baselineButton.text:SetText(T(current.saved and "Update 100% Baseline" or "Set 100% Baseline"))
-		Control(baselineButton, demand.output and demand.survival and current.actual and current.actual.sets and current.actual.survival)
+		Control(baselineButton, demand.output and current.actual and current.actual.sets and current.actual.output)
 	else baselineButton:Hide() end
 	Begin(header)
 	ContextLines(header, current, showBaseline and 175 or 0)
@@ -1158,7 +1200,8 @@ render = function()
 
 	if activeView == "planner" and current then SearchFor(current) end
 	local top = 76 + header.y + 6
-	bodyTop = top + UpdateCards(current, top)
+	top = top + UpdateCards(current, top)
+	bodyTop = top + UpdateVariants(top)
 	drawComparison(current, previous ~= activeView)
 
 	local work = searches and ((searches[1] and searches[1].worker) or (searches[2] and searches[2].worker))
@@ -1311,6 +1354,11 @@ local function Build()
 		card.lines = { Font(card, 11, GOLD), Font(card, 13, TEXT), Font(card, 11, TEXT), Font(card, 10, MUTED) }
 		planCards[index] = card
 	end
+	variantButtons = {
+		Button(panel, "Max Gear", 142, function() planVariants[selectedPlan] = "max"; render() end, true),
+		Button(panel, "Economy", 104, function() planVariants[selectedPlan] = "economy"; render() end, true),
+	}
+	variantButtons[2]:SetPoint("LEFT", variantButtons[1], "RIGHT", 6, 0)
 
 	actions = {}
 	actions.load = Button(panel, "Load in Simulator", 156, function() LoadPlan(selectedPlan) end, true)

@@ -2,7 +2,7 @@
 if SurvivorUI_Standby or not SurvivorUI_RebornGearModel then return end
 
 local Gear = SurvivorUI_RebornGearModel
-local Planner = { schema = 1, version = 3, data = "Reborn 0.7.4 / zones-v1 21071e86fee66ca7", tolerance = 0.000001 }
+local Planner = { schema = 1, version = 4, data = "Reborn 0.7.4 / zones-v1 21071e86fee66ca7", tolerance = 0.000001 }
 SurvivorUI_RebornGearPlanner = Planner
 local EPS = Planner.tolerance
 local ARMOR_CAP = 0.60
@@ -204,7 +204,7 @@ end
 
 function Planner.Reference(context, result)
 	if not result or not result.sets or not context.demand or not context.demand.output
-		or not context.demand.survival or not result.survival then return end
+		or not result.output then return end
 	return Planner.Copy({ schema = Planner.schema, version = Planner.version, data = Planner.data, build = context.build, at = context.at,
 		class = context.class, zone = context.zone, level = context.level, heroic = context.heroic,
 		modifiers = context.modifiers, pieces = context.pieces, stats = result.stats, sets = result.sets,
@@ -222,32 +222,29 @@ function Planner.CheckReference(saved, context, catalog, maps)
 	local scope = Planner.Scope(saved.level, saved.modifiers)
 	local demand = SurvivorUI_RebornAnalysisModel.GearDemand(maps[saved.zone], saved.level)
 	local eval = Planner.Evaluate(catalog, saved.class, saved.pieces)
-	if scope == "unsupported" or not demand or not demand.output or not demand.survival
-		or not eval or not eval.sets or not eval.survival then return nil, "incompatible" end
+	if scope == "unsupported" or not demand or not demand.output
+		or not eval or not eval.sets or not eval.output then return nil, "incompatible" end
 	local changed = not SameNumbers(demand, saved.demand)
 		or not SameNumbers({ output = eval.output, survival = eval.survival }, { output = saved.output, survival = saved.survival })
 	return { demand = demand, output = eval.output, survival = eval.survival, scope = scope }, changed and "updated" or nil
 end
 
+local function Pressure(ratio, reference, capacity)
+	local value = 100 * ratio * (reference / capacity)
+	return math.abs(value - 100) < EPS and 100 or value
+end
+
 function Planner.Difficulty(demand, result, reference)
 	if not demand or not result or not reference then return {} end
-	local output = result.output and demand.output and 100 * (demand.output / reference.demand.output) * (reference.output / result.output)
-	local survival = result.survival and demand.survival and reference.survival
-		and 100 * (demand.survival / reference.demand.survival) * (reference.survival / result.survival)
-	if output and math.abs(output - 100) < EPS then output = 100 end
-	if survival and math.abs(survival - 100) < EPS then survival = 100 end
-	return { output = output, survival = survival, combined = output and survival and math.max(output, survival) }
+	local output = result.output and demand.output and reference.demand.output and reference.output
+		and Pressure(demand.output / reference.demand.output, reference.output, result.output)
+	local survival = result.survival and demand.survival and reference.survival and reference.demand.survival
+		and Pressure(demand.survival / reference.demand.survival, reference.survival, result.survival)
+	return { output = output, survival = survival }
 end
 
 local function Cheaper(gold, acquisitionRank, otherGold, otherRank)
 	return gold < otherGold or (gold == otherGold and acquisitionRank < otherRank)
-end
-
-local function Better(current, gold, acquisitionRank, best)
-	local reached = current <= 100
-	if (best.after <= 100) ~= reached then return reached end
-	if not reached and math.abs(current - best.after) > EPS then return current < best.after end
-	return Cheaper(gold, acquisitionRank, best.gold, best.acquisitionRank)
 end
 
 local function Protects(catalog, item, req)
@@ -256,9 +253,7 @@ end
 
 local function Dominates(a, b)
 	-- Choices in the same slot and tier share the acquisition rank.
-	-- Keep the protected-set contribution and compare monotone attributes.
-	return a.tier == b.tier and a.protection == b.protection and a.gold <= b.gold
-		and a.damage >= b.damage and a.hp >= b.hp and a.armor >= b.armor
+	return a.tier == b.tier and a.protection == b.protection and a.gold <= b.gold and a.damage >= b.damage
 end
 
 local function RemoveDominated(group)
@@ -278,275 +273,246 @@ local function RemoveDominated(group)
 	return result
 end
 
-local function MaxStats(out, choice)
-	out.damage = math.max(out.damage, choice.damage)
-	out.hp = math.max(out.hp, choice.hp)
-	out.armor = math.max(out.armor, choice.armor)
-end
-
-local function AddStats(a, b)
-	return { damage = a.damage + b.damage, hp = a.hp + b.hp, armor = a.armor + b.armor }
-end
-
-local function BoundSuffix(groups, requirements, survivalNeed, yield)
-	local zero = { damage = 0, hp = 0, armor = 0 }
-	local terminal = { stats = zero, protected = {}, free = { 0, 0, 0 }, rate = { 0, 0, 0 } }
-	for j in ipairs(requirements) do terminal.protected[j] = { [0] = zero } end
-	local suffix = { [table.getn(groups) + 1] = terminal }
-	for i = table.getn(groups), 1, -1 do
-		if yield then yield() end
-		local maximum = { damage = 0, hp = 0, armor = 0 }
-		local matching, free, rate = {}, { 0, 0, 0 }, { 0, 0, 0 }
-		for _, choice in ipairs(groups[i]) do
-			MaxStats(maximum, choice)
-			local j = choice.protection
-			if j then
-				matching[j] = matching[j] or { damage = 0, hp = 0, armor = 0 }
-				MaxStats(matching[j], choice)
-			end
-			if choice.gold == 0 then
-				free[1] = math.max(free[1], choice.damage)
-				free[2] = math.max(free[2], choice.hp + survivalNeed * choice.armor)
-				free[3] = math.max(free[3], choice.hp)
-			end
-		end
-		for _, choice in ipairs(groups[i]) do
-			if choice.gold > 0 then
-				rate[1] = math.max(rate[1], (choice.damage - free[1]) / choice.gold)
-				rate[2] = math.max(rate[2], (choice.hp + survivalNeed * choice.armor - free[2]) / choice.gold)
-				rate[3] = math.max(rate[3], (choice.hp - free[3]) / choice.gold)
-			end
-		end
-		local rest = suffix[i + 1]
-		local stats = AddStats(maximum, rest.stats)
-		local bound = { stats = stats, protected = {}, free = free, rate = rate }
-		for k = 1, 3 do
-			free[k] = free[k] + rest.free[k]
-			rate[k] = math.max(rate[k], rest.rate[k])
-		end
-		for j, req in ipairs(requirements) do
-			local prior, constrained = rest.protected[j], { [0] = stats }
-			for n = 1, req.count do
-				local best = prior[n] and AddStats(maximum, prior[n])
-				local included = matching[j] and prior[n - 1] and AddStats(matching[j], prior[n - 1])
-				if best and included then MaxStats(best, included) end
-				constrained[n] = best or included
-			end
-			bound.protected[j] = constrained
-		end
-		suffix[i] = bound
-	end
-	return suffix
-end
-
-local function RemainingCost(bound, index, deficit)
-	local gap = deficit - bound.free[index]
-	if gap <= 0 then return 0 end
-	local rate = bound.rate[index]
-	return rate > 0 and gap / rate or math.huge
-end
-
-function Planner.Search(catalog, context, actual, reference, allowed, limit)
-	local current = Planner.Difficulty(context.demand, actual, reference).combined
-	if not current or not actual.sets then return end
-	local result = { after = current, gold = 0, acquisitionRank = 0,
-		pieces = Planner.Copy(context.pieces), complete = current <= 100, visited = 0 }
-	if result.complete then return result end
-	local requirements = Gear.SetRequirements(actual.opaque, catalog.native.setRules)
+local function Candidates(catalog, context, allowed, requirements, result)
 	local groups, tiers = {}, Planner.Tiers(catalog)
-	local seed, seedGold = {}, 0
 	local worn, slots = BySlot(context.pieces), Planner.Slots(catalog, context.class)
 	-- One worn replacement ranks after any number of newly filled slots.
 	local replacementRank = table.getn(slots) + 1
-	for _, slot in ipairs(slots) do
+	for index, slot in ipairs(slots) do
 		local piece = worn[slot]
 		if piece or allowed then
-			local group = {}
-			local sameTier
-			if not piece then table.insert(group, { gold = 0, acquisitionRank = 0, damage = 0, hp = 0, armor = 0 }) end
+			local group = { priced = {}, legal = {}, top = {}, order = index }
+			local highest
+			if not piece then
+				local empty = { gold = 0, acquisitionRank = 0, damage = 0 }
+				group.priced[1], group.legal[1], highest = empty, empty, empty
+			end
 			local wornRank = piece and catalog.tiers[piece.tier].rank
 			for _, tier in ipairs(tiers) do
 				local same = piece and tier == piece.tier
-				if same or (allowed and allowed[tier] and (not wornRank or catalog.tiers[tier].rank > wornRank)
-					and Gear.DropSlot(catalog, context.class, slot, tier)) then
+				local couldDrop = allowed and allowed[tier] and (not wornRank or catalog.tiers[tier].rank > wornRank)
+				local canDrop = couldDrop and Gear.DropSlot(catalog, context.class, slot, tier)
+				if couldDrop and not canDrop then result.unverifiedDrops = true end
+				if same or canDrop then
 					for star = same and piece.stars or 0, catalog.pieces.scale.top do
-						local candidate = same and star == piece.stars and piece or { slot = slot, tier = tier, stars = star }
-						local quote = Planner.Quote(catalog, piece, candidate, allowed, context.class)
+						local item = same and star == piece.stars and piece or { slot = slot, tier = tier, stars = star }
+						local quote = Planner.Quote(catalog, piece, item, allowed, context.class)
+						local protection
+						for j, req in ipairs(requirements) do
+							if Protects(catalog, item, req) then protection = j; break end
+						end
+						local option = { piece = item, gold = quote.gold, tier = tier, protection = protection,
+							acquisitionRank = same and 0 or (piece and replacementRank or 1),
+							damage = Gear.Piece(catalog, context.class, slot, tier, star).damage or 0 }
+						table.insert(group.legal, option)
 						if quote.unknown then result.excluded = true
-						else
-							local s = Gear.Piece(catalog, context.class, slot, tier, star)
-							local protection
-							for j, req in ipairs(requirements) do
-								if Protects(catalog, candidate, req) then protection = j; break end
-							end
-							table.insert(group, { piece = candidate, gold = quote.gold, tier = tier, protection = protection,
-								acquisitionRank = same and 0 or (piece and replacementRank or 1),
-								damage = s.damage or 0, hp = s.hp or 0, armor = s.armor or 0 })
-							if same then sameTier = group[table.getn(group)] end
+						else table.insert(group.priced, option) end
+						if star == catalog.pieces.scale.top then
+							highest = option
+							if protection then table.insert(group.top, { piece = item, damage = option.damage,
+								protection = protection, held = 1 }) end
 						end
 					end
 				end
 			end
-			table.sort(group, function(a, b)
+			-- For Max Gear a below-top choice must contribute to a protected set.
+			for i = table.getn(group.top), 1, -1 do
+				if group.top[i].piece == highest.piece then table.remove(group.top, i) end
+			end
+			table.insert(group.top, 1, highest)
+			table.sort(group.priced, function(a, b)
 				if a.gold ~= b.gold then return a.gold < b.gold end
 				if a.acquisitionRank ~= b.acquisitionRank then return a.acquisitionRank < b.acquisitionRank end
 				if not a.piece then return false end
-				local ar, br = catalog.tiers[a.piece.tier].rank, catalog.tiers[b.piece.tier].rank
+				local ar, br = catalog.tiers[a.tier].rank, catalog.tiers[b.tier].rank
 				if ar ~= br then return ar < br end
 				return a.piece.stars < b.piece.stars
 			end)
-			table.insert(groups, RemoveDominated(group))
-			local groupIndex = table.getn(groups)
-			local least, most = math.huge, 0
-			for _, choice in ipairs(groups[groupIndex]) do
+			group.priced = RemoveDominated(group.priced)
+			local least, most = math.huge, -math.huge
+			for _, choice in ipairs(group.priced) do
 				least, most = math.min(least, choice.damage), math.max(most, choice.damage)
 			end
-			groups[groupIndex].spread, groups[groupIndex].order = most - least, groupIndex
-			if sameTier then
-				table.insert(seed, sameTier.piece)
-				seedGold = seedGold + sameTier.gold
-			end
+			group.spread = most - least
+			table.insert(groups, group)
 		end
 	end
-	table.sort(groups, function(a, b)
-		if a.spread == b.spread then return a.order < b.order end
-		return a.spread > b.spread
-	end)
-	-- The most upgraded currently worn pieces give both searches a comparable
-	-- starting point, including when the replacement space exceeds its budget.
-	local seedPressure = Planner.Difficulty(context.demand, Planner.Evaluate(catalog, context.class, seed), reference).combined
-	if seedPressure and Better(seedPressure, seedGold, 0, result) then
-		result.after, result.gold, result.pieces = seedPressure, seedGold, Planner.Copy(seed)
+	return groups
+end
+
+local function SetState(requirements)
+	-- Mixed-radix digits count the remaining slots for each protected tier.
+	local key, stride, places = 0, 1, {}
+	for i, req in ipairs(requirements) do
+		places[i] = stride
+		key = key + req.count * stride
+		stride = stride * (req.count + 1)
 	end
+	local function Consume(state, choice)
+		local tier = choice.protection
+		local place = tier and places[tier]
+		if place and math.floor(state / place) % (requirements[tier].count + 1) > 0 then return state - place end
+		return state
+	end
+	return key, Consume
+end
 
-	-- These relaxed thresholds include the numerical tolerance at 100%.
-	-- EHP >= E requires both HP + E * armor >= E - base and HP >= .4 * E - base.
-	result.worker = coroutine.create(function()
-		local function Demands(cutoff)
-			local rate = 100 / (cutoff + EPS)
-			return context.demand.output / reference.demand.output * reference.output * rate - 1,
-				context.demand.survival / reference.demand.survival * reference.survival * rate
-		end
-		local outputNeed, survivalNeed = Demands(100)
-		local suffix = BoundSuffix(groups, requirements, survivalNeed, coroutine.yield)
-		local path, counts = {}, {}
-		local function Bound(i, damage, hp, armor)
-			local rest = suffix[i]
-			local d, h, a = rest.stats.damage, rest.stats.hp, rest.stats.armor
-			for j, req in ipairs(requirements) do
-				local need = math.max(0, req.count - (counts[j] or 0))
-				local constrained = rest.protected[j][need]
-				if not constrained then return end
-				d, h, a = math.min(d, constrained.damage), math.min(h, constrained.hp), math.min(a, constrained.armor)
-			end
-			local output, survival = Capacity(actual.health, damage + d, hp + h, armor + a)
-			return Planner.Difficulty(context.demand, { output = output, survival = survival }, reference).combined
-		end
-		local function Count(choice, delta)
-			local j = choice.protection
-			if j then counts[j] = (counts[j] or 0) + delta end
-		end
-
-		-- Choose one legal full seed using optimistic child bounds. The same
-		-- suffix data rules out choices that strand an active set threshold.
-		local d, h, a, cost, acquisitionRank = 0, 0, 0, 0, 0
-		local selected = {}
-		local terminal = table.getn(groups) + 1
-		for i, group in ipairs(groups) do
-			local best, bestBound
-			for _, choice in ipairs(group) do
-				coroutine.yield()
-				Count(choice, 1)
-				local lower = Bound(i + 1, d + choice.damage, h + choice.hp, a + choice.armor)
-				Count(choice, -1)
-				if lower and (not bestBound or lower < bestBound - EPS) then best, bestBound = choice, lower end
-			end
-			if not best then break end
-			selected[i] = best
-			Count(best, 1)
-			d, h, a, cost = d + best.damage, h + best.hp, a + best.armor, cost + best.gold
-			acquisitionRank = acquisitionRank + best.acquisitionRank
-		end
-		local pressure = selected[terminal - 1] and Bound(terminal, d, h, a)
-		if pressure and pressure <= 100 then
-			-- Strip unnecessary expense from the feasible seed while preserving
-			-- the target and all protected sets. This is an incumbent only.
-			for i, group in ipairs(groups) do
-				local prior = selected[i]
-				for _, choice in ipairs(group) do
-					if not Cheaper(choice.gold, choice.acquisitionRank, prior.gold, prior.acquisitionRank) then break end
-					coroutine.yield()
-					Count(prior, -1)
-					Count(choice, 1)
-					local nd, nh, na = d - prior.damage + choice.damage, h - prior.hp + choice.hp, a - prior.armor + choice.armor
-					local candidate = Bound(terminal, nd, nh, na)
-					if candidate and candidate <= 100 then
-						selected[i], d, h, a, pressure = choice, nd, nh, na, candidate
-						cost = cost - prior.gold + choice.gold
-						acquisitionRank = acquisitionRank - prior.acquisitionRank + choice.acquisitionRank
-						break
-					end
-					Count(choice, -1)
-					Count(prior, 1)
+local function Suffix(groups, field, consume)
+	local memo = {}
+	local terminal = { damage = 0, held = 0 }
+	local function Best(index, need)
+		local group = groups[index]
+		if not group then return need == 0 and terminal or false end
+		memo[index] = memo[index] or {}
+		local cached = memo[index][need]
+		if cached ~= nil then return cached end
+		coroutine.yield()
+		local best = false
+		for _, option in ipairs(group[field]) do
+			local rest = Best(index + 1, consume(need, option))
+			if rest then
+				local held, damage = (option.held or 0) + rest.held, option.damage + rest.damage
+				if not best or held < best.held or (held == best.held and damage > best.damage) then
+					best = { held = held, damage = damage, choice = option }
 				end
 			end
 		end
-		if pressure and Better(pressure, cost, acquisitionRank, result) then
-			for _, choice in ipairs(selected) do if choice.piece then table.insert(path, choice.piece) end end
-			result.after, result.gold, result.acquisitionRank, result.pieces = pressure, cost, acquisitionRank, Planner.Copy(path)
+		memo[index][need] = best
+		return best
+	end
+	return Best
+end
+
+local function ReadPath(groups, best, need, consume)
+	local choices = {}
+	for i in ipairs(groups) do
+		local option = best(i, need).choice
+		choices[i] = option
+		need = consume(need, option)
+	end
+	return choices
+end
+
+local function Pieces(choices)
+	local pieces = {}
+	for _, option in ipairs(choices) do
+		if option.piece then table.insert(pieces, option.piece) end
+	end
+	return pieces
+end
+
+local function PriceBounds(groups)
+	local suffix = { [table.getn(groups) + 1] = { free = 0, rate = 0 } }
+	for i = table.getn(groups), 1, -1 do
+		local free = -math.huge
+		for _, option in ipairs(groups[i].priced) do
+			if option.gold == 0 then free = math.max(free, option.damage) end
 		end
-		path, counts = {}, {}
-		local root = Bound(1, 0, 0, 0)
-		local priceTie = root and root > 100 and root >= result.after - EPS
-		if priceTie then
-			outputNeed, survivalNeed = Demands(root)
-			suffix = BoundSuffix(groups, requirements, survivalNeed, coroutine.yield)
+		local rest = suffix[i + 1]
+		local rate = rest.rate
+		for _, option in ipairs(groups[i].priced) do
+			if option.gold > 0 then rate = math.max(rate, (option.damage - free) / option.gold) end
+		end
+		suffix[i] = { free = free + rest.free, rate = rate }
+	end
+	return suffix
+end
+
+local function MaxGear(groups, need, consume, catalog, context, reference, allowed)
+	local choices, held = {}, 0
+	if need == 0 then
+		for i, group in ipairs(groups) do choices[i] = group.top[1] end
+	else
+		local best = Suffix(groups, "top", consume)
+		local root = best(1, need)
+		if not root then return end
+		choices, held = ReadPath(groups, best, need, consume), root.held
+	end
+	local pieces = Pieces(choices)
+	local evaluation = Planner.Evaluate(catalog, context.class, pieces)
+	local _, quote = Planner.Changes(catalog, context.pieces, pieces, allowed, context.class)
+	return { pieces = pieces, outputPressure = Planner.Difficulty(context.demand, evaluation, reference).output,
+		gold = quote.gold, protectedHolds = held }
+end
+
+function Planner.Search(catalog, context, actual, reference, allowed, limit)
+	local current = Planner.Difficulty(context.demand, actual, reference).output
+	if not current or not actual.sets then return end
+	local result = { outputPressure = current, gold = 0, acquisitionRank = 0,
+		pieces = Planner.Copy(context.pieces), complete = current <= 100, visited = 0 }
+	if result.complete then return result end
+	local requirements = Gear.SetRequirements(actual.opaque, catalog.native.setRules)
+	local groups = Candidates(catalog, context, allowed, requirements, result)
+	local need, consume = SetState(requirements)
+	local ratio = context.demand.output / reference.demand.output
+	local function AtDamage(damage) return Pressure(ratio, reference.output, 1 + damage) end
+
+	result.worker = coroutine.create(function()
+		-- Native slot order makes equal-quality Max Gear choices reproducible.
+		local nativeOrder = {}
+		for i, group in ipairs(groups) do nativeOrder[i] = group end
+		table.sort(groups, function(a, b)
+			if a.spread == b.spread then return a.order < b.order end
+			return a.spread > b.spread
+		end)
+		local best = Suffix(groups, "priced", consume)
+		local root = assert(best(1, need), "No legal completion for the worn setup")
+		local seed = ReadPath(groups, best, need, consume)
+		local seedGold, seedRank = 0, 0
+		for _, option in ipairs(seed) do
+			seedGold, seedRank = seedGold + option.gold, seedRank + option.acquisitionRank
+		end
+		local seedPieces = Pieces(seed)
+		local seedOutput = Planner.Difficulty(context.demand, Planner.Evaluate(catalog, context.class, seedPieces), reference).output
+		if seedOutput <= 100 or seedOutput < current - EPS then
+			result.outputPressure, result.gold, result.acquisitionRank, result.pieces = seedOutput, seedGold, seedRank, seedPieces
 		end
 
-		local function Visit(i, gold, acquisitionRank, damage, hp, armor)
+		-- Anchor the unreachable tolerance to the exact maximum Damage. The
+		-- small Damage guard only loosens bounds against sum-order roundoff.
+		local guard = 1e-10
+		local bestPressure = AtDamage(root.damage)
+		local target = (bestPressure <= 100 or seedOutput <= 100) and 100 or bestPressure + EPS
+		local requiredDamage = 100 * ratio * reference.output / (target + (target == 100 and EPS or 0)) - 1
+		local prices = PriceBounds(groups)
+		local path = {}
+		local function Visit(i, remaining, gold, rank, damage)
 			if result.visited >= limit then return false end
 			result.visited = result.visited + 1
 			coroutine.yield()
-			-- Both costs can only increase down the path. A tied gold branch
-			-- can still beat the incumbent by requiring fewer acquisitions.
-			local noCheaper = not Cheaper(gold, acquisitionRank, result.gold, result.acquisitionRank)
-			if result.after <= 100 and noCheaper then return true end
-			local lower = Bound(i, damage, hp, armor)
-			if not lower then return true end
-			local cutoff = result.after <= 100 and 100 or result.after
-			if lower > cutoff + EPS then return true end
-			if result.after <= 100 or priceTie then
-				local rest = suffix[i]
-				local need = math.max(RemainingCost(rest, 1, outputNeed - damage),
-					RemainingCost(rest, 2, survivalNeed - actual.health - hp - survivalNeed * armor),
-					RemainingCost(rest, 3, (1 - ARMOR_CAP) * survivalNeed - actual.health - hp))
-				if gold + need > result.gold + EPS then return true end
-			elseif lower > 100 and lower >= result.after and noCheaper then
-				return true
-			end
-			if not groups[i] then
-				if priceTie and lower > root + EPS then return true end
-				if Better(lower, gold, acquisitionRank, result) then
-					result.after, result.gold, result.acquisitionRank, result.pieces = lower, gold, acquisitionRank, Planner.Copy(path)
+			if not Cheaper(gold, rank, result.gold, result.acquisitionRank) then return true end
+			local rest = best(i, remaining)
+			if not rest or damage + rest.damage + guard < requiredDamage then return true end
+			local bound = prices[i]
+			local gap = requiredDamage - damage - bound.free - guard
+			if gap > 0 and (bound.rate == 0 or gold + gap / bound.rate > result.gold + EPS) then return true end
+			local group = groups[i]
+			if not group then
+				local pressure = AtDamage(damage)
+				if pressure <= target then
+					result.outputPressure, result.gold, result.acquisitionRank, result.pieces = pressure, gold, rank, Pieces(path)
 				end
 				return true
 			end
-			for _, choice in ipairs(groups[i]) do
-				local item = choice.piece
-				if item then table.insert(path, item) end
-				Count(choice, 1)
-				local done = Visit(i + 1, gold + choice.gold, acquisitionRank + choice.acquisitionRank,
-					damage + choice.damage, hp + choice.hp, armor + choice.armor)
-				Count(choice, -1)
-				if item then table.remove(path) end
-				if not done then return false end
+			for _, option in ipairs(group.priced) do
+				path[i] = option
+				if not Visit(i + 1, consume(remaining, option), gold + option.gold, rank + option.acquisitionRank,
+					damage + option.damage) then return false end
 			end
+			path[i] = nil
 			return true
 		end
-		result.complete = Visit(1, 0, 0, 0, 0, 0)
+		result.complete = Visit(1, need, 0, 0, 0)
+		if result.outputPressure > 100 then
+			local legal = result.excluded and Suffix(groups, "legal", consume)(1, need) or root
+			result.verifiedBestOutputPressure = AtDamage(legal.damage)
+			result.unreachable = result.complete and not result.unverifiedDrops and AtDamage(legal.damage + guard) > 100
+			result.maxGear = MaxGear(nativeOrder, need, consume, catalog, context, reference, allowed)
+		end
 	end)
 	return result
 end
+
 
 function Planner.Step(result, batch, deadline)
 	for i = 1, batch do

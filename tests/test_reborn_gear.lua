@@ -87,16 +87,20 @@ assert(not G.Worn(cat, "warlock", { { slot = 0, rarity = 0, stars = 0 }, { slot 
 local worn = assert(G.Worn(cat, "warlock", { { slot = "8", rarity = "7", stars = "2" },
 	{ slot = 1, rarity = "" }, { slot = 0, rarity = 4, stars = 0, icon = "inv_test", name = "Test" } }))
 assert(#worn == 2 and worn[1].icon == "inv_test" and worn[2].slot == "main_hand" and worn[2].tier == "mythic")
-assert(P.Difficulty(source.demand, actual, ref).combined == 100 and ref.pieces[1] ~= source.pieces[1])
+assert(P.Difficulty(source.demand, actual, ref).output == 100 and ref.pieces[1] ~= source.pieces[1])
 local reconstructed, issue = P.CheckReference(ref, source, cat, maps)
 assert(ref.modifiers ~= source.modifiers and reconstructed ~= ref and issue == nil and reconstructed.scope == "standard")
-assert(P.Difficulty(source.demand, actual, reconstructed).combined == 100)
+assert(P.Difficulty(source.demand, actual, reconstructed).output == 100)
 assert(not P.CheckReference(ref, { class = "paladin", build = source.build }, cat, maps))
 assert(P.CheckReference(ref, { class = "warlock", build = "changed" }, cat, maps))
 assert(not P.CheckReference(P.Copy({ version = 1 }), source, cat, maps))
 local legacy = P.Copy(ref)
 legacy.schema, legacy.version, legacy.data = nil, 2, "older"
 assert(P.CheckReference(legacy, source, cat, maps))
+local priorVersion = P.Copy(ref)
+priorVersion.version, priorVersion.combined = 3, 999
+local previousOutput = assert(P.CheckReference(priorVersion, source, cat, maps))
+assert(P.Difficulty(source.demand, actual, previousOutput).output == 100 and priorVersion.combined == 999)
 local updated = P.Copy(ref)
 updated.version, updated.data, updated.output = 900, "compatible new data", 1
 local recomputed, warning = P.CheckReference(updated, source, cat, maps)
@@ -125,6 +129,11 @@ assert(P.Scope(3, {}) == "standard-only" and P.Scope(0, { affixes = "sanguine" }
 assert(P.Affixes({ " Sanguine ", "explosive", "sanguine" }) == "explosive,sanguine")
 local partial = P.Difficulty(M.GearDemand({ 2 }, 0), actual, ref)
 assert(partial.output and not partial.survival and not partial.combined)
+local noSurvival = P.Copy(source)
+noSurvival.demand.survival = nil
+local outputOnlyReference = assert(P.Reference(noSurvival, actual))
+assert(P.Difficulty(source.demand, actual, outputOnlyReference).output == 100)
+assert(not P.Difficulty(source.demand, actual, outputOnlyReference).survival)
 local capped = Eval({ Item("chest", "common", 5) })
 assert(capped.stats.armor > 0.6)
 near(capped.survival, 165 / 0.4)
@@ -166,7 +175,48 @@ local function Finish(search)
 end
 
 local easy = Finish(P.Search(cat, source, actual, ref, nil, 10000))
-assert(easy.complete and easy.visited == 0 and easy.after == 100 and easy.gold == 0)
+assert(easy.complete and easy.visited == 0 and easy.outputPressure == 100 and easy.gold == 0)
+
+-- An HP-only armor slot cannot force purchases even if survival pressure
+-- exceeds 100%. Max Gear still includes its complete legal star growth.
+local headStats = AZS_GEN.pieces.slots[0].stats
+AZS_GEN.pieces.slots[0].stats = { { "hp", 40 } }
+local outputCase = P.Copy(source)
+outputCase.pieces = { Item("head", "legendary", 1), Item("main_hand", "common", 0) }
+local outputActual = Eval(outputCase.pieces)
+local outputRef = assert(P.Reference(outputCase, outputActual))
+local function RunOutput(factor, survival, limit)
+	outputCase.demand = { output = outputRef.demand.output * factor, survival = outputRef.demand.survival * survival }
+	return Finish(P.Search(cat, outputCase, outputActual, outputRef, nil, limit or 5000))
+end
+local outputMet = RunOutput(0.95, 3)
+assert(outputMet.complete and outputMet.gold == 0 and outputMet.visited == 0 and not outputMet.maxGear)
+assert(P.Difficulty(outputCase.demand, outputActual, outputRef).survival > 100)
+local cheapest = RunOutput(1.04, 3)
+local cheapestPeace = RunOutput(1.04, 0.8)
+assert(cheapest.complete and cheapest.gold == 408 and cheapest.outputPressure <= 100)
+assert(cheapestPeace.gold == cheapest.gold and cheapestPeace.outputPressure == cheapest.outputPressure)
+assert(P.BySlot(cheapest.pieces).head.stars == 1 and P.BySlot(cheapest.pieces).main_hand.stars == 1)
+local hardOutput = RunOutput(4, 0.8)
+assert(hardOutput.complete and hardOutput.unreachable and hardOutput.maxGear and hardOutput.outputPressure > 100)
+assert(P.BySlot(hardOutput.pieces).head.stars == 1 and #hardOutput.maxGear.pieces == 2)
+assert(P.BySlot(hardOutput.maxGear.pieces).main_hand.tier == "common")
+for _, piece in ipairs(hardOutput.maxGear.pieces) do assert(piece.stars == 5) end
+local econ, maxGear = Eval(hardOutput.pieces), Eval(hardOutput.maxGear.pieces)
+near(econ.output, maxGear.output)
+assert(maxGear.survival > econ.survival and maxGear.stats.hp > econ.stats.hp)
+assert(hardOutput.maxGear.gold > hardOutput.gold)
+local partialSearch = RunOutput(4, 0.8, 1)
+assert(not partialSearch.complete and not partialSearch.unreachable and partialSearch.maxGear)
+local savedStarFactor = cat.tiers.common.starFactor
+cat.tiers.common.starFactor = 7.7
+local unknown = RunOutput(1.04, 3)
+local _, unknownQuote = P.Changes(cat, outputCase.pieces, unknown.maxGear.pieces, nil, outputCase.class)
+assert(unknown.complete and unknown.excluded and not unknown.unreachable and unknown.verifiedBestOutputPressure <= 100)
+assert(unknownQuote.unknown and unknown.maxGear.gold == unknownQuote.gold)
+assert(RunOutput(4, 3).unreachable, "even known unpriced paths cannot reach this output target")
+cat.tiers.common.starFactor = savedStarFactor
+AZS_GEN.pieces.slots[0].stats = headStats
 
 -- Independent exhaustive oracle: every available star combination is evaluated
 -- with the public full-configuration evaluator, then ordered by the contract.
@@ -183,13 +233,13 @@ local function Oracle(context)
 			end
 			return
 		end
-		local distance = P.Difficulty(context.demand, Eval(equipment), ref).combined
+		local distance = P.Difficulty(context.demand, Eval(equipment), ref).output
 		local reached = distance <= 100
 		if not best or (reached and not best.reached)
 			or (reached and best.reached and gold < best.gold)
-			or (not reached and not best.reached and (distance < best.after - P.tolerance
-				or (math.abs(distance - best.after) <= P.tolerance and gold < best.gold))) then
-			best = { after = distance, gold = gold, reached = reached }
+			or (not reached and not best.reached and (distance < best.outputPressure - P.tolerance
+				or (math.abs(distance - best.outputPressure) <= P.tolerance and gold < best.gold))) then
+			best = { outputPressure = distance, gold = gold, reached = reached }
 		end
 	end
 	Visit(1, 0)
@@ -202,15 +252,15 @@ for i = 1, 80 do
 	context.demand.survival = ref.demand.survival * (1 + math.random(1, 210) / 100)
 	local expected = Oracle(context)
 	local got = Finish(P.Search(cat, context, actual, ref, nil, 5000))
-	assert(got.complete and got.gold == expected.gold and (got.after <= 100) == expected.reached)
-	near(got.after, P.Difficulty(context.demand, Eval(got.pieces), ref).combined)
-	if not expected.reached then near(got.after, expected.after) end
+	assert(got.complete and got.gold == expected.gold and (got.outputPressure <= 100) == expected.reached)
+	near(got.outputPressure, P.Difficulty(context.demand, Eval(got.pieces), ref).output)
+	if not expected.reached then near(got.outputPressure, expected.outputPressure) end
 end
 
 local hard = P.Copy(source)
 hard.demand = M.GearDemand(maps.naxx, 5)
 local limited = Finish(P.Search(cat, hard, actual, ref, nil, 1))
-assert(not limited.complete and limited.visited == 1 and limited.after > 100)
+assert(not limited.complete and limited.visited == 1 and limited.outputPressure > 100)
 local deadline = P.Search(cat, hard, actual, ref, nil, 5000)
 P.Step(deadline, 10, function() return true end)
 assert(deadline.visited == 0)
@@ -230,7 +280,7 @@ farming.demand = { output = farming.demand.output * 1.2, survival = farming.dema
 local stars = Finish(P.Search(cat, farming, farmingActual, farmingReference, nil, 2000))
 local drops = Finish(P.Search(cat, farming, farmingActual, farmingReference, { exotic = true }, 2000))
 local _, acquisition = P.Changes(cat, farming.pieces, drops.pieces, { exotic = true }, "warlock")
-assert(stars.complete and stars.after > 100 and drops.complete and drops.after <= 100 and drops.gold == 0 and acquisition.acquisition)
+assert(stars.complete and stars.outputPressure > 100 and drops.complete and drops.outputPressure <= 100 and drops.gold == 0 and acquisition.acquisition)
 
 -- Oracle for a mixed-tier plan. Use one reachable and one unreachable target,
 -- with a four-piece combat effect protected and different HP/armor choices.
@@ -259,32 +309,83 @@ for _, factor in ipairs({ 1.08, 1.8 }) do
 			end
 			return
 		end
-		local difficulty = P.Difficulty(mixed.demand, Eval(candidate), mixedRef).combined
+		local difficulty = P.Difficulty(mixed.demand, Eval(candidate), mixedRef).output
 		local reached = difficulty <= 100
 		if not expected or (reached and not expected.reached) or (reached and expected.reached and gold < expected.gold)
-			or (not reached and not expected.reached and (difficulty < expected.after - P.tolerance
-				or (math.abs(difficulty - expected.after) <= P.tolerance and gold < expected.gold))) then
-			expected = { after = difficulty, gold = gold, reached = reached }
+			or (not reached and not expected.reached and (difficulty < expected.outputPressure - P.tolerance
+				or (math.abs(difficulty - expected.outputPressure) <= P.tolerance and gold < expected.gold))) then
+			expected = { outputPressure = difficulty, gold = gold, reached = reached }
 		end
 	end
 	Enumerate(1, 0)
 	local first = Finish(P.Search(cat, mixed, mixedActual, mixedRef, { exotic = true }, 12000))
 	local second = Finish(P.Search(cat, mixed, mixedActual, mixedRef, { exotic = true }, 12000))
-	assert(first.complete and first.gold == expected.gold and (first.after <= 100) == expected.reached)
-	assert(first.after == second.after and first.gold == second.gold and #first.pieces == #second.pieces)
+	assert(first.complete and first.gold == expected.gold and (first.outputPressure <= 100) == expected.reached)
+	assert(first.outputPressure == second.outputPressure and first.gold == second.gold and #first.pieces == #second.pieces)
 	for i, piece in ipairs(first.pieces) do assert(P.SamePiece(piece, second.pieces[i])) end
-	if not expected.reached then near(first.after, expected.after) end
+	if not expected.reached then near(first.outputPressure, expected.outputPressure) end
 	assert(Eval(first.pieces).sets.legendary[1].pieces == 4)
 end
 local knownText = AZS_GEN.setBonuses[1].text
 AZS_GEN.setBonuses[1].text = "Unquantified combat"
 local twoSets = Eval(mixed.pieces)
 local twoSetsRef = assert(P.Reference(mixed, twoSets))
+mixed.demand.output = twoSetsRef.demand.output * 10
 local bothProtected = Finish(P.Search(cat, mixed, twoSets, twoSetsRef, { exotic = true }, 12000))
 assert(bothProtected.complete)
 local kept = Eval(bothProtected.pieces).sets
 assert(kept.legendary[1].pieces == 4 and kept.common[1].pieces == 4, "both competing protected tiers survive")
+assert(bothProtected.unreachable and bothProtected.maxGear.protectedHolds == 8)
+local maxSets = Eval(bothProtected.maxGear.pieces).sets
+assert(maxSets.legendary[1].pieces == 4 and maxSets.common[1].pieces == 4)
 AZS_GEN.setBonuses[1].text = knownText
+
+-- Five actual Legendary pieces compete to fill four protected slots. One is
+-- free to take the higher-quality drop. Enumerate which slot maximizes output.
+local constrained = P.Copy(mixed)
+constrained.pieces[5].tier = "legendary"
+constrained.pieces[9].tier = "mythic"
+local constrainedActual = Eval(constrained.pieces)
+local constrainedRef = assert(P.Reference(constrained, constrainedActual))
+constrained.demand.output = constrainedRef.demand.output * 10
+local maxA = Finish(P.Search(cat, constrained, constrainedActual, constrainedRef, { exotic = true }, 12000))
+local expectedMax = math.huge
+for keepOut = 1, 5 do
+	local draft = P.Copy(constrained.pieces)
+	for i = 1, 8 do if i == keepOut or i > 5 then draft[i].tier = "exotic" end end
+	expectedMax = math.min(expectedMax, P.Difficulty(constrained.demand, Eval(draft), constrainedRef).output)
+end
+assert(maxA.unreachable and maxA.maxGear.protectedHolds == 4)
+near(maxA.maxGear.outputPressure, expectedMax)
+local cappedA = P.BySlot(maxA.maxGear.pieces)
+assert(cappedA.main_hand.tier == "mythic", "prior higher-quality gear stays worn")
+for _, piece in ipairs(maxA.maxGear.pieces) do assert(piece.stars == cat.pieces.scale.top) end
+table.remove(constrained.pieces, 8)
+constrainedActual = Eval(constrained.pieces)
+local withEmpty = Finish(P.Search(cat, constrained, constrainedActual, constrainedRef, { exotic = true }, 12000))
+assert(P.BySlot(withEmpty.maxGear.pieces).hands.tier == "exotic", "Max Gear may fill a verified empty slot")
+
+local rogueCase = P.Copy(constrained)
+rogueCase.class, rogueCase.pieces = "rogue", { Item("main_hand", "common", 0) }
+local rogueActual = assert(P.Evaluate(cat, "rogue", rogueCase.pieces))
+local rogueRef = assert(P.Reference(rogueCase, rogueActual))
+rogueCase.demand.output = rogueRef.demand.output * 15
+local unknownDrop = Finish(P.Search(cat, rogueCase, rogueActual, rogueRef, { exotic = true }, 12000))
+assert(unknownDrop.complete and unknownDrop.unverifiedDrops and not unknownDrop.unreachable)
+assert(not P.BySlot(unknownDrop.maxGear.pieces).off_hand, "unknown drop is excluded from the reference configuration")
+
+-- Quality is not a substitute for the computed Damage of a configuration.
+local scaleSlot, scaleProfile = cat.tiers.exotic.slot, cat.tiers.exotic.profile
+cat.tiers.exotic.slot, cat.tiers.exotic.profile = 0.25, 0
+local ceilingCase = P.Copy(mixed)
+ceilingCase.pieces = { Item("main_hand", "legendary", 1) }
+local ceilingActual = Eval(ceilingCase.pieces)
+local ceilingRef = assert(P.Reference(ceilingCase, ceilingActual))
+ceilingCase.demand.output = ceilingRef.demand.output * 15
+local qualityCeiling = Finish(P.Search(cat, ceilingCase, ceilingActual, ceilingRef, { exotic = true }, 12000))
+assert(qualityCeiling.unreachable and qualityCeiling.maxGear.outputPressure > qualityCeiling.outputPressure)
+assert(P.BySlot(qualityCeiling.maxGear.pieces).main_hand.tier == "exotic")
+cat.tiers.exotic.slot, cat.tiers.exotic.profile = scaleSlot, scaleProfile
 table.remove(AZS_GEN.setBonuses)
 
 -- A deliberately output-limited Warlock. Cheap armor swaps only change
@@ -321,27 +422,27 @@ for _, factor in ipairs({ 1.04, 2 }) do
 			choices[i] = nil
 			return
 		end
-		local after = P.Difficulty(tie.demand, Eval(choices), tieRef).combined
+		local after = P.Difficulty(tie.demand, Eval(choices), tieRef).output
 		local reached = after <= 100
 		local less = best and (gold < best.gold or (gold == best.gold and (replacements < best.replacements
 			or (replacements == best.replacements and fills < best.fills))))
 		if not best or (reached and not best.reached) or (reached and best.reached and less)
-			or (not reached and not best.reached and (after < best.after - P.tolerance
-				or (math.abs(after - best.after) <= P.tolerance and less))) then
-			best = { after = after, reached = reached, gold = gold, replacements = replacements, fills = fills }
+			or (not reached and not best.reached and (after < best.outputPressure - P.tolerance
+				or (math.abs(after - best.outputPressure) <= P.tolerance and less))) then
+			best = { outputPressure = after, reached = reached, gold = gold, replacements = replacements, fills = fills }
 		end
 	end
 	Enumerate(1, 0, 0, 0)
 	local plan = Finish(P.Search(cat, tie, tieActual, tieRef, tieDrops, 12000))
 	local result = P.BySlot(plan.pieces)
-	assert(plan.complete and (plan.after <= 100) == best.reached and plan.gold == best.gold)
+	assert(plan.complete and (plan.outputPressure <= 100) == best.reached and plan.gold == best.gold)
 	assert(best.replacements == 1 and best.fills == 0 and not result.head)
 	assert(P.SamePiece(result.chest, tie.pieces[1]) and P.SamePiece(result.legs, tie.pieces[2]), "retain worn armor in pressure and gold ties")
 	assert(result.main_hand.tier == "exotic")
 	local _, quote = P.Changes(cat, tie.pieces, plan.pieces, tieDrops, tie.class)
 	assert(quote.gold == plan.gold)
-	near(plan.after, P.Difficulty(tie.demand, Eval(plan.pieces), tieRef).combined)
-	if not best.reached then near(plan.after, best.after) end
+	near(plan.outputPressure, P.Difficulty(tie.demand, Eval(plan.pieces), tieRef).output)
+	if not best.reached then near(plan.outputPressure, best.outputPressure) end
 	local hypothetical = P.Replace(tie.pieces, "chest", "uncommon", 0)
 	assert(Eval(hypothetical).stats.hp < tieActual.stats.hp, "simulator can still evaluate the downgrade")
 end
@@ -358,11 +459,11 @@ tieRef = assert(P.Reference(tie, tieActual))
 tie.demand = { output = tieRef.demand.output * (1 + 0.13 / tieActual.output), survival = tieRef.demand.survival * 0.70 }
 local twoDrops = { Item("chest", "exotic", 0), Item("legs", "exotic", 0), tie.pieces[3] }
 local oneDrop = P.Replace(tie.pieces, "main_hand", "exotic", 0)
-assert(P.Difficulty(tie.demand, Eval(twoDrops), tieRef).combined <= 100)
-assert(P.Difficulty(tie.demand, Eval(oneDrop), tieRef).combined <= 100)
+assert(P.Difficulty(tie.demand, Eval(twoDrops), tieRef).output <= 100)
+assert(P.Difficulty(tie.demand, Eval(oneDrop), tieRef).output <= 100)
 local cheaperAcquisition = Finish(P.Search(cat, tie, tieActual, tieRef, { exotic = true }, 12000))
 local changes, quote = P.Changes(cat, tie.pieces, cheaperAcquisition.pieces, { exotic = true }, tie.class)
-assert(cheaperAcquisition.complete and cheaperAcquisition.after <= 100 and quote.gold == 0)
+assert(cheaperAcquisition.complete and cheaperAcquisition.outputPressure <= 100 and quote.gold == 0)
 assert(#changes == 1 and changes[1].slot == "main_hand", "search a same-gold branch when it can use fewer drops")
 for index, stats in pairs(armorStats) do AZS_GEN.pieces.slots[index].stats = stats end
 G.DropSlot = originalDrop
@@ -612,15 +713,18 @@ Armor({ head })
 Click("Set 100% Baseline")
 local saved = assert(SurvivorUIDB.rebornGear.baselines.warlock)
 assert(saved.zone == "elwynn" and saved.level == 0 and saved.at == 1234 and saved.modifiers.affixes == "")
-assert(saved.pieces[1].name == "Test item" and saved.pieces[1].stars == 0 and Find("FontString", "Combined pressure 100.0%"))
+assert(saved.pieces[1].name == "Test item" and saved.pieces[1].stars == 0)
+assert(StatCells(Named("Results"), "Output pressure")[1].text == "100.0%")
+assert(StatCells(Named("Results"), "Survival pressure")[1].text == "100.0%")
+assert(not Find("Button", "Max Gear") and not Find("Button", "Economy"))
 assert(Find("FontString", "No upgrade is needed for this target"))
 assert(Find("FontString", "Lower is better"))
-assert(string.find(dollSlot:Hover(), "Combined pressure 100.0% →", 1, true))
-assert(TooltipColor("Damage +")[2] == 1 and TooltipColor("Combined pressure 100.0% →")[2] == 1)
+assert(string.find(dollSlot:Hover(), "Output pressure |cff8cffa5-", 1, true))
+assert(TooltipColor("Damage +")[2] == 1)
 assert(not Find("FontString", "Output uses gear Damage"))
 Click("Show details")
-assert(Find("FontString", "Output uses gear Damage") and Find("FontString", "calibration is pending"))
-assert(Find("FontString", "When the lower component improves"))
+assert(Find("FontString", "Output uses gear Damage") and Find("FontString", "separately from modeled output"))
+assert(Find("FontString", "Survival estimates a representative hit"))
 Click("Hide details")
 local highHead = P.Copy(head)
 highHead.stars = "5"
@@ -639,7 +743,7 @@ changeStar()
 assert(not Named("Tooltip").shown, "simulator edits clear its tooltip")
 assert(string.find(HoverIcon("head", false), "★2 → ★3", 1, true))
 assert(string.find(HoverIcon("shoulders", false), "Empty slot", 1, true))
-assert(StatCells(Named("Results"), "Combined pressure") and Find("FontString", "Replacement acquisition is conditional"))
+assert(StatCells(Named("Results"), "Output pressure") and Find("FontString", "Replacement acquisition is conditional"))
 assert(SlotMenu("head", "common"))()
 assert(string.find(HoverIcon("head", false), "Simulated item · Common", 1, true), "manual simulator allows lower tiers")
 assert(SlotMenu("head", "legendary"))()
@@ -671,8 +775,7 @@ DrainSearch()
 assert(Find("FontString", "Plan A") and Find("FontString", "Plan B"))
 local planned = assert(HoverIcon("head", true))
 assert(string.find(planned, "Planned item Common ★0 →", 1, true))
-assert(string.find(planned, "Isolated item combined pressure", 1, true) and string.find(planned, "Full plan combined pressure", 1, true))
-assert(TooltipColor("Full plan combined pressure", Named("Tooltip"))[2] == 1)
+assert(string.find(planned, "Item only · Output pressure", 1, true) and string.find(planned, "Full plan · Output pressure", 1, true))
 local gearPane, effectsPane = Named("Equipment"), Named("Effects")
 assert(gearPane.point[5] == Named("Results").point[5] and gearPane.point[4] + gearPane.width < effectsPane.point[4])
 assert(Find("FontString", "Equipment slot") and StatCells(effectsPane.scrollChild, "Damage"))
@@ -682,7 +785,7 @@ local planA, planB = assert(Find("Button", "Plan A")), assert(Find("Button", "Pl
 assert(planA.lit and not planB.lit and string.find(planA.lines[2].text, "gold") and string.find(planB.lines[2].text, "gold"))
 local searched = searchCalls
 local damageA = StatCells(effectsPane.scrollChild, "Damage")[2].text
-local pressureA = StatCells(Named("Results"), "Combined pressure")[2].text
+local pressureA = StatCells(Named("Results"), "Output pressure")[2].text
 Click("Plan B · Stars only")
 assert(planB.lit and not planA.lit and searchCalls == searched and not VisiblePanel().scripts.OnUpdate)
 local damageB = StatCells(effectsPane.scrollChild, "Damage")[2].text
@@ -708,7 +811,7 @@ Click("Show changes only")
 assert(PlanRows() == changedRows)
 Click("Load in Simulator")
 assert(StatCells(effectsPane.scrollChild, "Damage")[2].text == damageA)
-assert(StatCells(Named("Results"), "Combined pressure")[2].text == pressureA)
+assert(StatCells(Named("Results"), "Output pressure")[2].text == pressureA)
 assert(searchCalls == searched)
 Click("Equipment Simulator")
 assert(not Named("Tooltip").shown)
@@ -720,7 +823,7 @@ local lostDamage = assert(Find("FontString", "-8.40 pp"))
 assert(lostDamage.textColor[1] == 1 and lostDamage.textColor[2] < 0.6)
 local noChange = StatCells(effectsPane.scrollChild, "Critical strike")[3]
 assert(noChange.textColor[1] == 0.72 and noChange.textColor[2] == 0.73)
-local morePressure = StatCells(Named("Results"), "Combined pressure")[3]
+local morePressure = StatCells(Named("Results"), "Output pressure")[3]
 assert(string.find(morePressure.text, "+", 1, true) and morePressure.textColor[1] == 1, "higher pressure is red")
 assert(Find("Button", "Reset to Actual Equipment"))
 Click("Reset to Actual Equipment")
@@ -732,7 +835,32 @@ Zone("shadowmoon", 5, "warlock", "budget")
 Armor({ head })
 DrainSearch()
 assert(Find("FontString", "reachability unproven"))
+assert(Find("Button", "Economy").lit and Find("Button", "Max Gear reference"))
 searchLimit = nil
+local uiHeadStats = AZS_GEN.pieces.slots[0].stats
+AZS_GEN.pieces.slots[0].stats = { { "hp", 30 } }
+Zone("shadowmoon", 5, "warlock", "max-and-economy")
+Armor({ head, { slot = 8, rarity = 4, stars = 0 } })
+DrainSearch()
+Click("Plan B · Stars only")
+assert(Find("Button", "Max Gear").lit and Find("FontString", "Output target unreachable in this scope"))
+local maxHP = StatCells(effectsPane.scrollChild, "Health")[2].text
+local bOutput = StatCells(Named("Results"), "Output pressure")[2].text
+local bSearches = searchCalls
+Click("Economy")
+local economyHP = StatCells(effectsPane.scrollChild, "Health")[2].text
+assert(tonumber(maxHP) > tonumber(economyHP) and StatCells(Named("Results"), "Output pressure")[2].text == bOutput)
+Click("Plan A · Current expansion drops")
+Click("Plan B · Stars only")
+assert(Find("Button", "Economy").lit and searchCalls == bSearches)
+Click("Load in Simulator")
+assert(StatCells(effectsPane.scrollChild, "Health")[2].text == economyHP and searchCalls == bSearches)
+Click("Difficulty & Upgrade Planner")
+Click("Max Gear")
+Click("Load in Simulator")
+assert(StatCells(effectsPane.scrollChild, "Health")[2].text == maxHP and searchCalls == bSearches)
+Click("Difficulty & Upgrade Planner")
+AZS_GEN.pieces.slots[0].stats = uiHeadStats
 AZS_ZONE.affixes = { "Sanguine", "Explosive" }
 handlers.AZSZONE()
 assert(Find("FontString", "Current equipment unavailable"), "in-place modifier changes invalidate gear")
@@ -764,7 +892,7 @@ assert(#SurvivorUIDB.rebornGear.baselines.paladin.pieces == 0 and SurvivorUIDB.r
 Zone("dalaran", 0, "paladin", "d")
 assert(Find("FontString", "Enter a Campaign to compare map difficulty"))
 assert(not Find("Button", "Update 100% Baseline") and not Find("Button", "Difficulty & Upgrade Planner"))
-assert(not Find("FontString", "Combined pressure") and not Find("FontString", "Plan A") and not Find("FontString", "100% reference:"))
+assert(not StatCells(Named("Results"), "Output pressure") and not Find("FontString", "Plan A") and not Find("FontString", "100% reference:"))
 Armor({ head })
 assert(Find("FontString", "Equipment attributes") and Find("FontString", "Actual") and Find("FontString", "Simulated"))
 assert(Find("FontString", "Output") and Find("FontString", "Survival") and Find("FontString", "Utility"))
@@ -801,7 +929,7 @@ dofile("SurvivorUI/Locale_zh.lua")
 function SurvivorUI_T(text) return SurvivorUI_WORDS.zh[text] or text end
 Zone("elwynn", 0, "warlock", "f")
 Armor({ head })
-assert(SurvivorUI_RebornGearOpen("show") and Find("FontString", "综合压力 100.0%"))
+assert(SurvivorUI_RebornGearOpen("show") and StatCells(Named("Results"), "输出压力")[1].text == "100.0%")
 assert(string.find(dollSlot:Hover(), "408 金币", 1, true) and string.find(dollSlot:Hover(), "下一品质", 1, true))
 Click("Equipment Simulator") -- This persistent tab was built before the mock switched locale.
 GameTooltip:SetOwner(foreign)
@@ -899,7 +1027,7 @@ function P.Search(_, context, actual, reference, drops)
 	local target = drops and P.Replace(context.pieces, "chest", "common", 1) or context.pieces
 	local _, quote = P.Changes(cat, context.pieces, target, drops, context.class)
 	return { pieces = target, gold = quote.gold, complete = true,
-		after = P.Difficulty(context.demand, drops and Eval(target) or actual, reference).combined }
+		outputPressure = P.Difficulty(context.demand, drops and Eval(target) or actual, reference).output }
 end
 Zone("naxx", 1, "warlock", "set-comparison")
 Armor({ { slot = 0, rarity = 0, stars = 1 }, { slot = 1, rarity = 0, stars = 1 },
@@ -907,7 +1035,7 @@ Armor({ { slot = 0, rarity = 0, stars = 1 }, { slot = 1, rarity = 0, stars = 1 }
 assert(SurvivorUI_RebornGearOpen("show"))
 local set = assert(Find("FontString", "套装激活"))
 local fullDamage = StatCells(effectsPane.scrollChild, "伤害")[2].text
-local setPressure = StatCells(Named("Results"), "综合压力")[2].text
+local setPressure = StatCells(Named("Results"), "输出压力")[2].text
 local setLabel = set.text
 Click("方案 B · 仅升星")
 assert(not Find("FontString", "套装激活"))
@@ -915,7 +1043,7 @@ Click("方案 A · 当前资料片掉落")
 Click("Load in Simulator")
 assert(Find("FontString", "可计算的升级金币：408") and Find("FontString", setLabel))
 assert(StatCells(effectsPane.scrollChild, "伤害")[2].text == fullDamage)
-assert(StatCells(Named("Results"), "综合压力")[2].text == setPressure)
+assert(StatCells(Named("Results"), "输出压力")[2].text == setPressure)
 P.Search = originalSearch
 WorldEvent()
 
@@ -995,6 +1123,14 @@ local empty = Last("AZSARMOR")
 assert(empty.resolution.equipment == "known_empty" and empty.resolution.pressure == "ready" and empty.resolution.saveBaseline)
 assert(empty.resolution.planA == "ready" and empty.resolution.planB == "ready")
 assert(empty.ordering.zone > empty.ordering.world and empty.ordering.armor > empty.ordering.zone)
+local bossHit = maps.naxx[6]
+maps.naxx[6] = nil
+Zone("naxx", 1, "warlock", "azs:r00000003")
+Armor({})
+local partialDiagnosis = Last("AZSARMOR").resolution
+assert(partialDiagnosis.pressure == "partial_pressure" and partialDiagnosis.planA == "ready"
+	and partialDiagnosis.planB == "ready" and partialDiagnosis.saveBaseline)
+maps.naxx[6] = bossHit
 AZS_ZONE.dt = nil
 handlers.AZSZONE()
 assert(Last("AZSZONE").resolution.difficulty == "missing_dt")

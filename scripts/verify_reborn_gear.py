@@ -42,11 +42,18 @@ local function Scenario(class, map, level)
     local target = P.Copy(context)
     target.zone, target.level, target.demand = map, level, M.GearDemand(maps[map], level)
     local drops = assert(P.DropTiers(cat, maps, maps[map][7]))
-    local function Check(result)
+    local function CheckConfiguration(result)
         local evaluation = assert(P.Evaluate(cat, class, result.pieces))
-        local difficulty = P.Difficulty(target.demand, evaluation, reference).combined
+        local pressure = P.Difficulty(target.demand, evaluation, reference)
         local _, cost = P.Changes(cat, pieces, result.pieces, drops, class)
-        assert(math.abs(difficulty - result.after) < P.tolerance and cost.gold == result.gold)
+        -- Earlier source archives used a combined-pressure objective.
+        local reported, recalculated = result.outputPressure or result.after,
+            result.outputPressure and pressure.output or pressure.combined
+        assert(math.abs(recalculated - reported) < P.tolerance and cost.gold == result.gold)
+    end
+    local function Check(result)
+        CheckConfiguration(result)
+        if result.maxGear then CheckConfiguration(result.maxGear) end
     end
     return {
         solve = function(allowed) return P.Search(cat, target, actual, reference, allowed and drops, 150000) end,
@@ -79,13 +86,18 @@ def benchmark(lua, repeat):
                     cpu_total += process_time() - cpu
                     assert not result["error"], result["error"]
                     case["check"](result)
-                    row = (result["visited"], updates, result["after"], result["gold"], bool(result["complete"]))
+                    max_gear = result["maxGear"]
+                    row = (result["visited"], updates, result["outputPressure"] or result["after"], result["gold"],
+                           bool(result["complete"]), bool(result["unreachable"]),
+                           (max_gear["outputPressure"], max_gear["gold"]) if max_gear else None)
                     assert summary is None or summary == row, "search result changed between repetitions"
                     summary = row
-                nodes, updates, pressure, gold, complete = summary
+                nodes, updates, pressure, gold, complete, unreachable, max_gear = summary
                 print(f"{cls}/{key}-{level}/{label}: {nodes}, {updates}, {pressure:.3f}%, {gold}, "
                       f"{pressure <= 100}, {complete}, {1000 * cpu_total / repeat:.2f} ms, "
                       f"{median(setups):.3f} ms, {median(batches or [0]):.3f}/{max(batches or [0]):.3f} ms")
+                if max_gear:
+                    print(f"  Max Gear{' (reference)' if not unreachable else ''}: {max_gear[0]:.3f}%, {max_gear[1]} known gold")
 
 
 def main():
