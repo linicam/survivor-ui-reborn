@@ -653,7 +653,7 @@ end
 local function SelectedConfiguration(index)
 	local plan = ReadyPlan(index)
 	if not plan then return end
-	local selected = planVariants[index] or (plan.unreachable and "max" or "economy")
+	local selected = planVariants[index] or "economy"
 	if plan.maxGear and selected == "max" then return plan.maxGear, selected end
 	return plan, "economy"
 end
@@ -961,7 +961,7 @@ local function UpdateCards(current, top)
 				caption = F("%s output · %s", Colored(ShortPercent(output),
 					PressureColor(current.current.output, output)), PriceLabel(quote))
 				if plan.maxGear then
-					local name = variant == "max" and (plan.unreachable and "Max Gear" or "Max Gear reference") or "Economy"
+					local name = variant == "max" and "Max Gear reference" or "Economy"
 					caption = T(name) .. " · " .. caption
 				end
 				status = T(PlanStatus(plan))
@@ -1025,7 +1025,7 @@ local function Details(area, current)
 		Line(area, T("Survival estimates a representative hit against effective health. Movement, skills, talents and special encounter rules can change actual survival."), MUTED)
 		Line(area, T("This equipment comparison cannot predict clear or death probabilities."), MUTED)
 		Line(area, T("Critical chance and damage, cooldown, Echo, area and special skill effects are shown separately from modeled output."), MUTED)
-		Line(area, T("Max Gear shows the known quality and star ceiling with set protection. Economy minimizes modeled output pressure, then cost when the target is out of reach."), MUTED)
+		Line(area, T("Economy opens first. If the target is out of reach, it minimizes modeled output pressure among priced configurations, then minimizes gold cost. Max Gear shows the known quality and star ceiling with set protection."), MUTED)
 		if current.reference and current.context.demand then
 			local map, old = current.context.demand, current.reference.demand
 			Line(area, F("Map demand vs. baseline · enemy health %s · first boss hit %s",
