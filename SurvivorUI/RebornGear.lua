@@ -17,11 +17,13 @@ local executionShown, draftExplicit
 local view, activeView, selectedPlan = "planner", nil, 1
 local planVariants = {}
 local details, fullPlan, detailOffset, detailStart, windowWidth, windowHeight
+local stacked, bodyTop, leftWidth, rightWidth, rightX
 local observedZone, worn, state, draft, searches, rendering
 local planEffects, simulation
 local previewOwner, previewIsNative
 local observationOrder, worldEpoch = 0, 0
 local worldOrder, zoneOrder, armorOrder, associatedArmorOrder
+local waitingRefreshZone
 local armorDisposition = "waiting_armor"
 local diagnosticSyncRequested, diagnosticZoneWireSeen
 local render, updateSearch, showView, drawComparison
@@ -979,7 +981,9 @@ local function PressureRows(area, actual, target)
 		StatRow(area, T(metric[2]), before and ShortPercent(before) or "—", after and ShortPercent(after) or "—",
 			delta, color, metric[1] == "output")
 	end
-	Line(area, T("Lower is better. Plans target output. Survival is a theoretical incoming-hit reference."), MUTED)
+	if not stacked then
+		Line(area, T("Lower is better. Plans target output. Survival is a theoretical incoming-hit reference."), MUTED)
+	end
 end
 
 local function ContextLines(area, current, reserved)
@@ -1009,7 +1013,7 @@ local function ContextLines(area, current, reserved)
 	elseif context.demand and current.issue == "missing" then
 		Line(area, T("Set a 100% baseline for this class to compare difficulty."), MUTED)
 	end
-	if activeView == "planner" and (current.current.output or current.current.survival) then
+	if activeView == "planner" and not stacked and (current.current.output or current.current.survival) then
 		Line(area, F("Output pressure %s · Survival pressure %s", Colored(ShortPercent(current.current.output), GOLD),
 			ShortPercent(current.current.survival)))
 	end
@@ -1043,6 +1047,28 @@ local function PlanStatus(plan, selected)
 	else return "Output reachability unproven" end
 end
 
+local function PlanFlags(plan, variant, quote, output)
+	local flags = {}
+	if plan.minimumTargetCost and (plan.budget or variant == "max") then
+		table.insert(flags, F("Minimum target star gold: %d", plan.minimumTargetCost))
+		if plan.budget and plan.minimumTargetCost > plan.budget then
+			table.insert(flags, F("Shortfall: %d", plan.minimumTargetCost - plan.budget))
+		end
+	elseif plan.outputPressure <= plan.target and plan.minimumTargetCost == nil then
+		table.insert(flags, F("Target star gold found: %d", plan.gold))
+	end
+	if plan.budget and variant == "economy" then table.insert(flags, F("Modeled budget left: %d", plan.budget - quote.gold)) end
+	if quote.acquisition then table.insert(flags, T("Drops required · gold covers stars")) end
+	if quote.estimated then table.insert(flags, T("Price estimated")) end
+	if plan.excluded then table.insert(flags, T("Unpriced options excluded")) end
+	if plan.unverifiedDrops then table.insert(flags, T("Unverified drops excluded")) end
+	if plan.unreachable and variant == "economy" and not plan.budget then table.insert(flags, T("Best priced output")) end
+	if plan.affordable and plan.affordable.complete and variant == "economy" and output > plan.target then
+		table.insert(flags, T("Best priced output within budget"))
+	end
+	return table.concat(flags, " · ")
+end
+
 local function UpdateCards(current, top)
 	local visible = activeView == "planner" and current and current.context.demand
 	local width = math.floor((windowWidth - 42) / 2)
@@ -1064,25 +1090,7 @@ local function UpdateCards(current, top)
 					caption = T(name) .. " · " .. caption
 				end
 				status = variant == "max" and T("Quality and stars ceiling") or T(PlanStatus(plan, configuration))
-				local flags = {}
-				if plan.minimumTargetCost and (plan.budget or variant == "max") then
-					table.insert(flags, F("Minimum target star gold: %d", plan.minimumTargetCost))
-					if plan.budget and plan.minimumTargetCost > plan.budget then
-						table.insert(flags, F("Shortfall: %d", plan.minimumTargetCost - plan.budget))
-					end
-				elseif plan.outputPressure <= plan.target and plan.minimumTargetCost == nil then
-					table.insert(flags, F("Target star gold found: %d", plan.gold))
-				end
-				if plan.budget and variant == "economy" then table.insert(flags, F("Modeled budget left: %d", plan.budget - quote.gold)) end
-				if quote.acquisition then table.insert(flags, T("Drops required · gold covers stars")) end
-				if quote.estimated then table.insert(flags, T("Price estimated")) end
-				if plan.excluded then table.insert(flags, T("Unpriced options excluded")) end
-				if plan.unverifiedDrops then table.insert(flags, T("Unverified drops excluded")) end
-				if plan.unreachable and variant == "economy" and not plan.budget then table.insert(flags, T("Best priced output")) end
-				if plan.affordable and plan.affordable.complete and variant == "economy" and output > plan.target then
-					table.insert(flags, T("Best priced output within budget"))
-				end
-				limits = table.concat(flags, " · ")
+				if not stacked then limits = PlanFlags(plan, variant, quote, output) end
 			elseif plan and plan.worker then status = T("Searching equipment combinations…")
 			elseif plan and plan.error then status = T("Upgrade search unavailable.")
 			elseif current.current.output and index == 1 and not current.drops then status = T("Expansion drop data unavailable.")
@@ -1184,7 +1192,6 @@ local function ConfigureActions(current, comparison)
 	actions.details.text:SetText(T(details and "Hide details" or "Show details"))
 end
 
-local stacked, bodyTop, leftWidth, rightWidth, rightX
 local function LayoutBody()
 	local twoRows = (windowWidth < 574 and (actions.plans[1]:IsShown() or actions.plans[2]:IsShown()))
 		or (windowWidth < 480 and actions.full:IsShown())
@@ -1268,6 +1275,14 @@ drawComparison = function(current, reset)
 
 		if current.current.output or current.current.survival then
 			PressureRows(effectHeader, current.current, comparison and comparison.pressure)
+			if stacked then
+				if planner and comparison then
+					local _, variant = SelectedConfiguration(selectedPlan)
+					local flags = PlanFlags(ReadyPlan(selectedPlan), variant, comparison.quote, comparison.pressure.output)
+					if flags ~= "" then Line(effects, flags, MUTED) end
+				end
+				Line(effects, T("Lower is better. Plans target output. Survival is a theoretical incoming-hit reference."), MUTED)
+			end
 		end
 		local evaluation = comparison and comparison.evaluation
 		EquipmentStats(effects, current.actual.stats, evaluation and evaluation.stats)
@@ -1560,6 +1575,7 @@ local function BuildPlanningControls()
 		local current = Read()
 		if not current or not current.context.hub or not AZS_SendCommand then return end
 		worn, associatedArmorOrder, armorDisposition = nil, nil, "waiting_armor"
+		waitingRefreshZone = true
 		PlanningChanged()
 		AZS_SendCommand("sync")
 	end)
@@ -1783,6 +1799,7 @@ local function InstallListeners()
 		if changed then
 			InvalidateGear()
 		end
+		waitingRefreshZone = nil
 		zoneOrder = NoteObservation()
 		observedZone = snapshot
 		InstallInspectHook()
@@ -1792,7 +1809,7 @@ local function InstallListeners()
 	AZS.On("AZSARMOR", function()
 		if not SurvivorUI_RebornGearEnabled() then return end
 		armorOrder = NoteObservation()
-		if not observedZone then
+		if not observedZone or waitingRefreshZone then
 			armorDisposition = "armor_before_zone"
 			TraceGear("AZSARMOR")
 			return

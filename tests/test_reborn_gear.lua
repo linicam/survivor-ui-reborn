@@ -993,6 +993,9 @@ assert(Find("FontString", "Calculable upgrade gold: 0") and Find("Button", "Rese
 Click("Difficulty & Upgrade Planner")
 assert(saved == SurvivorUIDB.rebornGear.baselines.warlock)
 do
+	Click("Equipment Simulator")
+	assert(SlotMenu("head", 2, "stars"))()
+	Click("Difficulty & Upgrade Planner")
 	local beforeSettings = searchCalls
 	local targetBox = Input("target")
 	targetBox.scripts.OnEditFocusGained()
@@ -1018,6 +1021,9 @@ do
 	Click("Reset")
 	assert(P.Policy(SurvivorUIDB.rebornGear).target == 100 and SurvivorUIDB.rebornGear.budget == nil)
 	assert(saved == SurvivorUIDB.rebornGear.baselines.warlock)
+	Click("Equipment Simulator")
+	assert(string.find(HoverIcon("head", false), "★2 → ★3", 1, true))
+	Click("Difficulty & Upgrade Planner")
 end
 searchLimit = 1
 Zone("shadowmoon", 5, "warlock", "budget")
@@ -1240,6 +1246,27 @@ panel.scripts.OnEvent(panel, "DISPLAY_SIZE_CHANGED")
 near(panel.width * panel.scale, 433)
 assert(panel.scale < 1 and shade.shown)
 assert(SurvivorUI_T("Close") == "关闭")
+do
+	local config = SurvivorUIDB.rebornGear
+	config.hubMap, config.hubDifficulty = "shadowmoon", 5
+	Zone("dalaran", 0, "warlock", "narrow-hub")
+	Armor({ head })
+	Enter("budget", "60000")
+	DrainSearch()
+	assert(gearPane.height >= 55 and effectsPane.height >= 48)
+	assert(Find("FontString", "模型估算预算余额") and StatCells(Named("Results"), "输出压力"))
+	local previousCommands = #commands
+	Click("Refresh equipment")
+	assert(#commands == previousCommands + 1 and commands[#commands] == "sync")
+	assert(Find("FontString", "暂未读到当前穿戴") and not panel.scripts.OnUpdate)
+	Armor({ head })
+	assert(Find("FontString", "暂未读到当前穿戴"))
+	handlers.AZSZONE()
+	Armor({ highHead })
+	DrainSearch()
+	assert(not Find("FontString", "暂未读到当前穿戴"))
+	config.hubMap, config.hubDifficulty, config.budget = nil, nil, nil
+end
 Click("Close") -- The persistent frame was built while the mock was enUS.
 assert(GameMenuFrame.shown and not panel.shown and not shade.shown)
 GameMenuFrame:Hide()
