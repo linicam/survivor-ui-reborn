@@ -206,9 +206,24 @@ function Planner.Reference(context, result)
 	if not result or not result.sets or not context.demand or not context.demand.output
 		or not result.output then return end
 	return Planner.Copy({ schema = Planner.schema, version = Planner.version, data = Planner.data, build = context.build, at = context.at,
-		class = context.class, zone = context.zone, level = context.level, heroic = context.heroic,
+		class = context.class, zone = context.zone, level = context.level, heroic = context.heroic, origin = context.origin,
 		modifiers = context.modifiers, pieces = context.pieces, stats = result.stats, sets = result.sets,
 		demand = context.demand, output = result.output, survival = result.survival })
+end
+
+function Planner.Input(value, minimum, maximum, integer)
+	local number = tonumber(value)
+	if not number or number ~= number or number < minimum or number > maximum
+		or (integer and number ~= math.floor(number)) then return end
+	return number
+end
+
+function Planner.Policy(config)
+	return {
+		target = Planner.Input(config.target, 1, 10000) or 100,
+		budget = Planner.Input(config.budget, 0, 1000000000, true),
+		protectSets = config.protectSets ~= false,
+	}
 end
 
 function Planner.CheckReference(saved, context, catalog, maps)
@@ -435,13 +450,17 @@ local function MaxGear(groups, need, consume, catalog, context, reference, allow
 		gold = quote.gold, protectedHolds = held }
 end
 
-function Planner.Search(catalog, context, actual, reference, allowed, limit)
+function Planner.Search(catalog, context, actual, reference, allowed, limit, policy)
 	local current = Planner.Difficulty(context.demand, actual, reference).output
 	if not current or not actual.sets then return end
+	local targetOutput = policy and policy.target or 100
+	local budget = policy and policy.budget
 	local result = { outputPressure = current, gold = 0, acquisitionRank = 0,
-		pieces = Planner.Copy(context.pieces), complete = current <= 100, visited = 0 }
-	if result.complete then return result end
-	local requirements = Gear.SetRequirements(actual.opaque, catalog.native.setRules)
+		pieces = Planner.Copy(context.pieces), complete = current <= targetOutput, visited = 0,
+		target = targetOutput, budget = budget }
+	if result.complete then result.minimumTargetCost = 0 end
+	if result.complete and not policy then return result end
+	local requirements = (not policy or policy.protectSets) and Gear.SetRequirements(actual.opaque, catalog.native.setRules) or {}
 	local groups = Candidates(catalog, context, allowed, requirements, result)
 	local need, consume = SetState(requirements)
 	local ratio = context.demand.output / reference.demand.output
@@ -451,6 +470,10 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 		-- Native slot order makes equal-quality Max Gear choices reproducible.
 		local nativeOrder = {}
 		for i, group in ipairs(groups) do nativeOrder[i] = group end
+		if result.complete then
+			result.maxGear = MaxGear(nativeOrder, need, consume, catalog, context, reference, allowed)
+			return
+		end
 		table.sort(groups, function(a, b)
 			if a.spread == b.spread then return a.order < b.order end
 			return a.spread > b.spread
@@ -464,7 +487,7 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 		end
 		local seedPieces = Pieces(seed)
 		local seedOutput = Planner.Difficulty(context.demand, Planner.Evaluate(catalog, context.class, seedPieces), reference).output
-		if seedOutput <= 100 or seedOutput < current - EPS then
+		if seedOutput <= targetOutput or seedOutput < current - EPS then
 			result.outputPressure, result.gold, result.acquisitionRank, result.pieces = seedOutput, seedGold, seedRank, seedPieces
 		end
 
@@ -472,8 +495,8 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 		-- small Damage guard only loosens bounds against sum-order roundoff.
 		local guard = 1e-10
 		local bestPressure = AtDamage(root.damage)
-		local target = (bestPressure <= 100 or seedOutput <= 100) and 100 or bestPressure + EPS
-		local requiredDamage = 100 * ratio * reference.output / (target + (target == 100 and EPS or 0)) - 1
+		local target = (bestPressure <= targetOutput or seedOutput <= targetOutput) and targetOutput or bestPressure + EPS
+		local requiredDamage = 100 * ratio * reference.output / (target + (targetOutput == 100 and target == 100 and EPS or 0)) - 1
 		local prices = PriceBounds(groups)
 		local path = {}
 		local function Visit(i, remaining, gold, rank, damage)
@@ -503,14 +526,133 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit)
 			return true
 		end
 		result.complete = Visit(1, need, 0, 0, 0)
-		if result.outputPressure > 100 then
+		if result.outputPressure <= targetOutput and result.complete and not result.excluded and not result.unverifiedDrops then
+			result.minimumTargetCost = result.gold
+		end
+		if result.outputPressure > targetOutput then
 			local legal = result.excluded and Suffix(groups, "legal", consume)(1, need) or root
 			result.verifiedBestOutputPressure = AtDamage(legal.damage)
-			result.unreachable = result.complete and not result.unverifiedDrops and AtDamage(legal.damage + guard) > 100
+			result.unreachable = result.complete and not result.unverifiedDrops and AtDamage(legal.damage + guard) > targetOutput
+		end
+		if budget and (result.gold > budget or result.outputPressure > targetOutput or not result.complete) then
+			local affordable = { outputPressure = current, damage = actual.output - 1, gold = 0, acquisitionRank = 0,
+				pieces = Planner.Copy(context.pieces), visited = 0 }
+			local function WithinBudget(i, remaining, gold, rank, damage)
+				if gold > budget then return true end
+				if affordable.visited >= limit then return false end
+				affordable.visited = affordable.visited + 1
+				coroutine.yield()
+				local rest = best(i, remaining)
+				if not rest then return true end
+				local bound = prices[i]
+				local ceiling = damage + math.min(rest.damage, bound.free + (budget - gold) * bound.rate)
+				local threshold = affordable.outputPressure <= targetOutput
+					and (100 * ratio * reference.output / (targetOutput + (targetOutput == 100 and EPS or 0)) - 1)
+					or affordable.damage
+				if ceiling + guard < threshold then return true end
+				if affordable.outputPressure <= targetOutput and not Cheaper(gold, rank, affordable.gold, affordable.acquisitionRank) then return true end
+				local group = groups[i]
+				if not group then
+					local pressure = AtDamage(damage)
+					local meets, hadTarget = pressure <= targetOutput, affordable.outputPressure <= targetOutput
+					local cheaper = Cheaper(gold, rank, affordable.gold, affordable.acquisitionRank)
+					if (meets and (not hadTarget or cheaper))
+						or (not meets and not hadTarget and (pressure < affordable.outputPressure
+							or (pressure == affordable.outputPressure and cheaper))) then
+						affordable.outputPressure, affordable.damage = pressure, damage
+						affordable.gold, affordable.acquisitionRank, affordable.pieces = gold, rank, Pieces(path)
+					end
+					return true
+				end
+				for _, option in ipairs(group.priced) do
+					path[i] = option
+					if not WithinBudget(i + 1, consume(remaining, option), gold + option.gold,
+						rank + option.acquisitionRank, damage + option.damage) then return false end
+				end
+				path[i] = nil
+				return true
+			end
+			path = {}
+			affordable.complete = WithinBudget(1, need, 0, 0, 0)
+			result.affordable = affordable
+		end
+		if policy or result.outputPressure > targetOutput then
 			result.maxGear = MaxGear(nativeOrder, need, consume, catalog, context, reference, allowed)
 		end
 	end)
 	return result
+end
+
+function Planner.Execution(catalog, context, actual, target, reference, drops)
+	local changes = Planner.Changes(catalog, context.pieces, target, drops, context.class)
+	local requirements = Gear.SetRequirements(actual.opaque, catalog.native.setRules)
+	local counts = {}
+	for i, req in ipairs(requirements) do
+		counts[i] = 0
+		for _, piece in ipairs(context.pieces) do
+			if Protects(catalog, piece, req) then counts[i] = counts[i] + 1 end
+		end
+	end
+	for i, change in ipairs(changes) do
+		local before, after = change.before, change.after
+		change.bit = 2 ^ (i - 1)
+		change.replacement = not before or before.tier ~= after.tier
+		change.start = change.replacement and 0 or before.stars
+		change.gain = (Gear.Piece(catalog, context.class, after.slot, after.tier, after.stars).damage or 0)
+			- (before and Gear.Piece(catalog, context.class, before.slot, before.tier, before.stars).damage or 0)
+		change.delta, change.loss = {}, {}
+		for j, req in ipairs(requirements) do
+			local had = Protects(catalog, before, req) and 1 or 0
+			change.delta[j] = (Protects(catalog, after, req) and 1 or 0) - had
+			change.loss[j] = change.replacement and had or 0
+		end
+	end
+	table.sort(changes, function(a, b)
+		if a.gain ~= b.gain then return a.gain > b.gain end
+		return a.bit < b.bit
+	end)
+	local ordered, failed = {}, {}
+	local function Find(mask)
+		if mask == 2 ^ table.getn(changes) - 1 then return true end
+		if failed[mask] then return false end
+		for _, change in ipairs(changes) do
+			if math.floor(mask / change.bit) % 2 == 0 then
+				local safe = true
+				for i, req in ipairs(requirements) do
+					if counts[i] - change.loss[i] < req.count then safe = false; break end
+				end
+				if safe then
+					for i, delta in ipairs(change.delta) do counts[i] = counts[i] + delta end
+					table.insert(ordered, change)
+					if Find(mask + change.bit) then return true end
+					table.remove(ordered)
+					for i, delta in ipairs(change.delta) do counts[i] = counts[i] - delta end
+				end
+			end
+		end
+		failed[mask] = true
+		return false
+	end
+	-- Within a slot each star only adds threshold eligibility. Finishing a
+	-- slot before moving on cannot remove any available preserving sequence.
+	local preserves = Find(0)
+	local setup, evaluated = context.pieces, actual
+	local steps, cumulative, unknown = {}, 0, false
+	local function Add(change, kind, stars, quote)
+		local after = change.after
+		setup = Planner.Replace(setup, after.slot, after.tier, stars)
+		local before = evaluated
+		evaluated = Planner.Evaluate(catalog, context.class, setup)
+		cumulative, unknown = cumulative + quote.gold, unknown or quote.unknown
+		table.insert(steps, { kind = kind, slot = after.slot, tier = after.tier, from = change.start, stars = stars,
+			quote = quote, cumulative = cumulative, unknown = unknown, beforeSets = before.sets, afterSets = evaluated.sets,
+			output = Planner.Difficulty(context.demand, evaluated, reference).output })
+	end
+	for _, change in ipairs(preserves and ordered or changes) do
+		if change.replacement then Add(change, "acquire", 0, { gold = 0, kind = change.quote.kind }) end
+		if change.after.stars > change.start then Add(change, "stars", change.after.stars, change.quote) end
+	end
+	return { steps = steps, preserves = preserves, pieces = setup, gold = cumulative, unknown = unknown }
 end
 
 

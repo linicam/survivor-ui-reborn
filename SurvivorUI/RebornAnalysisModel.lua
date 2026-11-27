@@ -112,7 +112,7 @@ local HEALTH = { [0] = 1, 1.79, 1.97, 2.16, 2.45, 2.72 }
 local HIT = { [0] = 1, 1.65, 1.77, 1.88, 2.01, 2.16 }
 
 function Model.GearDemand(entry, tier)
-	if not entry or not HEALTH[tier] then return end
+	if not entry or not HEALTH[tier] or (entry[9] and tier > entry[9]) then return end
 	local health, hit = Model.Number(entry[1]), Model.Number(entry[6])
 	local out = { output = health and health > 0 and health * HEALTH[tier] or nil,
 		survival = hit and hit > 0 and hit * HIT[tier] or nil }
