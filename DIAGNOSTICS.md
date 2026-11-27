@@ -32,15 +32,11 @@ Owner identifiers are replaced with stable session-local pseudonyms
 Native card payloads, spell descriptions, and manual marks can contain
 free-form text. Review any data you choose to share.
 
-### Gear & Difficulty evidence
+### Historical Gear & Difficulty recordings
 
-The verified Dalaran feed identifies the hub and reports its Normal tier.
-It provides equipped items for simulation. A Campaign entry is required
-to compare actual maps and use the optimizer. To collect Campaign evidence,
-reuse auto recording or use `/sui reborn record start` before the baseline
-action. `/sui gear show` records the analyzer's state when opened. Exit normally
-and upload with the existing private diagnostics helper. See the provisional
-checks in the [delivery report](docs/reviews/PR-006.md#h-independent-review-and-provisional-in-game-checklist).
+The legacy analyzer is suspended. The following fields describe existing
+recordings from the pre-0.8.0 planner. General diagnostics still records
+`native_gear` when it receives `AZSGEAR`.
 
 `gear_analyzer` events distinguish the wire fields of `AZSZONE` from
 the native parsed fields, the analyzer's normalized context, and

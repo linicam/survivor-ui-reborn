@@ -16,6 +16,10 @@ required for several items; see the [testing checklist](#in-game-testing-checkli
 
 ## What changed, in one paragraph
 
+The legacy Gear Analyzer and Equipment Simulator are suspended following the
+Reborn 0.8.0 random-loot overhaul. No client loads the legacy planner through
+the addon manifest. See the [historical equipment model](docs/REBORN_GEAR.md).
+
 One new file, `SurvivorUI/RebornCompat.lua`, holds everything Reborn-
 specific: boss-mode detection, the `AZS_ABILITIES` snapshot merge, the
 meter-loadout jewelry reader, rank history, run-id resets, curse

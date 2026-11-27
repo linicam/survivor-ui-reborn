@@ -408,7 +408,6 @@ function SurvivorUI_RebornRecordStart()
 		local jew = SurvivorUI_RebornJewelry(true)
 		SurvivorUI_RebornRecord("jewelry_initial", { source = jew.source, items = jew.items })
 	end
-	if SurvivorUI_RebornGearRecordStart then SurvivorUI_RebornGearRecordStart() end
 	return session.id
 end
 

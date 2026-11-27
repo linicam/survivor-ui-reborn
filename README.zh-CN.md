@@ -2,6 +2,8 @@
 
 [English](README.md) | 简体中文
 
+Reborn 0.8.0 改为随机装备后，本分支暂停了基于旧固定装备规则的装备分析器和装备模拟器。请在游戏原生装备界面查看和升级当前装备。
+
 [![Latest release](https://img.shields.io/github/v/release/morderous/survivor-ui?label=download&color=2ea44f)](https://github.com/morderous/survivor-ui/releases/latest) [![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-buy%20me%20a%20coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/morderous)
 
 ![冒险中的 Survivor UI：右侧是冒险追踪、带首饰的构筑列表和伤害统计，左侧是本次冒险和最高暴击，顶部是拾取列表，还有首领血条、动作条与单位框体，以及英雄身旁带技能图标的伤害数字](docs/screenshot.jpg)

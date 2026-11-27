@@ -42,9 +42,6 @@ Affixes.lua
 RebornMapReference.lua
 RebornAnalysisModel.lua
 RebornAnalysis.lua
-RebornGearModel.lua
-RebornGearPlanner.lua
-RebornGear.lua
 Tracker.lua
 AbilityTooltip.lua
 BossBars.lua

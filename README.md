@@ -29,6 +29,10 @@ Per-ability upgrade choices and curses are **not** exposed by the
 documented Reborn API, so the addon tracks ability rank increases only
 and does not invent upgrade or curse data.
 
+Reborn 0.8.0 introduced random equipment. This fork has suspended the
+pre-0.8.0 Gear Analyzer and Equipment Simulator. Use the game's equipment
+interface for current gear. [Historical model notes](docs/REBORN_GEAR.md)
+
 **Install (no dev tools needed):** download `SurvivorUI-Reborn.zip`
 from this repository's latest Release, or from a GitHub Actions run's
 `SurvivorUI-Reborn` artifact. Close the game, back up your existing

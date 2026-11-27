@@ -1596,4 +1596,5 @@ SurvivorUI_WORDS.zh = {
 	["Survivor UI: performance report saved; the game writes it to SavedVariables when it closes. The heaviest scripts:"] = "Survivor UI：性能报告已保存；游戏关闭时写入 SavedVariables。最重的脚本：",
 	["Survivor UI: /sui perf  opens the performance monitor: the time, calls and garbage of every addon's scripts, and the slow frames; /sui perf off stops it"] = "Survivor UI：/sui perf  打开性能监视器：每个插件脚本的耗时、调用次数和垃圾，以及慢帧；/sui perf off 关闭它",
 	["Game or earlier addon"] = "游戏或更早加载的插件",
+	["Gear Analyzer and Equipment Simulator are suspended. Use the game's equipment interface."] = "装备分析器和装备模拟器已暂停。请使用游戏原生装备界面。",
 }

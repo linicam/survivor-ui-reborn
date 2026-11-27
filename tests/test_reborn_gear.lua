@@ -2,6 +2,7 @@
 table.getn = table.getn or function(t) return #t end
 dofile("SurvivorUI/RebornAnalysisModel.lua")
 dofile("SurvivorUI/RebornMapReference.lua")
+-- Load the retired modules explicitly for historical offline regression coverage.
 dofile("SurvivorUI/RebornGearModel.lua")
 dofile("SurvivorUI/RebornGearPlanner.lua")
 local G, P = SurvivorUI_RebornGearModel, SurvivorUI_RebornGearPlanner
@@ -1101,6 +1102,7 @@ assert(#GearEvents() == 0 and cvarReads == 0, "recording off avoids diagnostic p
 
 local priorCommands = #commands
 local session = assert(SurvivorUI_RebornRecordStart())
+SurvivorUI_RebornGearRecordStart()
 assert(#commands == priorCommands + 1 and commands[#commands] == "sync")
 assert(SurvivorUI_RebornRecordStart() == session and #commands == priorCommands + 1)
 local initial = Last("record_start")
@@ -1173,6 +1175,7 @@ local controlsBefore = #commands
 WorldEvent()
 AZS_ZONE = {}
 assert(SurvivorUI_RebornRecordStart())
+SurvivorUI_RebornGearRecordStart()
 assert(#commands == controlsBefore, "auto recording before zone arrival leaves native entry sync alone")
 assert(SurvivorUI_RebornGearOpen("show") and #commands == controlsBefore + 1)
 assert(SurvivorUI_RebornGearOpen("show") and #commands == controlsBefore + 1)
