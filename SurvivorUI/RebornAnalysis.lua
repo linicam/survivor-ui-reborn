@@ -5,11 +5,10 @@ local Model = SurvivorUI_RebornAnalysisModel
 local Analysis = {}
 SurvivorUI_RebornAnalysis = Analysis
 
-local defaults = { cards = true, map = true, live = true }
+local defaults = { cards = true, live = true }
 local samples, currentRun = {}, nil
 local lastSample, ready
-local cachedHand, cachedInput, cachedValues, cachedAdvice
-local meterHand, meterSegment, handMeter
+local cachedHand, cachedInput, cachedValues
 local pending, handSerial, diagnosticHand, diagnosticSerial = nil, 0
 local epochTime
 local blockedSpells
@@ -28,8 +27,7 @@ function Analysis.Enabled(key)
 end
 
 local function ClearHand()
-	cachedHand, cachedInput, cachedValues, cachedAdvice = nil, nil, nil, nil
-	meterHand, meterSegment, handMeter = nil, nil, nil
+	cachedHand, cachedInput, cachedValues = nil, nil, nil
 end
 
 local function Reset()
@@ -44,11 +42,11 @@ local function Recording()
 end
 
 local function RuntimeNeeded()
-	return Analysis.Enabled("live") or Analysis.Enabled("advisor") or Recording()
+	return Analysis.Enabled("live") or Recording()
 end
 
 local function CardsNeeded()
-	return Analysis.Enabled("cards") or Analysis.Enabled("advisor")
+	return Analysis.Enabled("cards")
 end
 
 Analysis.WantsCardHints = CardsNeeded
@@ -67,7 +65,7 @@ function Analysis.Toggle(key)
 		blockedSpells = nil
 	end
 	if not RuntimeNeeded() and samples[1] then samples = {} end
-	if key == "enabled" or key == "cards" or key == "advisor" then
+	if key == "enabled" or key == "cards" then
 		ClearHand()
 		if Analysis.ClearCardDisplay then Analysis.ClearCardDisplay() end
 		if CardsNeeded() and Analysis.RefreshCardDisplay then Analysis.RefreshCardDisplay() end
@@ -97,24 +95,10 @@ local function ReadMeter(run, encounter)
 	if not AZS_GetMeterSnapshot or not run then return nil end
 	local ok, result = pcall(AZS_GetMeterSnapshot, { apiVersion = 1, runId = run, metric = "damage", scope = "self",
 		period = encounter and "encounter" or "run", groupBy = "source", windowSeconds = METER_WINDOW })
-	local rate = ok and result and result.totals and result.totals.recentRate
+	if not ok or type(result) ~= "table" or type(result.context) ~= "table" or result.context.runId ~= run then return nil end
+	local rate = result.totals and result.totals.recentRate
 	if not rate or rate.status ~= "ready" or (Num(rate.elapsedSeconds) or 0) < METER_WINDOW - 1 then return nil end
 	return result, rate
-end
-
-local function SingleRowShare(meter, key, spell)
-	local total = meter and meter.totals and Num(meter.totals.windowAmount)
-	if not total or total <= 0 or spell <= 0 then return nil end
-	local amount
-	for _, row in ipairs(meter.rows or {}) do
-		local source = meter.sources and meter.sources[row.sourceKey]
-		if source and source.kind == "ability" and source.abilityKey == key
-			and source.spellIds and Num(source.spellIds[1]) == spell then
-			if amount ~= nil then return nil end
-			amount = Num(row.windowAmount) or 0
-		end
-	end
-	return amount and amount / total or nil
 end
 
 local function CurrentSpell(card)
@@ -146,83 +130,28 @@ local function ContextMatches(inBoss, boss)
 		and lastSample.bossCount == Num(AZS_RUN.bs)
 end
 
-local function Assess(hand)
-	local values = {}
-	if not ready or ready ~= AZS_ZONE or not hand or type(hand.cards) ~= "table" then return values end
-	local inBoss, boss = Boss()
-	local time = Num(AZS_RUN.t)
-	local stageAge = time and epochTime and time - epochTime
-	local meter
-	-- A full run window can contain the previous arena or boss. Wait for a clean segment.
-	if hand.kind == "spell" and stageAge and stageAge >= METER_WINDOW and ContextMatches(inBoss, boss) then
-		if meterHand ~= hand or meterSegment ~= lastSample.segment then
-			meterHand, meterSegment = hand, lastSample.segment
-			handMeter = ReadMeter(currentRun, inBoss)
-		end
-		meter = handMeter
+local function HandValues(hand)
+	if not ready or ready ~= AZS_ZONE or not hand or hand.kind ~= "jewel" or type(hand.cards) ~= "table" then
+		return {}
 	end
-	for index = 1, MAX_CARDS do
-		local card = hand.cards[index]
-		if type(card) == "table" then
-			if hand.kind == "spell" and card.key then
-				local spell = CurrentSpell(card)
-				local share = spell and SingleRowShare(meter, card.key, Num(card.spell) or 0)
-				values[index] = Model.Skill(card, spell, share)
-			elseif hand.kind == "jewel" then
+	if cachedHand ~= hand or not cachedInput or cachedInput.sheet ~= AZS_STATS or cachedInput.caps ~= AZS_CAPS
+		or cachedInput.stamp ~= AZS_STATS_UPDATED or cachedInput.capStamp ~= AZS_CAPS_UPDATED then
+		local values = {}
+		for index = 1, MAX_CARDS do
+			local card = hand.cards[index]
+			if type(card) == "table" then
 				values[index] = Model.Jewelry(card, SurvivorUI_RebornCardStatKey, Cap)
 			end
 		end
+		cachedHand, cachedValues = hand, values
+		cachedInput = { sheet = AZS_STATS, caps = AZS_CAPS, stamp = AZS_STATS_UPDATED, capStamp = AZS_CAPS_UPDATED }
 	end
-	return values
-end
-
-local function HandValues(hand)
-	local input = hand.kind == "spell" and AZS_SPELLS or AZS_STATS
-	local stamp = hand.kind == "spell" and AZS_SPELLS_UPDATED or AZS_STATS_UPDATED
-	-- Native tables are replaced. Caps can update independently of the character sheet.
-	local caps = hand.kind == "jewel" and AZS_CAPS or false
-	local capStamp = hand.kind == "jewel" and AZS_CAPS_UPDATED
-	local inBoss, boss = Boss()
-	local context = ContextMatches(inBoss, boss)
-	if cachedHand ~= hand or not cachedInput or cachedInput.sheet ~= input or cachedInput.caps ~= caps
-		or cachedInput.stamp ~= stamp or cachedInput.capStamp ~= capStamp
-		or cachedInput.sample ~= lastSample or cachedInput.context ~= context then
-		local values = Assess(hand)
-		local defense
-		if context and (Analysis.Enabled("advisor") or Recording()) then
-			defense = Model.Advice(Model.Summarize(samples), values)
-		end
-		cachedInput = { sheet = input, caps = caps, stamp = stamp, capStamp = capStamp, sample = lastSample, context = context }
-		cachedHand, cachedValues, cachedAdvice = hand, values, { defense = defense }
-	end
-	return cachedValues, cachedAdvice
+	return cachedValues
 end
 
 local function ValueText(value)
 	if not value then return nil end
-	if value.kind == "spell" then
-		local lines = {}
-		if value.damage then
-			local boost = value.damageBoost
-			if boost and boost.before and boost.after then
-				table.insert(lines, string.format(T("Damage bonus preview %d%% → %d%%"), boost.before, boost.after))
-			else
-				table.insert(lines, string.format(T("Skill damage preview +%d%%"), value.damage))
-			end
-		end
-		if value.cooldown then
-			local cd = value.cooldown
-			table.insert(lines, string.format(T("Ideal CD %.2fs → %.2fs"), cd.before, cd.ideal))
-		elseif value.frequency then
-			table.insert(lines, string.format(T("Ideal cast rate +%.1f%%"), value.frequency))
-		end
-		if value.meterScenario then
-			table.insert(lines, string.format(T("If the meter row scales · +%.1f%% DPS"), value.meterScenario))
-		elseif table.getn(lines) == 0 then
-			return T("Combat impact unknown")
-		end
-		return table.concat(lines, "\n")
-	end
+
 	local lines = {}
 	for _, change in ipairs(value.changes) do
 		if change.delta and change.delta ~= 0 and change.room ~= 0 then
@@ -238,32 +167,13 @@ end
 function Analysis.CardText(index)
 	if not CardsNeeded() or not currentRun or currentRun ~= Run() or ready ~= AZS_ZONE then return nil end
 	local hand = AZS_CARDS
-	if type(hand) ~= "table" then return nil end
-	local values, advice = HandValues(hand)
-	local text = Analysis.Enabled("cards") and ValueText(values[index]) or nil
-	if Analysis.Enabled("advisor") then
-		local reason = advice.defense == index and T("Low health · mitigation option")
-		if reason then return text and text .. "\n" .. reason or reason end
-	end
-	return text
+	if type(hand) ~= "table" or hand.kind ~= "jewel" then return nil end
+	return ValueText(HandValues(hand)[index])
 end
 
 local function Tooltip(tooltip)
 	local run = Run()
 	if not run then return end
-	if Analysis.Enabled("map") then
-		local tier = Num(AZS_ZONE.dt) or Num(AZS_ZONE.heroic)
-		local map = SurvivorUI_RebornMapReference and Model.Map(SurvivorUI_RebornMapReference, AZS_ZONE.zone, tier)
-		if map then
-			tooltip:AddLine(T("Campaign reference · Naxxramas Normal = 100%"), 1, 0.82, 0)
-			tooltip:AddLine(string.format(T("Map health tuning %.0f%% · late factor %.2f"), map.health, map.late), 1, 1, 1)
-			if Num(AZS_RUN.bs) == 0 then
-				tooltip:AddLine(string.format(T("First boss template · health %.0f%% · hit %.0f%%"),
-					map.firstBossHealth, map.firstBossHit), 1, 1, 1)
-			end
-			tooltip:AddLine(string.format(T("Final boss template · health %.0f%% · hit %.0f%%"), map.bossHealth, map.bossHit), 1, 1, 1)
-		end
-	end
 	if not Analysis.Enabled("live") or run ~= currentRun then return end
 	local state = Model.Summarize(samples)
 	if not state then return end
@@ -307,7 +217,7 @@ local function Tooltip(tooltip)
 end
 
 function Analysis.AddTrackerTooltip(tooltip)
-	if Analysis.Enabled("map") or Analysis.Enabled("live") then pcall(Tooltip, tooltip) end
+	if Analysis.Enabled("live") then pcall(Tooltip, tooltip) end
 end
 
 local function Record(event, data)
@@ -332,9 +242,14 @@ local function DiagnosticMeter()
 	return { encounter = inBoss, rate = rate, rows = rows, total = snapshot.totals.windowAmount }
 end
 
+local function CurrentGear()
+	local snapshot = SurvivorUI_RebornEquipmentObservations()
+	return snapshot and snapshot.jewelry
+end
+
 local function ReadGear(card)
 	local found
-	for _, row in ipairs(AZS_GEAR or {}) do
+	for _, row in ipairs(CurrentGear() or {}) do
 		if card.name and card.slot and card.name == row.name and card.slot == row.slot then
 			if found then return nil end
 			found = row
@@ -349,7 +264,7 @@ local function DiagnosticState(card, kind)
 	local gearSlot
 	if kind == "jewel" and card.slot then
 		gearSlot = {}
-		for _, row in ipairs(AZS_GEAR or {}) do
+		for _, row in ipairs(CurrentGear() or {}) do
 			if row.slot == card.slot and table.getn(gearSlot) < 4 then table.insert(gearSlot, row) end
 		end
 	end
@@ -374,7 +289,7 @@ function Analysis.RecordPick(hand, index)
 	local before = DiagnosticState(card, hand.kind)
 	pending = { serial = diagnosticSerial, index = index, card = card, kind = hand.kind,
 		time = Num(AZS_RUN.t), previousRank = before.spell and Num(before.spell.rank),
-		previousGear = before.gear, gearTable = AZS_GEAR, spellsTable = AZS_SPELLS,
+		previousGear = before.gear, gearTable = CurrentGear(), spellsTable = AZS_SPELLS,
 		segment = before.segment, epoch = epochTime, hasBeforeWindow = before.meter ~= nil }
 	Record("analysis_pick_before", { hand = diagnosticSerial, index = index, data = before })
 end
@@ -390,7 +305,7 @@ local function CheckPick(time)
 	local elapsed = time - p.time
 	if not p.confirmed then
 		local spell = p.kind == "spell" and p.spellsTable ~= AZS_SPELLS and CurrentSpell(p.card)
-		local gear = p.kind == "jewel" and p.gearTable ~= AZS_GEAR and ReadGear(p.card)
+		local gear = p.kind == "jewel" and p.gearTable and p.gearTable ~= CurrentGear() and ReadGear(p.card)
 		local rank = spell and Num(spell.rank)
 		local gearChanged = gear and (not p.previousGear
 			or gear.amount ~= p.previousGear.amount or gear.text ~= p.previousGear.text)
@@ -464,9 +379,9 @@ local function ObserveOffer()
 		or type(hand.cards) ~= "table" or not hand.cards[1] then return end
 	handSerial = handSerial + 1
 	diagnosticHand, diagnosticSerial = hand, handSerial
-	local values, advice = HandValues(hand)
+	local values = HandValues(hand)
 	Record("analysis_offer", { hand = handSerial, zone = AZS_ZONE.zone, tier = AZS_ZONE.dt or AZS_ZONE.heroic,
-		time = AZS_RUN.t, values = values, advice = advice, summary = Model.Summarize(samples) })
+		time = AZS_RUN.t, values = values, summary = Model.Summarize(samples) })
 end
 
 if AZS and type(AZS.On) == "function" then

@@ -5141,13 +5141,12 @@ Note(page, "The levels waiting also show by your level on the XP bar: Lv. 12 +3.
 if SurvivorUI_RebornAnalysis and SurvivorUI_RebornActive() then
 	Subheader(page, "Reborn analysis")
 	local analysisOptions = {
-		{ "enabled", "Enable Reborn analysis", "Show read-only estimates in native cards and the run tracker." },
-		{ "cards", "Card values", "Show supported skill previews, jewelry changes and cap room on cards." },
-		{ "map", "Campaign pressure reference", "Show map factors and boss templates in the tracker tooltip." },
+		{ "enabled", "Enable Reborn analysis", "Show available card details and live run observations." },
+		{ "cards", "Card values", "Show supported jewelry changes and cap room on cards." },
 		{ "live", "Live Build observations", "Show recent damage, health, kills and growth in the tracker tooltip." },
-		{ "advisor", "Experimental growth advice", "Flag a supported mitigation option when recent samples show sustained low health." },
 		{ "diagnostics", "Research diagnostics", "Add analysis observations to an explicitly enabled Reborn recording." },
 	}
+
 	for _, option in ipairs(analysisOptions) do
 		local key = option[1]
 		Check(page, option[2], function() return SurvivorUI_RebornAnalysis.IsSet(key) end,
@@ -6713,31 +6712,35 @@ do
 		end
 	end)
 
-	Kit.Section(tab, "Each piece shows", "Its stats: the slot and the piece's rank (a legendary amulet's spell, short, in the slot's place), then what it gives in short, smaller when long. Its name: the piece's own, cut when long, and only that. Hover a piece for its stats either way.")
-	Kit.Tiles(tab, {
-		{ "stats", "Its stats", "Its slot and rank, then what it gives", Paint.WornStats },
-		{ "name", "Its name", "Cut when long, and only that", Paint.WornName },
-	}, function() return DB().jewelryNames and "name" or "stats" end,
-		function(value) DB().jewelryNames = value == "name" or nil end)
+	if not SurvivorUI_RebornActive() then
+		Kit.Section(tab, "Each piece shows", "Its stats: the slot and the piece's rank (a legendary amulet's spell, short, in the slot's place), then what it gives in short, smaller when long. Its name: the piece's own, cut when long, and only that. Hover a piece for its stats either way.")
+		Kit.Tiles(tab, {
+			{ "stats", "Its stats", "Its slot and rank, then what it gives", Paint.WornStats },
+			{ "name", "Its name", "Cut when long, and only that", Paint.WornName },
+		}, function() return DB().jewelryNames and "name" or "stats" end,
+			function(value) DB().jewelryNames = value == "name" or nil end)
 
-	-- What each row tells, and how its rarity shows.
-	Kit.Split(tab)
-	Kit.Section(tab, "Each row", "The parts of a piece's row on or off, and the empty slots.")
-	Kit.Chips(tab, {
-		{ "Its slot", function() return DB().jewelrySlot ~= false end, function() DB().jewelrySlot = DB().jewelrySlot == false end,
-			"Neck, Ring or Trinket at the row's left (a legendary amulet's spell, short, in its place). Off: what it gives has more room.",
-			usable = function() return not DB().jewelryNames end, why = "By its name, the row shows the name alone." },
-		{ "Its rank", function() return DB().jewelryRank ~= false end, function() DB().jewelryRank = DB().jewelryRank == false end,
-			"The piece's rank, the Roman numeral that ends its name: Ring  II. Off: by its stats, the slot alone; by its name, the name without it." },
-		{ "Empty slots", function() return DB().jewelryEmpty ~= false end, function() DB().jewelryEmpty = DB().jewelryEmpty == false end,
-			"The slots with nothing in them yet, faint, to see what is left to wear. Off: only what you wear, the panel as tall as that (its title alone with nothing on)." },
-	})
-	Kit.Right(tab)
+		-- What each row tells, and how its rarity shows.
+		Kit.Split(tab)
+		Kit.Section(tab, "Each row", "The parts of a piece's row on or off, and the empty slots.")
+		Kit.Chips(tab, {
+			{ "Its slot", function() return DB().jewelrySlot ~= false end, function() DB().jewelrySlot = DB().jewelrySlot == false end,
+				"Neck, Ring or Trinket at the row's left (a legendary amulet's spell, short, in its place). Off: what it gives has more room.",
+				usable = function() return not DB().jewelryNames end, why = "By its name, the row shows the name alone." },
+			{ "Its rank", function() return DB().jewelryRank ~= false end, function() DB().jewelryRank = DB().jewelryRank == false end,
+				"The piece's rank, the Roman numeral that ends its name: Ring  II. Off: by its stats, the slot alone; by its name, the name without it." },
+			{ "Empty slots", function() return DB().jewelryEmpty ~= false end, function() DB().jewelryEmpty = DB().jewelryEmpty == false end,
+				"The slots with nothing in them yet, faint, to see what is left to wear. Off: only what you wear, the panel as tall as that (its title alone with nothing on)." },
+		})
+		Kit.Right(tab)
+	else
+		Kit.Section(tab, "Jewelry", "Run jewelry shows the current effects reported by the game. Hover a piece for its full effects.")
+	end
 	Kit.Section(tab, "Rarity color", "A piece's rarity in its color: green uncommon, blue rare, purple epic, orange legendary. The row: the row filled with it, as at first. The words: its words in it, over a plain row. None: every row alike.")
 	Kit.Segments(tab, { { "row", "The row" }, { "words", "The words" }, { "none", "None" } },
 		function() return DB().jewelryColor or "row" end,
 		function(value) DB().jewelryColor = value ~= "row" and value or nil end)
-	Kit.Join(tab)
+	if not SurvivorUI_RebornActive() then Kit.Join(tab) end
 
 	-- Its size: its own once given one, until then the build list's (Mover.lua:
 	-- part of the list until v3.0.49).

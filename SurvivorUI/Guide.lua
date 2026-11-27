@@ -3024,8 +3024,8 @@ local PAGES = {
 if not SurvivorUI_RebornActive() then
 	table.insert(PAGES, { "Marks", "marks", BuildMarks })
 	table.insert(PAGES, { "Sets", "sets", BuildSets })
+	table.insert(PAGES, { "Jewels", "jewels", BuildJewels })
 end
-table.insert(PAGES, { "Jewels", "jewels", BuildJewels })
 
 local divider = window:CreateTexture(nil, "ARTWORK")
 divider:SetTexture(FLAT)

@@ -20,6 +20,24 @@ The legacy Gear Analyzer and Equipment Simulator are suspended following the
 Reborn 0.8.0 random-loot overhaul. No client loads the legacy planner through
 the addon manifest. See the [historical equipment model](docs/REBORN_GEAR.md).
 
+### Current jewelry and history contract
+
+Reborn's worn panel and history use scoped native `AZSGEAR` observations.
+The event populates `AZS_GEAR`, whose localized text carries each item's
+current effects. A known empty list is distinct from a missing observation.
+The Meter loadout remains available to the raw diagnostic. Its ranks are not
+enhancement counts and do not populate live jewelry. The original client uses
+its inventory slots as before.
+
+History associates the end snapshot with the stable run ID and its Campaign or
+Endless phase at the native `AZSEND` event. It accepts a final reward list only
+with a matching end. An `AZSENDLOOT` line without an accompanying end cannot
+identify its recipient. Generated equipment capabilities do not enable old
+Reborn card projections, advice or static map references. Native card changes,
+caps and measured trends remain available. See the [PR #9 review](docs/reviews/PR-009.md).
+
+### Earlier compatibility work
+
 One new file, `SurvivorUI/RebornCompat.lua`, holds everything Reborn-
 specific: boss-mode detection, the `AZS_ABILITIES` snapshot merge, the
 meter-loadout jewelry reader, rank history, run-id resets, curse
@@ -54,6 +72,15 @@ ever read `rift` / `nbm` / `nbs`. Boss *health* was the healthy part: it
 is a live lookup in `AZS_UNITS` by name, and it is preserved unchanged.
 
 ### In-run jewelry
+
+For the 0.8.0 random-equipment client, native `AZSGEAR` messages supply
+`AZS_GEAR` as the current run's per-item snapshot. The Build List and new Run
+History records preserve each row and its localized effect. An explicit empty
+snapshot is authoritative. A missing or partial snapshot is shown as such.
+Native item identifiers use slot plus bonus, which is also the tuple used by
+the native Meter loadout. Meter source ranks can encode effect amounts.
+Enhancement counts are omitted until there is an authoritative count source.
+The following notes describe the earlier Meter-based implementation.
 Zero AZS integration. Both jewelry surfaces read WoW inventory slots
 via `GetInventoryItemLink` + `GameTooltip:SetInventoryItem` scraping,
 keyed by link text and Roman-numeral rank suffixes. If Reborn jewelry
@@ -427,10 +454,10 @@ can copy out of chat.
 | Command | What it does |
 |---|---|
 | `/sui reborn` | Summary + command list |
-| `/sui reborn probe` | Full probe: run id, boss mode/fields, schedule/units/spells/abilities counts, merged abilities, rank events, jewelry source + items + loadout error, aggregate `g*`, curse status, candidate globals |
+| `/sui reborn probe` | Full probe: run ID, boss fields, ability observations and rank events, native jewelry source and completeness, aggregate `g*`, curses and candidate globals |
 | `/sui reborn boss` | Next-boss mode, state, name, number, rift, countdown |
 | `/sui reborn abilities` | Forces one ability snapshot request, then lists merged actives/passives (racials are re-homed, never listed separately) |
-| `/sui reborn jewelry` | Forces one loadout refresh, then lists jewelry + aggregate |
+| `/sui reborn jewelry` | Lists the current scoped native jewelry, its completeness and the separate `g*` aggregate |
 | `/sui reborn jewelry raw` | **New in Round 2.** Dumps every raw field of each loadout `runJewelry` entry, its `sources` entry, and each `AZSGEAR` row — the one dump that answers what the 55 / 63 / 1 numbers are and whether rarity/icon/level fields exist under other names. Diagnostics only, capped at 200 lines. |
 | `/sui reborn upgrades` | Rank increases recorded this run |
 | `/sui reborn curses` | Curse support status + the documented blocker |
@@ -480,15 +507,14 @@ run `/sui reborn probe` in that run and keep the output.
       was picked.
 
 ### Jewelry
-- [ ] Pick up a ring / amulet / trinket. The Jewelry panel shows it
-      (name, rank, rarity where given) within a couple of seconds, and
-      updates when it upgrades — one row per piece, no duplicates.
-- [ ] Hover a piece: the tooltip shows name/rank/rarity and the note
-      about per-item effects not being exposed.
-- [ ] `/sui reborn jewelry`: note `source=` (`loadout` / `gear` /
-      `inventory`) and any loadout error code. If `source=inventory`
-      in Reborn, include the probe output in your report — that is the
-      key unknown.
+- [ ] Pick an item and upgrade it. The worn row shows its name, icon and
+      current effects once the native feed updates. Each native row stays
+      separate even when two names match.
+- [ ] Hover live and saved rows. Both show the full native name and effects,
+      including decimals and special effects. The enhancement count is omitted.
+- [ ] Compare `/sui reborn jewelry` before and after a fresh native observation.
+      Expect `source=none` before receipt and `source=gear` after receipt,
+      including when the game sends an empty list.
 - [ ] `/reload` mid-run, then start a new run: the previous run's
       jewelry does not leak into the new run.
 

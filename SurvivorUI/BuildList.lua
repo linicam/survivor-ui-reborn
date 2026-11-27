@@ -2064,17 +2064,8 @@ local function NewGearLine(index)
 		-- tooltip; show what the API actually told us, and say plainly
 		-- that per-item effects are not exposed by the API.
 		if this.rebornItem then
-			local item = this.rebornItem
 			GameTooltip:SetOwner(this, "ANCHOR_LEFT")
-			GameTooltip:SetText(item.name or "?", 1, 0.82, 0)
-			if item.rank then
-				GameTooltip:AddLine(SurvivorUI_TF("Rank {1}", item.rank), 1, 1, 1)
-			end
-			if item.rarity then
-				GameTooltip:AddLine(SurvivorUI_TF("Rarity: {1}", item.rarity), 1, 1, 1)
-			end
-			GameTooltip:AddLine(SurvivorUI_T("Per-item effects are not exposed by the AZ Reborn API. Aggregate jewelry bonuses are in the Character pane."), 0.7, 0.7, 0.7, 1)
-			GameTooltip:Show()
+			SurvivorUI_ShowRunJewelryTooltip(this.rebornItem)
 			return
 		end
 		if this.slot and GetInventoryItemLink("player", this.slot) then
@@ -2151,7 +2142,8 @@ local function FitTags(line, text)
 	-- The face too: one worn since (the language's, the piece's) measures anew.
 	local face, labelSize = line.label:GetFont()
 	face = face or SurvivorUI_FONT
-	local key = (line.label:GetText() or "").."|"..text.."|"..step.."|"..math.floor((labelSize or 0) + 0.5).."|"..face
+	local iconSpace = line.rebornItem and line.rebornItem.icon and GEAR_ROW or 0
+	local key = (line.label:GetText() or "").."|"..text.."|"..step.."|"..math.floor((labelSize or 0) + 0.5).."|"..face.."|"..iconSpace
 	if line.tagText == key then
 		return
 	end
@@ -2159,7 +2151,7 @@ local function FitTags(line, text)
 	-- A label not drawn yet measures nothing: sized again next time (none,
 	-- the slot and rank both off, measures nothing too).
 	line.tagText = (labelWidth > 0 or (line.label:GetText() or "") == "") and key or nil
-	local room = WIDTH - 8 - labelWidth - 10
+	local room = WIDTH - 8 - labelWidth - 10 - iconSpace
 	-- Its size told to EditCard.lua's Dress as its own (base) and as the one
 	-- it is at, so the text size is not added twice.
 	local function Fits(size, words)
@@ -2194,7 +2186,16 @@ local function FitTags(line, text)
 			return
 		end
 	end
-	Fits(6, parts[1]..SEPARATOR.."...+")
+	local first = parts[1]
+	if not line.rebornItem or table.getn(parts) > 1 then first = first..SEPARATOR.."...+" end
+	if not Fits(6, first) then
+		local cut = CutTo(parts[1], math.max(0, room), function(shown)
+			line.tags:SetText(shown)
+			return line.tags:GetStringWidth()
+		end)
+		line.tags:SetText(cut)
+		if line.rebornItem and line.tags:GetStringWidth() > room then line.tags:SetText("") end
+	end
 end
 
 -- The slot's words (or a piece's name) at a size: the piece's text size step
@@ -2216,11 +2217,11 @@ end
 -- only as the name, the face or the text size change (a size step put on
 -- after it was cut ran it out of the panel); a name not drawn yet measures
 -- nothing, and is fit on the next draw.
-local function FitName(line, name)
+local function FitName(line, name, reserve)
 	local step = SurvivorUI_PieceTextStep and SurvivorUI_PieceTextStep("Jewelry worn") or 0
 	local path, _, flags = line.label:GetFont()
 	path, flags = path or SurvivorUI_FONT, flags or "OUTLINE"
-	local key = name.."|"..step.."|"..path
+	local key = name.."|"..step.."|"..path.."|"..(reserve or 0)
 	if line.named == key then
 		return
 	end
@@ -2231,7 +2232,7 @@ local function FitName(line, name)
 		return
 	end
 	line.named = key
-	local room = WIDTH - 8
+	local room = WIDTH - 8 - (reserve or 0)
 	if width <= room or (want > 7 and LabelAt(line, 8, name, path, flags, step) <= room) then
 		return
 	end
@@ -2312,11 +2313,13 @@ end
 -- Rarity as the game / loadout names it, to the row's colour. Unknown
 -- rarities fall back to plain grey; a numeric rarity (1-5) maps to the
 -- usual Common..Legendary scale.
-local function RarityColor(rarity)
+local function RarityColor(rarity, native)
 	if not rarity then
 		return 0.5, 0.5, 0.55
 	end
 	local r = string.lower(tostring(rarity))
+	local number = tonumber(rarity)
+	if native and number then r = tostring(number + 1) end
 	local map = {
 		common = { 0.62, 0.62, 0.62 }, uncommon = { 0.12, 1, 0 }, rare = { 0, 0.44, 0.87 },
 		epic = { 0.64, 0.21, 0.93 }, legendary = { 1, 0.5, 0 },
@@ -2328,6 +2331,37 @@ local function RarityColor(rarity)
 		return c[1], c[2], c[3]
 	end
 	return 0.5, 0.5, 0.55
+end
+
+local JEWELRY_TAGS = {
+	["critical strike chance"] = "CRIT", ["crit chance"] = "CRIT", ["暴击几率"] = "CRIT", ["暴击率"] = "CRIT",
+	["critical damage"] = "CRIT DMG", ["critical strike damage"] = "CRIT DMG", ["暴击伤害"] = "CRIT DMG",
+	damage = "DMG", ["伤害"] = "DMG", luck = "LUCK", ["幸运"] = "LUCK", gold = "GOLD", ["金币"] = "GOLD",
+	["cooldown reduction"] = "CDR", ["冷却缩减"] = "CDR", ["damage reduction"] = "DMG RED", ["伤害减免"] = "DMG RED",
+	["movement speed"] = "SPD", ["移动速度"] = "SPD", ["max health"] = "HP", ["最大生命值"] = "HP",
+}
+
+function SurvivorUI_RunJewelrySummary(item)
+	if not item.effect then return SurvivorUI_T("Effects unavailable") end
+	local text = string.gsub(item.effect, "\n", SEPARATOR)
+	local parts, start = {}, 1
+	while start <= string.len(text) do
+		local divider = string.find(text, SEPARATOR, start, true)
+		local line = string.sub(text, start, divider and divider - 1 or nil)
+		local label, amount = string.match(line, "^%s*(.-)%s*([%+%-]%d+%.?%d*%%)%s*$")
+		if not amount then amount, label = string.match(line, "^%s*([%+%-]%d+%.?%d*%%)%s*(.-)%s*$") end
+		local tag = label and JEWELRY_TAGS[string.lower(label)]
+		table.insert(parts, tag and Tagged(tag, amount) or line)
+		if not divider then break end
+		start = divider + string.len(SEPARATOR)
+	end
+	return table.concat(parts, SEPARATOR)
+end
+
+function SurvivorUI_ShowRunJewelryTooltip(item)
+	GameTooltip:SetText(item.name or SurvivorUI_T("Jewelry"), 1, 0.82, 0)
+	GameTooltip:AddLine(item.effect or SurvivorUI_T("Effects unavailable"), 1, 1, 1, 1)
+	GameTooltip:Show()
 end
 
 local function DrawGear()
@@ -2347,15 +2381,18 @@ local function DrawGear()
 	if SurvivorUI_RebornCheckRun then
 		SurvivorUI_RebornCheckRun()
 	end
-	-- Reborn first: the meter loadout / AZSGEAR list, when the game gave
-	-- one. Inventory slots are the fallback (original game, or a Reborn
-	-- build where the loadout carries no jewelry). Each loadout piece
-	-- gets its own row, in its own slot: the list is one row per piece
-	-- (a sixth piece is no longer dropped), and no "empty" rows are
-	-- shown for slots the loadout does not claim.
+	-- Reborn wears one row per item from the current native World feed.
+	-- Inventory slot rows belong to the original client.
 	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry() or nil
-	if rebornJewelry and (rebornJewelry.source == "loadout" or rebornJewelry.source == "gear") then
+	if rebornJewelry and SurvivorUI_RebornActive() then
 		local count = table.getn(rebornJewelry.items)
+		if rebornJewelry.source == "none" then
+			worn.title:SetText(SurvivorUI_T("Run jewelry unavailable"))
+		elseif count == 0 and rebornJewelry.complete then
+			worn.title:SetText(SurvivorUI_T("No run jewelry"))
+		elseif not rebornJewelry.complete then
+			worn.title:SetText(SurvivorUI_T("Run jewelry (partial)"))
+		end
 		for index = 1, count do
 			local line = GearLine(index)
 			line.slot = nil
@@ -2366,8 +2403,8 @@ local function DrawGear()
 			-- Rarity colour only when a real rarity is known; unknown
 			-- stays the existing grey. Rarity is never invented from
 			-- the rank/level number.
-			local r, g, b = RarityColor(item.rarity)
-			-- The piece's icon where the loadout gave one; the label
+			local r, g, b = RarityColor(item.rarity, item.native)
+			-- The piece's native icon, when available; the label
 			-- makes room for it, else sits at the row's left edge.
 			if item.icon then
 				line.icon:SetTexture(item.icon)
@@ -2379,16 +2416,15 @@ local function DrawGear()
 				line.label:ClearAllPoints()
 				line.label:SetPoint("LEFT", line, "LEFT", 4, 0)
 			end
-			local times = item.count and item.count > 1 and "  x" .. tostring(item.count) or ""
-			if db.jewelryNames then
-				GearText(line, GearWords(item.slot, nil, item.name or "?") .. times, "", true)
-			else
-				-- Left: slot + rank (+ acquisition count). Right: the
-				-- name. Per-item effect text is not exposed by the API,
-				-- so it is not invented; the hover tooltip says so.
-				local left = item.slot .. (item.rank and "  " .. tostring(item.rank) or "") .. times
-				GearText(line, left, item.name or "?")
+			if line.alone then
+				line.alone = nil
+				line.tags:ClearAllPoints()
+				line.tags:SetPoint("RIGHT", line, "RIGHT", -4, 0)
 			end
+			local name = item.name or item.slot
+			local summary = SurvivorUI_RunJewelrySummary(item)
+			FitName(line, name, math.floor(WIDTH * 0.48) + (item.icon and GEAR_ROW or 0))
+			FitTags(line, summary)
 			if paint.plain then
 				PaintGear(line, PLAIN[1], PLAIN[2], PLAIN[3], paint.fill, paint.edge)
 			else
@@ -2482,6 +2518,20 @@ end
 -- and an empty slot. And whether they are the run's.
 function SurvivorUI_WornRows()
 	local db = Settings()
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+		local snapshot = SurvivorUI_RebornJewelry()
+		local rows = {}
+		for _, item in ipairs(snapshot.items) do
+			rows[#rows + 1] = { left = item.name or item.slot, right = SurvivorUI_RunJewelrySummary(item),
+				color = { RarityColor(item.rarity, item.native) } }
+		end
+		if snapshot.source == "none" then
+			rows[1] = { left = SurvivorUI_T("Run jewelry unavailable"), right = "", empty = true }
+		elseif snapshot.complete and #rows == 0 then
+			rows[1] = { left = SurvivorUI_T("No run jewelry"), right = "", empty = true }
+		end
+		return rows, true
+	end
 	local real = false
 	for index = 1, table.getn(GEAR_SLOTS) do
 		real = real or (Running() and GetInventoryItemLink("player", GEAR_SLOTS[index][1]) and true)
@@ -2850,26 +2900,24 @@ end
 
 -- For the last runs too: the jewelry lines as they read, one a slot: { label,
 -- tags, color, item, name, tip }, or { label, empty } for a slot with nothing.
-function SurvivorUI_GearSnapshot()
-	-- Reborn: the loadout list, when the game gave one; its rows carry
-	-- name / rank / rarity / icon where the API gave them, and no
-	-- invented effect text.
-	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry() or nil
-	if rebornJewelry and (rebornJewelry.source == "loadout" or rebornJewelry.source == "gear") then
+function SurvivorUI_GearSnapshot(observations)
+	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry(false, observations) or nil
+	if rebornJewelry and (observations or SurvivorUI_RebornActive()) then
 		local gear = {}
 		for index = 1, table.getn(rebornJewelry.items) do
 			local item = rebornJewelry.items[index]
-			local r, g, b = RarityColor(item.rarity)
+			local r, g, b = RarityColor(item.rarity, item.native)
 			table.insert(gear, {
-				label = item.slot .. (item.rank and "  " .. tostring(item.rank) or "")
-					.. (item.count and item.count > 1 and "  x" .. tostring(item.count) or ""),
-				tags = item.name or "?",
+				label = item.name or item.slot,
+				tags = SurvivorUI_RunJewelrySummary(item),
 				color = { r, g, b },
-				item = item.key, name = item.name, tip = nil,
-				icon = item.icon, count = item.count or 1,
+				name = item.name, icon = item.icon, effect = item.effect,
+				jewelryKey = item.instanceKey or item.key, runJewelry = true,
 			})
 		end
-		return gear
+		local status = rebornJewelry.source == "none" and "unavailable"
+			or (rebornJewelry.complete and "observed" or "partial")
+		return gear, status
 	end
 	local gear = {}
 	for index = 1, table.getn(GEAR_SLOTS) do
@@ -2908,8 +2956,23 @@ end
 -- { slot, icon, color, item, name, tip }; and the set they make, as their
 -- tooltips say it ("Field Marshal's (8/8)"): { name, count, of }, or nil.
 local ARMOR_SLOTS = { 1, 3, 15, 5, 9, 10, 6, 7, 8, 16, 17, 18 }
-function SurvivorUI_ArmorSnapshot()
+function SurvivorUI_ArmorSnapshot(observations)
 	local armor, set = {}, nil
+	if observations or (SurvivorUI_RebornActive and SurvivorUI_RebornActive()) then
+		local snapshot = observations or SurvivorUI_RebornEquipmentObservations()
+		local wornArmor = snapshot and snapshot.armor
+		for _, row in ipairs(wornArmor or {}) do
+			local slot = type(row) == "table" and tonumber(row.slot)
+			if slot and type(row.name) == "string" and row.name ~= "" then
+				local r, g, b = RarityColor(row.rarity, true)
+				table.insert(armor, { slot = slot, name = row.name,
+					icon = type(row.icon) == "string" and row.icon ~= "" and "Interface\\Icons\\"..row.icon or nil,
+					color = { r, g, b } })
+			end
+		end
+		-- The native feed may omit empty equipment or lack instance details.
+		return armor, nil, wornArmor and "partial" or "unavailable"
+	end
 	if not GetInventoryItemLink then
 		return armor
 	end
@@ -2942,6 +3005,23 @@ function SurvivorUI_ArmorSnapshot()
 		end
 	end
 	return armor, set
+end
+
+function SurvivorUI_RebornFinalLootSnapshot(observations)
+	local snapshot = observations or SurvivorUI_RebornEquipmentObservations()
+	local rows = snapshot and snapshot.finalLoot
+	if not rows then return {}, "unavailable" end
+	local loot, status = {}, "observed"
+	for _, row in ipairs(rows) do
+		if type(row) == "table" and type(row.name) == "string" and row.name ~= "" then
+			local r, g, b = RarityColor(row.rarity, true)
+			table.insert(loot, { name = row.name, icon = row.icon,
+				color = string.format("ff%02x%02x%02x", math.floor(r * 255), math.floor(g * 255), math.floor(b * 255)) })
+		else
+			status = "partial"
+		end
+	end
+	return loot, status
 end
 
 function SurvivorUI_ToggleWorn()

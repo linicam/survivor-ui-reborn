@@ -247,45 +247,45 @@ end
 -- label, value(s), what it means.
 local SECTIONS = {
 	{ title = "Offense", color = { 1.00, 0.45, 0.25 }, rows = {
-		{ "Crit",     function(s) return string.format("%.1f%%", s.crit * 100) end, "The chance a spell strikes critically. Past 100%, the rest adds to your critical damage." },
-		{ "Crit Dmg", function(s) return string.format("%.0f%%", s.cm * 100) end, "A critical strike deals this much of a spell's damage." },
-		{ "Damage",   function(s) return Pct(s.dmg - 1) end, "Every spell of yours deals this much more damage. It grows with your level, gear, talents, jewelry and buffs." },
-		{ "Haste",    function(s) return Pct(1 - s.cd) end, "Your spells come back this much sooner." },
-		{ "Echo",     function(s) return string.format("%.0f%%", s.echo * 100) end, "The chance a spell strikes twice. Past 100%, every spell strikes twice and the rest is the chance of a third." },
+		{ "Crit",     function(s) return string.format("%.1f%%", s.crit * 100) end, "The chance a spell strikes critically. Past 100%, the rest adds to your critical damage.", "crit" },
+		{ "Crit Dmg", function(s) return string.format("%.0f%%", s.cm * 100) end, "A critical strike deals this much of a spell's damage.", "cm" },
+		{ "Damage",   function(s) return Pct(s.dmg - 1) end, "Every spell of yours deals this much more damage. It grows with your level, gear, talents, jewelry and buffs.", "dmg" },
+		{ "Haste",    function(s) return Pct(1 - s.cd) end, "Your spells come back this much sooner.", "cd" },
+		{ "Echo",     function(s) return string.format("%.0f%%", s.echo * 100) end, "The chance a spell strikes twice. Past 100%, every spell strikes twice and the rest is the chance of a third.", "echo" },
 	} },
 	{ title = "Defense", color = { 0.30, 0.65, 1.00 }, rows = {
-		{ "Health",    function(s) return string.format("%.0f", s.hp) end, "The most health you can have." },
-		{ "Regen",     function(s) return string.format("%.1f", s.reg) end, "Health you regain every second." },
-		{ "Lifesteal", function(s) return string.format("%.1f%%", s.lch * 100) end, "Heals you for this much of all the damage you deal." },
-		{ "Armor",     function(s) return string.format("%.0f%%", s.arm * 100) end, "Damage you take is reduced by this much (60% at most). The game's own pane calls it Armor." },
-		{ "Kill Heal", function(s) return string.format("%.0f", s.heal) end, "Every kill heals you for this much." },
-		{ "Thorns",    function(s) return string.format("%.0f%%", s.thn * 100) end, "This much of the melee damage you take is dealt back to the attacker." },
-		{ "Lives",     function(s) return string.format("%d", s.liv) end, "Times you rise again instead of dying." },
+		{ "Health",    function(s) return string.format("%.0f", s.hp) end, "The most health you can have.", "hp" },
+		{ "Regen",     function(s) return string.format("%.1f", s.reg) end, "Health you regain every second.", "reg" },
+		{ "Lifesteal", function(s) return string.format("%.1f%%", s.lch * 100) end, "Heals you for this much of all the damage you deal.", "lch" },
+		{ "Armor",     function(s) return string.format("%.0f%%", s.arm * 100) end, "Damage you take is reduced by this much (60% at most). The game's own pane calls it Armor.", "arm" },
+		{ "Kill Heal", function(s) return string.format("%.0f", s.heal) end, "Every kill heals you for this much.", "heal" },
+		{ "Thorns",    function(s) return string.format("%.0f%%", s.thn * 100) end, "This much of the melee damage you take is dealt back to the attacker.", "thn" },
+		{ "Lives",     function(s) return string.format("%d", s.liv) end, "Times you rise again instead of dying.", "liv" },
 	} },
 	{ title = "Reach", color = { 0.72, 0.45, 1.00 }, rows = {
-		{ "Area",     function(s) return Pct(s.area - 1) end, "Your spells' areas and ranges are this much larger." },
-		{ "Targets",  function(s) return string.format("+%d", s.cnt) end, "Every spell that picks its targets picks this many more." },
-		{ "Pickup",   function(s) return string.format("%.0f yd", s.pick) end, "Experience and gold fly to you from this far." },
+		{ "Area",     function(s) return Pct(s.area - 1) end, "Your spells' areas and ranges are this much larger.", "area" },
+		{ "Targets",  function(s) return string.format("+%d", s.cnt) end, "Every spell that picks its targets picks this many more.", "cnt" },
+		{ "Pickup",   function(s) return string.format("%.0f yd", s.pick) end, "Experience and gold fly to you from this far.", "pick" },
 	} },
 	{ title = "Utility", color = { 0.35, 0.90, 0.55 }, rows = {
-		{ "Speed",      function(s) return Pct(s.spd - 1) end, "You run this much faster." },
-		{ "Experience", function(s) return Pct(s.xp - 1) end, "You gain this much more experience." },
-		{ "Gold",       function(s) return Pct(s.gold - 1) end, "You find this much more gold." },
-		{ "Luck",       function(s) return Pct(s.luck) end, "Better odds of rarer upgrades when you level up." },
-		{ "Buff Power", function(s) return Pct(s.bp) end, "Your damage, haste, shield and thorns buffs are this much stronger." },
+		{ "Speed",      function(s) return Pct(s.spd - 1) end, "You run this much faster.", "spd" },
+		{ "Experience", function(s) return Pct(s.xp - 1) end, "You gain this much more experience.", "xp" },
+		{ "Gold",       function(s) return Pct(s.gold - 1) end, "You find this much more gold.", "gold" },
+		{ "Luck",       function(s) return Pct(s.luck) end, "Better odds of rarer upgrades when you level up.", "luck" },
+		{ "Buff Power", function(s) return Pct(s.bp) end, "Your damage, haste, shield and thorns buffs are this much stronger.", "bp" },
 	} },
 	{ title = "Damage over time", color = { 0.25, 0.85, 0.85 }, rows = {
-		{ "DoT Stacks", function(s) return string.format("%d", s.dots) end, "How many of each of your damage-over-time effects one enemy carries at once." },
-		{ "DoT Haste",  function(s) return Pct(s.doth) end, "Your damage-over-time effects tick this much faster." },
+		{ "DoT Stacks", function(s) return string.format("%d", s.dots) end, "How many of each of your damage-over-time effects one enemy carries at once.", "dots" },
+		{ "DoT Haste",  function(s) return Pct(s.doth) end, "Your damage-over-time effects tick this much faster.", "doth" },
 	} },
 	{ title = "Bonus damage", color = { 1.00, 0.82, 0.00 }, rows = {
-		{ "Vs Elites",     function(s) return Pct(s.big) end,  "More damage to elites and bosses." },
-		{ "Execute",       function(s) return Pct(s.exe) end,  "More damage to enemies below 30% health." },
-		{ "Vs Controlled", function(s) return Pct(s.cc) end,   "More damage to rooted, stunned, slowed or fleeing enemies." },
-		{ "Vs Afflicted",  function(s) return Pct(s.dotd) end, "More damage to enemies carrying one of your damage-over-time effects." },
-		{ "Shielded",      function(s) return Pct(s.shd) end,  "More damage while you hold an absorb shield." },
-		{ "Melee",         function(s) return Pct(s.auto) end, "Your melee swings deal this much more damage." },
-		{ "Pet Damage",    function(s) return Pct(s.pet) end,  "Your pets deal this much more damage." },
+		{ "Vs Elites",     function(s) return Pct(s.big) end,  "More damage to elites and bosses.", "big" },
+		{ "Execute",       function(s) return Pct(s.exe) end,  "More damage to enemies below 30% health.", "exe" },
+		{ "Vs Controlled", function(s) return Pct(s.cc) end,   "More damage to rooted, stunned, slowed or fleeing enemies.", "cc" },
+		{ "Vs Afflicted",  function(s) return Pct(s.dotd) end, "More damage to enemies carrying one of your damage-over-time effects.", "dotd" },
+		{ "Shielded",      function(s) return Pct(s.shd) end,  "More damage while you hold an absorb shield.", "shd" },
+		{ "Melee",         function(s) return Pct(s.auto) end, "Your melee swings deal this much more damage.", "auto" },
+		{ "Pet Damage",    function(s) return Pct(s.pet) end,  "Your pets deal this much more damage.", "pet" },
 	} },
 }
 
@@ -308,13 +308,15 @@ local function Share(value)
 	return string.format(math.abs(share - math.floor(share + 0.5)) > 0.05 and "%+.1f%%" or "%+.0f%%", share)
 end
 
-function SurvivorUI_StatGear(label, stats)
+function SurvivorUI_StatGear(label, stats, reborn)
+	if reborn == nil then reborn = SurvivorUI_RebornActive and SurvivorUI_RebornActive() end
 	stats = stats or AZS_STATS
 	local gear = GEAR[label]
 	local value = gear and stats and tonumber(stats[gear[1]])
-	if not value or value == 0 then
+	if not value or (value == 0 and not reborn) then
 		return nil
 	end
+	if reborn then return gear[4] and string.format(gear[4], value) or Share(value) end
 	local total = gear[2] and tonumber(stats[gear[2]])
 	if total and gear[3] == "less1" then
 		total = total - 1
@@ -341,6 +343,8 @@ function SurvivorUI_StatTogether(label, stats)
 	if not (TOGETHER[label] and stats) then
 		return
 	end
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive()
+		and not (tonumber(stats.dmg) and tonumber(stats.cm) and tonumber(stats.crit)) then return end
 	local damage = tonumber(stats.dmg) or 1
 	local critical = tonumber(stats.cm) or 1
 	local chance = math.max(0, math.min(1, tonumber(stats.crit) or 0))
@@ -370,15 +374,22 @@ local function Stats()
 	if not AZS_STATS then
 		return nil
 	end
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then return AZS_STATS end
 	return setmetatable({}, { __index = function(_, key) return AZS_STATS[key] or 0 end })
+end
+
+local function StatValue(entry, stats)
+	if not stats then return "-" end
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() and tonumber(stats[entry[4]]) == nil then return "-" end
+	return entry[2](stats)
 end
 
 -- A row's number as it reads, at 0 or below ("+0%", "-5%", "0.0%"): away
 -- with Hide the numbers at 0 or below (the options, Stats panel), in both
 -- places, until it grows past 0.
 local function ReadsAtMostZero(entry, s)
-	local _, _, minus, digits = string.find(entry[2](s), "(%-?)(%d+%.?%d*)")
-	return minus == "-" or (tonumber(digits) or 0) == 0
+	local _, _, minus, digits = string.find(StatValue(entry, s), "(%-?)(%d+%.?%d*)")
+	return digits ~= nil and (minus == "-" or tonumber(digits) == 0)
 end
 
 ------------------------------------------------------------------------------
@@ -560,7 +571,7 @@ function SurvivorUI_StatText(label)
 		local section = SECTIONS[index]
 		for each = 1, table.getn(section.rows) do
 			if section.rows[each][1] == label then
-				return s and section.rows[each][2](s) or "-", section.color
+				return StatValue(section.rows[each], s), section.color
 			end
 		end
 	end
@@ -867,7 +878,7 @@ local function MakeView(alone)
 		-- Its parts: what the gear worn gives, and the rest.
 		local gear, rest = SurvivorUI_StatGear(this.key)
 		if gear then
-			GameTooltip:AddDoubleLine(SurvivorUI_T("Worn gear"), gear, 0.12, 1, 0, 0.12, 1, 0)
+			GameTooltip:AddDoubleLine(SurvivorUI_T(reborn and "Run jewelry contribution" or "Worn gear"), gear, 0.12, 1, 0, 0.12, 1, 0)
 			if rest then
 				GameTooltip:AddDoubleLine(SurvivorUI_T("Everything else"), rest, 0.62, 0.62, 0.65, 0.85, 0.85, 0.85)
 			end
@@ -1089,8 +1100,8 @@ local function MakeView(alone)
 
 		if headline then
 			if s then
-				headline:SetText(Pct(s.dmg - 1))
-				headlineCaption:SetText("|cffa0a0a0"..SurvivorUI_T("Damage").."  \194\183  "..SurvivorUI_T("Health")..":|r |cff4da6ff"..string.format("%.0f", s.hp).."|r")
+				headline:SetText(StatValue(SECTIONS[1].rows[3], s))
+				headlineCaption:SetText("|cffa0a0a0"..SurvivorUI_T("Damage").."  \194\183  "..SurvivorUI_T("Health")..":|r |cff4da6ff"..StatValue(SECTIONS[2].rows[1], s).."|r")
 			else
 				headline:SetText("-")
 				headlineCaption:SetText(SurvivorUI_T("|cffa0a0a0Start a run to see its numbers|r"))
@@ -1196,7 +1207,7 @@ local function MakeView(alone)
 						row.rule:Hide()
 						row.label:SetTextColor(0.82, 0.82, 0.82)
 					end
-					local value = s and entry[2](s) or "-"
+					local value = StatValue(entry, s)
 					row:ClearAllPoints()
 					row:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -y)
 					row.label:SetText(SurvivorUI_StatName(entry[1]))
@@ -1471,7 +1482,7 @@ function SurvivorUI_StatsPanelLook(sample)
 				local entry = visible[each]
 				local r, g, b = SurvivorUI_StatColor(entry[1], section.color)
 				table.insert(group.rows, { label = entry[1], name = SurvivorUI_StatName(entry[1], true),
-					value = s and entry[2](s) or "-", r = r, g = g, b = b })
+					value = StatValue(entry, s), r = r, g = g, b = b })
 			end
 			table.insert(look.groups, group)
 		end
