@@ -1,4 +1,6 @@
 -- Exercise the production TOC and the actual slash handler without a game client.
+table.getn = table.getn or function(values) return #values end
+
 local function Read(name)
 	local file = assert(io.open("SurvivorUI/" .. name, "rb"))
 	local source = file:read("*a")
