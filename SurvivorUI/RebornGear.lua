@@ -12,7 +12,7 @@ local MENU_HEIGHT = 23
 local panel, shield, plannerTab, simulatorTab, baselineButton
 local header, equipment, effectHeader, effects, divider, planCards, variantButtons, actions
 local popup, menuChoice, panelTip
-local hubMap, hubDifficulty, refreshGear, targetBox, budgetBox, protection, resetTarget, inputError
+local hubMap, hubDifficulty, refreshGear, targetBox, budgetBox, protection, resetTarget, calculatePlan, parameterStatus
 local executionShown, draftExplicit
 local view, activeView, selectedPlan = "planner", nil, 1
 local planVariants = {}
@@ -53,6 +53,14 @@ local function Settings()
 	local config = SurvivorUIDB.rebornGear
 	if type(config.baselines) ~= "table" then config.baselines = {} end
 	return config
+end
+
+local function ParameterSubmission(policy)
+	local target = Planner.Input(targetBox.draft or tostring(policy.target), 1, 10000)
+	local rawBudget = budgetBox.draft or tostring(policy.budget or "")
+	local budget = Planner.Input(rawBudget, 0, 1000000000, true)
+	local budgetValid = budget ~= nil or string.match(rawBudget, "^%s*$") ~= nil
+	return target, budget, target ~= nil, budgetValid, target ~= policy.target or budget ~= policy.budget
 end
 
 function SurvivorUI_RebornGearEnabled()
@@ -521,6 +529,34 @@ local function Control(widget, enabled, selected)
 	widget.lit = selected
 	widget:Light(false)
 	widget:SetAlpha(enabled and 1 or 0.44)
+end
+
+local function UpdateParameterControls(policy)
+	local _, _, targetValid, budgetValid, changed = ParameterSubmission(policy)
+	local valid = targetValid and budgetValid
+	Control(calculatePlan, valid and changed)
+	for _, entry in ipairs({ { targetBox, targetValid }, { budgetBox, budgetValid } }) do
+		local color = entry[2] and { 0.38, 0.38, 0.43 } or NEGATIVE
+		entry[1]:SetBackdropBorderColor(color[1], color[2], color[3], 1)
+	end
+	if not parameterStatus then return end
+	local budget = policy.budget and F("%d gold", policy.budget) or T("Unrestricted")
+	local committed = F("Plans use %s%% · %s", tostring(policy.target), budget)
+	if not valid then
+		local issue = not targetValid and not budgetValid and "Invalid target and budget"
+			or not targetValid and "Invalid target" or "Invalid budget"
+		committed = F("%s · %s", T(issue), committed)
+	elseif changed then committed = F("Pending edits · %s", committed) end
+	local color = valid and (changed and GOLD or MUTED) or NEGATIVE
+	parameterStatus:SetTextColor(color[1], color[2], color[3])
+	parameterStatus:SetText(committed)
+end
+
+local function SetParameterText(box, text)
+	if box:GetText() == text then return end
+	box.syncing = true
+	box:SetText(text)
+	box.syncing = nil
 end
 
 local function CloseMenu()
@@ -1386,13 +1422,14 @@ render = function()
 		hubMap:Hide(); hubDifficulty:Hide(); refreshGear:Hide()
 	end
 	local showInputs = activeView == "planner" and current ~= nil
-	for _, widget in ipairs({ targetBox, budgetBox, protection, resetTarget }) do
+	parameterStatus = nil
+	for _, widget in ipairs({ targetBox, budgetBox, protection, resetTarget, calculatePlan }) do
 		if showInputs then widget:Show() else widget:Hide() end
 	end
 	if showInputs then
 		local policy = current.policy
 		for _, box in ipairs({ targetBox, budgetBox }) do
-			if not box.editing then box:SetText(tostring(policy[box.key] or "")) end
+			if box.draft == nil then SetParameterText(box, tostring(policy[box.key] or "")) end
 		end
 		local row = Line(header, T("Target output %"), MUTED, 0, 96, 25)
 		Cell(header, row, 1, T("Gold budget"), 207, 92, "LEFT", MUTED)
@@ -1403,19 +1440,27 @@ render = function()
 		Place(targetBox, 98)
 		Place(resetTarget, 156)
 		Place(budgetBox, 300)
-		local balance = policy.budget and "Automatic gold balance unavailable" or "Automatic gold balance unavailable · budget unset"
+		local balance = T("Automatic gold balance unavailable")
 		local protectionX = 0
-		if header.width >= 820 then
-			protectionX = 400
-			Cell(header, row, 2, T(balance), 565, header.width - 565, "LEFT", MUTED)
-		else row = Line(header, T(balance), MUTED, 165, header.width - 165, 25) end
+		if header.width >= 890 then
+			Place(calculatePlan, 400)
+			protectionX = 518
+			Cell(header, row, 2, balance, 686, header.width - 686, "LEFT", MUTED)
+		else
+			row = Line(header, balance, MUTED, 280, header.width - 280, 25)
+			Place(calculatePlan, 160)
+		end
 		Place(protection, protectionX)
 		protection.text:SetText(T(policy.protectSets and "Protect sets: On" or "Protect sets: Off"))
 		Control(protection, true, policy.protectSets)
 		if not policy.protectSets then
 			Line(header, T("Plans may sacrifice set effects outside the output model."), GOLD)
 		end
-		if inputError then Line(header, T(inputError), GOLD) end
+		local _, _, targetValid, budgetValid, changed = ParameterSubmission(policy)
+		if changed or not (targetValid and budgetValid) then
+			parameterStatus = Line(header, "", MUTED, 0, nil, header.width < 480 and 32 or 21).label
+		end
+		UpdateParameterControls(policy)
 	end
 	Finish(header)
 	baselineButton:ClearAllPoints()
@@ -1538,7 +1583,27 @@ local function TargetMaps()
 	return ordered
 end
 
-local function NumericInput(key, width, minimum, maximum, integer, errorText)
+local function SubmitParameters()
+	local current = Read()
+	if not current or activeView ~= "planner" then return end
+	local target, budget, targetValid, budgetValid, changed = ParameterSubmission(current.policy)
+	if not (targetValid and budgetValid and changed) then return end
+	local config = Settings()
+	config.target, config.budget = target, budget
+	for _, box in ipairs({ targetBox, budgetBox }) do
+		box.draft = nil
+		box:ClearFocus()
+	end
+	PlanningChanged()
+end
+
+local function RefreshParameterControls(policy)
+	local _, _, targetValid, budgetValid, changed = ParameterSubmission(policy)
+	if not parameterStatus and (changed or not (targetValid and budgetValid)) then render()
+	else UpdateParameterControls(policy) end
+end
+
+local function NumericInput(key, width)
 	local box = CreateFrame("EditBox", nil, header.content)
 	box.key = key
 	box:SetWidth(width)
@@ -1550,39 +1615,28 @@ local function NumericInput(key, width, minimum, maximum, integer, errorText)
 	box:SetBackdrop(BORDER)
 	box:SetBackdropColor(0.12, 0.13, 0.16, 1)
 	box:SetBackdropBorderColor(0.38, 0.38, 0.43, 1)
-	local function ClearEditFocus()
-		box.editing, inputError = nil, nil
-		box:ClearFocus()
-	end
 	box:SetScript("OnEditFocusGained", function()
 		box.editing = true
-		inputError = "Press Enter to apply."
-		render()
 	end)
 	box:SetScript("OnEditFocusLost", function()
-		if not box.editing then return end
-		box.editing, inputError = nil, nil
-		render()
+		box.editing = nil
+	end)
+	box:SetScript("OnTextChanged", function()
+		if box.syncing then return end
+		box.draft = box:GetText()
+		local current = Read()
+		if current and activeView == "planner" then RefreshParameterControls(current.policy) end
 	end)
 	box:SetScript("OnEscapePressed", function()
-		ClearEditFocus()
-		render()
-	end)
-	box:SetScript("OnEnterPressed", function()
-		local raw = box:GetText()
-		local value = Planner.Input(raw, minimum, maximum, integer)
-		if value == nil and not (key == "budget" and string.match(raw, "^%s*$")) then
-			inputError = errorText
+		box.draft = nil
+		box:ClearFocus()
+		local current = Read()
+		if current then
+			SetParameterText(box, tostring(current.policy[key] or ""))
 			render()
-			return
 		end
-		ClearEditFocus()
-		local config = Settings()
-		if Planner.Policy(config)[key] ~= value then
-			config[key] = value
-			PlanningChanged()
-		else render() end
 	end)
+	box:SetScript("OnEnterPressed", SubmitParameters)
 	return box
 end
 
@@ -1619,15 +1673,16 @@ local function BuildPlanningControls()
 	end)
 	hubDifficulty:SetPoint("LEFT", hubMap, "RIGHT", 4, 0)
 	refreshGear:SetPoint("LEFT", hubDifficulty, "RIGHT", 4, 0)
-	targetBox = NumericInput("target", 54, 1, 10000, false, "Enter a target from 1 to 10000, then press Enter.")
-	budgetBox = NumericInput("budget", 92, 0, 1000000000, true, "Enter whole gold from 0 to 1000000000, or leave blank. Press Enter.")
+	targetBox = NumericInput("target", 54)
+	budgetBox = NumericInput("budget", 92)
+	calculatePlan = Button(panel, "Calculate Plan", 112, SubmitParameters, true)
 	resetTarget = Button(panel, "Reset", 45, function()
-		inputError = nil
+		local current = Read()
+		if not current then return end
+		targetBox.draft = "100"
+		SetParameterText(targetBox, targetBox.draft)
 		targetBox:ClearFocus()
-		if Planner.Policy(Settings()).target ~= 100 then
-			Settings().target = nil
-			PlanningChanged()
-		else render() end
+		RefreshParameterControls(current.policy)
 	end)
 	protection = Button(panel, "Protect sets: On", 154, function()
 		Settings().protectSets = not Planner.Policy(Settings()).protectSets
@@ -1765,6 +1820,7 @@ local function Build()
 	end
 	panel:SetScript("OnKeyDown", function(_, key)
 		if (key or arg1) ~= "ESCAPE" then return end
+		if targetBox.editing or budgetBox.editing then return end
 		if not escapeAt then
 			escapeMenu = menuChoice
 			timer:SetScript("OnUpdate", FinishEscape)
@@ -1785,7 +1841,6 @@ local function Build()
 		CloseMenu()
 		targetBox:ClearFocus()
 		budgetBox:ClearFocus()
-		inputError = nil
 		if not previewIsNative then ClearPreview() end
 		panel:SetScript("OnUpdate", nil)
 		if searches and ((searches[1] and searches[1].worker) or (searches[2] and searches[2].worker)) then

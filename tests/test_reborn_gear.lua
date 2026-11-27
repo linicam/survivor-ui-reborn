@@ -694,7 +694,10 @@ function CreateFrame(kind, name, parent)
 	function w:CreateFontString() return CreateFrame("FontString", nil, self) end
 	function w:CreateTexture() return CreateFrame("Texture", nil, self) end
 	function w:SetScript(key, fn) self.scripts[key] = fn end
-	function w:SetText(text) self.text = text end
+	function w:SetText(text)
+		self.text = text
+		if self.scripts.OnTextChanged then self.scripts.OnTextChanged(self) end
+	end
 	function w:GetText() return self.text end
 	function w:ClearFocus() if self.scripts.OnEditFocusLost then self.scripts.OnEditFocusLost(self) end end
 	function w:Show() self.shown = true end
@@ -1091,35 +1094,52 @@ do
 	assert(SlotMenu("head", 2, "stars"))()
 	Click("Difficulty & Upgrade Planner")
 	local beforeSettings = searchCalls
-	local targetBox = Input("target")
+	local targetBox, budgetBox = Input("target"), Input("budget")
+	local calculate = assert(Find("Button", "Calculate Plan"))
+	assert(calculate.disabled)
 	targetBox.scripts.OnEditFocusGained()
 	targetBox:SetText("8")
 	targetBox:SetText("80")
-	assert(searchCalls == beforeSettings)
-	targetBox.scripts.OnEnterPressed()
-	assert(searchCalls == beforeSettings + 2 and SurvivorUIDB.rebornGear.target == 80)
-	Enter("budget", "0")
-	assert(searchCalls == beforeSettings + 4 and SurvivorUIDB.rebornGear.budget == 0)
+	targetBox:ClearFocus()
+	budgetBox:SetText("0")
+	assert(targetBox:GetText() == "80" and searchCalls == beforeSettings and not calculate.disabled)
+	assert(Find("FontString", "Pending edits · Plans use 100% · Unrestricted"))
 	Click("Protect sets: On")
-	assert(searchCalls == beforeSettings + 6 and SurvivorUIDB.rebornGear.protectSets == false)
+	assert(searchCalls == beforeSettings + 2 and SurvivorUIDB.rebornGear.protectSets == false)
+	assert(targetBox:GetText() == "80" and budgetBox:GetText() == "0")
+	assert(P.Policy(SurvivorUIDB.rebornGear).target == 100 and SurvivorUIDB.rebornGear.budget == nil)
+	Click("Calculate Plan")
+	assert(searchCalls == beforeSettings + 4 and SurvivorUIDB.rebornGear.target == 80 and SurvivorUIDB.rebornGear.budget == 0)
+	assert(calculate.disabled and not Find("FontString", "Pending edits"))
+	Enter("target", "80.0")
+	assert(calculate.disabled and searchCalls == beforeSettings + 4)
 	assert(Find("FontString", "Plans may sacrifice set effects"))
 	DrainSearch()
 	assert(Find("FontString", "Modeled budget left: 0"))
 	Click("Execution order")
-	assert(Find("FontString", "Obtain and equip") and searchCalls == beforeSettings + 6)
+	assert(Find("FontString", "Obtain and equip") and searchCalls == beforeSettings + 4)
 	Click("Show equipment")
 	Enter("budget", "-1")
-	assert(Find("FontString", "Enter whole gold") and SurvivorUIDB.rebornGear.budget == 0)
-	Input("budget"):ClearFocus()
-	assert(Input("budget"):GetText() == "0" and not Find("FontString", "Enter whole gold"),
-		"blurring an invalid edit must restore the committed budget")
-	Input("budget").scripts.OnEditFocusGained()
-	Input("budget"):SetText("12345")
-	Input("budget").scripts.OnEscapePressed()
-	assert(VisiblePanel():IsShown() and Input("budget"):GetText() == "0" and searchCalls == beforeSettings + 6)
-	Enter("budget", "")
+	assert(calculate.disabled and Find("FontString", "Invalid budget") and SurvivorUIDB.rebornGear.budget == 0)
+	assert(Find("FontString", "Plans use 80% · 0 gold"))
+	budgetBox:ClearFocus()
+	assert(budgetBox:GetText() == "-1" and Find("FontString", "Invalid budget"))
+	targetBox:SetText("200")
+	targetBox.scripts.OnEnterPressed()
+	assert(SurvivorUIDB.rebornGear.target == 80 and searchCalls == beforeSettings + 4)
+	budgetBox.scripts.OnEscapePressed()
+	assert(VisiblePanel():IsShown() and budgetBox:GetText() == "0" and targetBox:GetText() == "200")
+	Enter("target", "")
+	assert(calculate.disabled and Find("FontString", "Invalid target"))
+	targetBox.scripts.OnEscapePressed()
+	assert(calculate.disabled and targetBox:GetText() == "80")
+	budgetBox:SetText("")
 	Click("Protect sets: Off")
 	Click("Reset")
+	assert(targetBox:GetText() == "100" and budgetBox:GetText() == "")
+	assert(SurvivorUIDB.rebornGear.target == 80 and SurvivorUIDB.rebornGear.budget == 0 and searchCalls == beforeSettings + 6)
+	budgetBox.scripts.OnEnterPressed()
+	assert(searchCalls == beforeSettings + 8 and calculate.disabled)
 	assert(P.Policy(SurvivorUIDB.rebornGear).target == 100 and SurvivorUIDB.rebornGear.budget == nil)
 	assert(saved == SurvivorUIDB.rebornGear.baselines.warlock)
 	Click("Equipment Simulator")
@@ -1255,12 +1275,19 @@ Click("Equipment Simulator")
 assert(Find("FontString", "Simulated equipment") and SlotMenu("head", "legendary"))
 Click("Difficulty & Upgrade Planner")
 Armor({ head })
+Input("target"):SetText("125")
+Input("budget"):SetText("750")
 Click("Select target map")
 Click("Elwynn Forest")
 maps.elwynn[9] = 1
 Click("Normal")
 assert(not Find("Button", "Heroic II"))
 Click("Heroic I")
+assert(Input("target"):GetText() == "125" and Input("budget"):GetText() == "750")
+assert(Find("FontString", "Pending edits · Plans use 100% · Unrestricted"))
+assert(P.Policy(SurvivorUIDB.rebornGear).target == 100 and SurvivorUIDB.rebornGear.budget == nil)
+Input("target").scripts.OnEscapePressed()
+Input("budget").scripts.OnEscapePressed()
 maps.elwynn[9] = nil
 DrainSearch()
 assert(StatCells(Named("Results"), "Output pressure") and Find("FontString", "Plan A"))
@@ -1565,7 +1592,7 @@ assert(#commands == controlsBefore, "auto recording before zone arrival leaves n
 assert(SurvivorUI_RebornGearOpen("show") and #commands == controlsBefore + 1)
 assert(SurvivorUI_RebornGearOpen("show") and #commands == controlsBefore + 1)
 SurvivorUI_RebornRecordStop()
-do
+local function CheckLocalizedPanel()
 	-- Build a new panel after loading zhCN so its fixed labels use that locale.
 	VisiblePanel():Hide()
 	AZS.On = function(event, fn) handlers[event] = fn end
@@ -1579,7 +1606,20 @@ do
 	local localizedPanel = Find("Button", "装备模拟器").parent
 	localizedPanel.scripts.OnEvent(localizedPanel, "DISPLAY_SIZE_CHANGED")
 	CheckTabs("难度与升级规划", "装备模拟器")
+	local calculate = assert(Find("Button", "计算方案"))
+	assert(calculate.disabled and calculate.point[4] + calculate.width <= localizedPanel.width - 32)
+	-- The old panel's hidden controls remain in the mock widget list.
+	local boxes = {}
+	for _, widget in ipairs(widgets) do
+		if widget.kind == "EditBox" and widget.parent.parent == localizedPanel then boxes[widget.key] = widget end
+	end
+	boxes.target:SetText("370")
+	boxes.budget:SetText("15776")
+	assert(Find("FontString", "有待应用的修改") and not calculate.disabled)
+	boxes.target.scripts.OnEnterPressed()
+	assert(calculate.disabled and SurvivorUIDB.rebornGear.target == 370 and SurvivorUIDB.rebornGear.budget == 15776)
 	Click("装备模拟器")
 	assert(Find("FontString", "模拟穿戴"))
 end
+CheckLocalizedPanel()
 print("PASS: gear arithmetic, both constraints, oracle, snapshot isolation, previews, and runtime lifecycle")
