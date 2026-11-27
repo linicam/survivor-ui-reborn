@@ -65,6 +65,8 @@ print("Run History identity and summary regression checks passed")
 -- Exercise both Build List consumers with the real compatibility adapter.
 -- Only the jewelry rows and inventory/tooltip APIs need host UI stand-ins.
 local historyUpdate = lastUpdate
+local nativeHandlers = {}
+AZS = { On = function(name, handler) nativeHandlers[name] = handler end }
 dofile("SurvivorUI/RebornCompat.lua")
 local buildFile = assert(io.open("SurvivorUI/BuildList.lua", "rb"))
 local buildSource = buildFile:read("*a")
@@ -96,19 +98,24 @@ local ui = ...
 local gearLines, worn, GearLine = ui.rows, ui.worn, ui.GearLine
 local GEAR_SLOTS = { {11, "Ring"} }
 local GEAR_TOP, GEAR_ROW, PLAIN = 20, 18, {1, 1, 1}
+local WIDTH, SEPARATOR = 160, " · "
+local function Tagged(tag, value) return value .. " " .. tag end
 local GEAR_PAINT = { row = {} }
 local function Settings() return SurvivorUIDB end
 local function ReadPiece() return {rank = 7, tags = "DMG"} end
 local function PlaceGear() end
 local function PaintGear() end
 local function GearText(line, left, right) line.left, line.right = left, right end
+local function FitName(line, left) line.left = left end
+local function FitTags(line, right) line.right = right end
 local function GearWords(label, piece) return label .. "  " .. piece.rank, piece.tags end
 local Quality, RarityColor = ui.Color, ui.Color
 ]]
 ui.Color = Color
 local drawGear = assert((loadstring or load)(buildSetup
-	.. ReadSection("local function DrawGear()", "-- For the options' preview")
+	.. ReadSection("local JEWELRY_TAGS =", "-- For the options' preview")
 	.. ReadSection("function SurvivorUI_GearSnapshot()", "-- The armor and the weapons worn")
+	.. ReadSection("-- The armor and the weapons worn", "function SurvivorUI_ToggleWorn()")
 	.. "return DrawGear", "@BuildList jewelry consumers"))(ui)
 
 function SurvivorUI_T(text) return text end
@@ -154,10 +161,10 @@ assert(not rows[1].shown and #SurvivorUI_GearSnapshot() == 0 and meterCalls == 1
 function AZS_GetMeterLoadout()
 	return {
 		runJewelry = {
-			{sourceKey = "jewel:ring:accuria", itemInstanceKey = "instance-a"},
-			{sourceKey = "jewel:ring:accuria", itemInstanceKey = "instance-b"},
+			{sourceKey = "jewel:ring:accuria", itemInstanceKey = "gear:ring:accuria"},
+			{sourceKey = "jewel:ring:accuria", itemInstanceKey = "gear:ring:dragonslayer"},
 		},
-		sources = { ["jewel:ring:accuria"] = {name = "Band of Accuria", rank = 4, rarity = "epic"} },
+		sources = { ["jewel:ring:accuria"] = {itemKey = "accuria", name = "Band of Accuria", rank = 4, rarity = "epic"} },
 	}
 end
 SurvivorUI_RebornForgetRun()
@@ -174,7 +181,73 @@ assert(rows[1].shown and rows[1].rebornItem.name == "Fallback Ring" and not rows
 AZSGEAR = nil
 SurvivorUI_RebornForgetRun()
 drawGear()
-assert(rows[1].shown and rows[1].slot == 11 and SurvivorUI_GearSnapshot()[1].name == "Inventory Ring")
+local unknown, status = SurvivorUI_GearSnapshot()
+assert(not rows[1].shown and #unknown == 0 and status == "unavailable")
+assert(SurvivorUI_RunJewelrySummary({ effect = "幸运+75.6% · 金币+63%" }) == "+75.6% LUCK · +63% GOLD")
+assert(SurvivorUI_RunJewelrySummary({ effect = "Critical damage +245%" }) == "+245% CRIT DMG")
+assert(SurvivorUI_RunJewelrySummary({ effect = "On hit, burn for 40%" }) == "On hit, burn for 40%")
+local tip = {}
+GameTooltip = {
+	SetText = function(_, value) tip[1] = value end,
+	AddLine = function(_, value) tip[2] = value end,
+	Show = NoOp,
+}
+SurvivorUI_ShowRunJewelryTooltip({ name = "Full item name", effect = "Luck +75.6%\nSpecial effect" })
+assert(tip[1] == "Full item name" and tip[2] == "Luck +75.6%\nSpecial effect")
+
+local charFile = assert(io.open("SurvivorUI/CharacterPane.lua", "rb"))
+local character = charFile:read("*a")
+charFile:close()
+local statsStart = assert(character:find("local function Pct(value)", 1, true))
+local statsEnd = assert(character:find("local function ReadsAtMostZero", statsStart, true))
+local statValue, sections = assert((loadstring or load)(character:sub(statsStart, statsEnd - 1)
+	.. "return StatValue, SECTIONS", "@CharacterPane stat readers"))()
+assert(statValue(sections[1].rows[1], { crit = 0 }) == "0.0%")
+assert(statValue(sections[1].rows[2], {}) == "-")
+assert(statValue(sections[1].rows[3], { dmg = 1.25 }) == "+25%")
+assert(statValue(sections[1].rows[4], { cd = 0.85 }) == "+15%")
+local contribution, rest = SurvivorUI_StatGear("Damage", { dmg = 1.5, gdmg = 0.2 })
+assert(contribution == "+20%" and rest == nil)
+assert(SurvivorUI_StatGear("Damage", { dmg = 1.5 }) == nil)
+assert(SurvivorUI_StatGear("Damage", { dmg = 1.5, gdmg = 0 }) == "+0%")
+contribution, rest = SurvivorUI_StatGear("Damage", { dmg = 1.5, gdmg = 0.2 }, false)
+assert(contribution == "+20%" and rest == "+30%")
+
+AZS_GEN = { itemRules = {} }
+AZS_ZONE = { run = "azs:r56781234" }
+nativeHandlers.AZSZONE()
+AZS_GEAR = { { slot = "ring", bonus = "accuria", name = "Native Ring", rarity = 4, text = "Damage +296.2%" } }
+nativeHandlers.AZSGEAR()
+drawGear()
+assert(rows[1].left == "Native Ring" and rows[1].right == "+296.2% DMG")
+local gear, gearStatus = SurvivorUI_GearSnapshot()
+assert(gearStatus == "observed" and gear[1].effect == AZS_GEAR[1].text and not gear[1].item)
+local armor, armorSet, armorStatus = SurvivorUI_ArmorSnapshot()
+assert(#armor == 0 and armorStatus == "unavailable")
+AZS_ARMOR = { { slot = 8, name = "Native Worn Weapon", rarity = 4 } }
+nativeHandlers.AZSARMOR()
+armor, armorSet, armorStatus = SurvivorUI_ArmorSnapshot()
+assert(armor[1].name == "Native Worn Weapon" and not armorSet and armorStatus == "partial")
+AZS_END_LOOT = { { name = "Final reward", rarity = 3 } }
+nativeHandlers.AZSENDLOOT()
+local loot, lootStatus = SurvivorUI_RebornFinalLootSnapshot()
+assert(#loot == 0 and lootStatus == "unavailable")
+nativeHandlers.AZSEND()
+loot, lootStatus = SurvivorUI_RebornFinalLootSnapshot()
+assert(loot[1].name == "Final reward" and lootStatus == "observed" and not loot[1].item)
+
+local completed = Snapshot(AZS_ZONE.run, "Reborn Arena")
+completed.gearStatus, completed.armorStatus, completed.lootStatus = "unavailable", "unavailable", "unavailable"
+assert(keep(completed) == completed)
+local late = Snapshot(AZS_ZONE.run, "Reborn Arena")
+late.gear, late.gearStatus, late.armor, late.armorStatus, late.loot, late.lootStatus = gear, gearStatus, armor, armorStatus, loot, lootStatus
+assert(keep(late) == completed and completed.gear[1].effect == gear[1].effect and completed.loot[1].name == loot[1].name)
+local older = Snapshot("azs:r56781235", "Reborn Arena")
+older.gear = { { label = "Preserved historic row" } }
+keep(older)
+local replay = Snapshot(older.rebornRunId, older.zone)
+replay.gear, replay.gearStatus = gear, gearStatus
+assert(keep(replay) == older and not older.gearStatus and older.gear[1].label == "Preserved historic row")
 
 AZS_RequestAbilities, GetInventoryItemLink = nil, nil
 assert(not SurvivorUI_RebornActive())

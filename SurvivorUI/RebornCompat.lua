@@ -139,7 +139,8 @@ local abilitiesRequested = false
 local rankHistory = {}  -- [key] = { rank, firstSeen, increases }
 local rankEvents = {}   -- array of { key, from, to, at }
 local jewelryCache = nil
-local jewelryStamp = nil
+local equipmentRun, equipmentReady
+local equipment = {}
 local jewelryError = nil
 local lastLoadoutAt = 0
 ------------------------------------------------------------------------------
@@ -161,6 +162,10 @@ function SurvivorUI_RebornActive()
 		return true
 	end
 	return false
+end
+
+function SurvivorUI_RebornRandomGear()
+	return SurvivorUI_RebornActive() and type(AZS_GEN) == "table" and type(AZS_GEN.itemRules) == "table"
 end
 
 -- The native run sheet and caps both use whole percentages.
@@ -298,7 +303,6 @@ local function ResetOwnCaches()
 	rankHistory = {}
 	rankEvents = {}
 	jewelryCache = nil
-	jewelryStamp = nil
 	jewelryError = nil
 	lastLoadoutAt = 0
 	activeCurses = {}
@@ -377,9 +381,31 @@ end
 -- treats the run as new. Does not touch SavedVariables.
 function SurvivorUI_RebornForgetRun()
 	lastRunId = nil
+	equipmentRun, equipmentReady, equipment = nil, nil, {}
 	blockedAbilityTable, rejectedAbilityTable, blockedSpellsTable = nil, nil, nil
 	rejectNextAbilityReply, requireAbilityRequest = nil, nil
 	ResetOwnCaches()
+end
+
+local function EquipmentRun()
+	if SurvivorUI_RebornActive() and type(AZS_ZONE) == "table" and tonumber(AZS_ZONE.hub) ~= 1 then
+		return SurvivorUI_RebornRunId()
+	end
+end
+
+-- Native globals can survive a run boundary. Only accept a replacement
+-- delivered by the native router after this world's zone snapshot.
+local function ObserveEquipment(kind, rows)
+	if equipmentReady and equipmentRun == EquipmentRun() and type(rows) == "table" then
+		equipment[kind] = rows
+		if kind == "jewelry" then jewelryCache = nil end
+	end
+end
+
+function SurvivorUI_RebornEquipmentObservations()
+	if equipmentReady and equipmentRun == EquipmentRun() then
+		return equipment
+	end
 end
 
 ------------------------------------------------------------------------------
@@ -993,7 +1019,29 @@ local function RegisterAbilitiesHandler()
 			-- signal: drive the reset check from it as well as
 			-- from draws.
 			pcall(AZS.On, "AZSZONE", function()
+				local run = EquipmentRun()
+				if not run or run ~= equipmentRun then
+					equipment, jewelryCache = {}, nil
+				end
+				equipmentRun, equipmentReady = run, run ~= nil
 				SurvivorUI_RebornCheckRun()
+			end)
+			pcall(AZS.On, "AZSGEAR", function() ObserveEquipment("jewelry", AZS_GEAR) end)
+			pcall(AZS.On, "AZSARMOR", function() ObserveEquipment("armor", AZS_ARMOR) end)
+			pcall(AZS.On, "AZSENDLOOT", function() ObserveEquipment("pendingLoot", AZS_END_LOOT) end)
+			pcall(AZS.On, "AZSEND", function()
+				if equipmentReady and equipmentRun == EquipmentRun() then
+					if equipment.pendingLoot then equipment.finalLoot = equipment.pendingLoot end
+					equipment.pendingLoot = nil
+				end
+			end)
+			pcall(AZS.On, "AZSRUN", function()
+				if equipmentReady and equipmentRun == EquipmentRun() and not equipment.endless
+					and AZS_RUN and tonumber(AZS_RUN.endless) == 1
+					and (AZS_RUN.ph == "playing" or AZS_RUN.ph == "choosing") then
+					equipment.finalLoot = nil
+					equipment.endless = true
+				end
 			end)
 			pcall(AZS.On, "AZSSPELLTIP", function(message)
 				if not SurvivorUI_RebornActive() or type(message) ~= "string" then return end
@@ -1149,13 +1197,14 @@ function SurvivorUI_RebornBuildTooltipPlan(ability)
 end
 
 ------------------------------------------------------------------------------
--- Jewelry: meter loadout first, AZSGEAR second, inventory last
+-- Jewelry: native World snapshots, with Meter metadata on older clients.
 --
 -- AZS_GetMeterLoadout({ apiVersion=1, runId, ownerId }) returns
 -- loadout.runJewelry = { { sourceKey } } and loadout.sources[sourceKey]
 -- = { name, ... }. The docs do not publish the source fields, so every
 -- field is read defensively from either the entry or its source, and any
--- of name/icon/slot/rank/rarity may be absent. A loadout error is kept
+-- of name/icon/slot/rarity may be absent. Its source rank can be an effect
+-- amount. A loadout error is kept
 -- (code/message) and reported by diagnostics, never silently swallowed.
 -- Refresh at most once per 2 seconds; callers poll already, so this adds
 -- no new timer.
@@ -1210,25 +1259,6 @@ local function SlotLabelOf(raw, sourceKey)
 		if string.find(s, "trinket") then return T("Trinket") end
 	end
 	return T("Jewelry")
-end
-
--- The dedup key for one normalised piece, in priority order: the
--- sourceKey (one worn slot holds one piece, so a repeated sourceKey
--- is the same piece acquired again), else the entry's own key/id,
--- else (name, slot) as a last resort. Never the name alone: two
--- pieces can share a name, and two pieces can share every displayed
--- label except the name.
-local function DedupKeyOf(sourceKey, key, name, slot)
-	if sourceKey and sourceKey ~= "" then
-		return "src:" .. tostring(sourceKey)
-	end
-	if key and key ~= "" then
-		return "key:" .. tostring(key)
-	end
-	if name and name ~= "" and slot and slot ~= "" then
-		return "name:" .. tostring(name) .. "|" .. tostring(slot)
-	end
-	return nil
 end
 
 -- A jewelry icon as a texture path. The loadout's source icon is a
@@ -1332,11 +1362,10 @@ local function NormaliseJewelryEntry(entry, source)
 	local instanceKey = entry and entry.itemInstanceKey or nil
 	local itemKey = instanceKey and string.match(tostring(instanceKey), "^gear:[^:]+:(.+)$") or nil
 	local sourceMatches = source and itemKey and source.itemKey == itemKey
-	local name, icon, rank, rarity
+	local name, icon, rarity
 	if sourceMatches then
 		name = SourceField(source, entry, { "name", "displayName" })
 		icon = IconTextureOf(SourceField(source, entry, { "icon", "texture" }))
-		rank = SourceField(source, entry, { "rank", "level", "lvl" })
 		rarity = SourceField(source, entry, { "rarity", "quality" })
 	else
 		local static = itemKey and JEWELRY_STATIC[itemKey] or nil
@@ -1344,11 +1373,14 @@ local function NormaliseJewelryEntry(entry, source)
 			name = SurvivorUI_Native and SurvivorUI_Native(static[1]) or static[1]
 			icon = static[2] ~= "" and ("Interface\\Icons\\" .. static[2]) or nil
 		end
-		if not itemKey then
+		if not instanceKey then
 			name = SourceField(source, entry, { "name", "displayName" })
 			icon = IconTextureOf(SourceField(source, entry, { "icon", "texture" }))
-			rank = SourceField(source, entry, { "rank", "level", "lvl" })
 			rarity = SourceField(source, entry, { "rarity", "quality" })
+		elseif not itemKey then
+			name = SourceField(nil, entry, { "name", "displayName" })
+			icon = IconTextureOf(SourceField(nil, entry, { "icon", "texture" }))
+			rarity = SourceField(nil, entry, { "rarity", "quality" })
 		end
 	end
 	local slot = SourceField(source, entry, { "slot", "kind", "type", "category" })
@@ -1357,28 +1389,20 @@ local function NormaliseJewelryEntry(entry, source)
 	if type(rarity) == "number" then
 		rarity = tostring(rarity)
 	end
-	-- Roman rank suffix in the name ("Band of Accuria IV") as a fallback.
-	if not rank and name then
-		local _, _, r = string.find(name, " ([IVXL]+%+?)$")
-		if r then rank = r end
-	end
 	local slotLabel = SlotLabelOf(slot, sourceKey)
 	return {
 		name = name, icon = icon, slot = slotLabel,
-		slotRaw = slot, key = key, rank = rank, rarity = rarity,
+		slotRaw = slot, key = key, rarity = rarity,
 		sourceKey = sourceKey or key, count = 1,
 		instanceKey = entry and entry.itemInstanceKey or nil,
-		dedupKey = DedupKeyOf(sourceKey, key, name, slotLabel),
 	}
 end
 
 -- Identity: itemInstanceKey identifies a distinct owned piece
 -- (verified in-game payloads carry one per runJewelry entry), so
 -- distinct instances always stay distinct rows — a shared meter
--- sourceKey (jewel:<slot>) is attribution, not identity. Records
--- without an instance key merge only when they agree on identity
--- key, name, and rank (duplicate API records); differing ranks
--- stay separate rather than inheriting the highest rank.
+-- sourceKey (jewel:<slot>) is attribution. Rows without a verified
+-- identity remain separate.
 -- Returns the merged list and the number of entries merged away.
 local function DedupJewelryItems(items)
 	local seen, out, merged = {}, {}, 0
@@ -1387,8 +1411,6 @@ local function DedupJewelryItems(items)
 		local key
 		if item.instanceKey then
 			key = "inst:" .. tostring(item.instanceKey)
-		elseif item.dedupKey then
-			key = item.dedupKey .. "|" .. tostring(item.name) .. "|" .. tostring(item.rank)
 		end
 		if key and seen[key] then
 			local keep = seen[key]
@@ -1403,6 +1425,33 @@ local function DedupJewelryItems(items)
 	return out, merged
 end
 
+local function NativeJewelry(rows)
+	local items, complete = {}, true
+	for _, row in ipairs(rows) do
+		if type(row) == "table" then
+			local key = type(row.bonus) == "string" and row.bonus ~= "" and row.bonus or nil
+			local slot = type(row.slot) == "string" and row.slot ~= "" and row.slot or nil
+			local icon = row.icon ~= "" and IconTextureOf(row.icon) or nil
+			local text = type(row.text) == "string" and row.text ~= "" and row.text or nil
+			if icon and not string.find(icon, "\\", 1, true) then
+				icon = "Interface\\Icons\\" .. icon
+			end
+			-- Meter.lua constructs this item identity from the same two fields.
+			-- Multiple rows with the same identity remain separate observations.
+			local identity = slot and key and ("gear:" .. slot .. ":" .. key) or nil
+			table.insert(items, {
+				key = key, slot = SlotLabelOf(slot), slotRaw = slot, instanceKey = identity,
+				name = type(row.name) == "string" and row.name ~= "" and row.name or nil,
+				icon = icon, rarity = row.rarity, amount = tonumber(row.amount), effect = text, native = true,
+			})
+			if not (identity and type(row.name) == "string" and row.name ~= "" and text) then complete = false end
+		else
+			complete = false
+		end
+	end
+	return items, complete
+end
+
 -- Returns { items, source, error, aggregate }.
 -- source: "loadout" | "gear" | "inventory" | "none".
 -- aggregate: the AZS_STATS g* shares (whole-character jewelry totals),
@@ -1414,7 +1463,12 @@ function SurvivorUI_RebornJewelry(force)
 	if not SurvivorUI_RebornActive() then return { items = {}, source = "none", duplicates = 0 } end
 
 	local now = Now()
-	if not force and jewelryCache and now - lastLoadoutAt < 2 then
+	local run = EquipmentRun()
+	local observed = SurvivorUI_RebornEquipmentObservations()
+	local native = observed and observed.jewelry
+	local randomGear = SurvivorUI_RebornRandomGear()
+	if not force and jewelryCache and jewelryCache.run == run and jewelryCache.native == native and jewelryCache.randomGear == randomGear
+		and now - lastLoadoutAt < 2 then
 		return jewelryCache
 	end
 	lastLoadoutAt = now
@@ -1423,8 +1477,11 @@ function SurvivorUI_RebornJewelry(force)
 	local err = nil
 	local rawJewelry = nil
 	local preDedup = nil
-	-- 1. Meter loadout (documented entry point; shape probed, not assumed).
-	if AZS_GetMeterLoadout then
+	local complete = false
+	if native then
+		items, complete = NativeJewelry(native)
+		source = "gear"
+	elseif not randomGear and AZS_GetMeterLoadout then
 		local runId, ownerId = LoadoutOwner()
 		local request = { apiVersion = 1 }
 		if runId then request.runId = runId end
@@ -1458,7 +1515,7 @@ function SurvivorUI_RebornJewelry(force)
 		end
 	end
 	-- 2. AZSGEAR global, if the game exposes it (undocumented shape).
-	if source == "none" and type(AZSGEAR) == "table" and table.getn(AZSGEAR) > 0 then
+	if source == "none" and not randomGear and type(AZSGEAR) == "table" and table.getn(AZSGEAR) > 0 then
 		for i = 1, table.getn(AZSGEAR) do
 			local item = NormaliseJewelryEntry(AZSGEAR[i], nil)
 			if item.name or item.key then
@@ -1469,10 +1526,9 @@ function SurvivorUI_RebornJewelry(force)
 			source = "gear"
 		end
 	end
-	-- Dedup: one row per piece, repeats counted, never by name alone.
 	local duplicates = 0
 	preDedup = items
-	items, duplicates = DedupJewelryItems(items)
+	if not native then items, duplicates = DedupJewelryItems(items) end
 	-- 3. Aggregate jewelry shares from AZS_STATS (never per-item).
 	local aggregate = nil
 	if type(AZS_STATS) == "table" then
@@ -1485,24 +1541,24 @@ function SurvivorUI_RebornJewelry(force)
 			end
 		end
 	end
-	jewelryCache = { items = items, source = source, error = err, aggregate = aggregate, duplicates = duplicates }
+	jewelryCache = { items = items, source = source, error = err, aggregate = aggregate,
+		duplicates = duplicates, complete = complete, native = native, randomGear = randomGear, run = run }
 	if SurvivorUI_RebornRecording and SurvivorUI_RebornRecording() then
 		local parts = {}
 		for i = 1, table.getn(items) do
-			parts[i] = tostring(items[i].instanceKey or items[i].key) .. ":" .. tostring(items[i].rank) ..
+			parts[i] = tostring(items[i].instanceKey or items[i].key) .. ":" .. tostring(items[i].effect) ..
 				":" .. tostring(items[i].name) .. ":" .. tostring(items[i].rarity) .. ":" .. tostring(items[i].icon)
 		end
 		local signature = table.concat(parts, ";")
 		if signature ~= captureJewelrySignature then
 			captureJewelrySignature = signature
 			SurvivorUI_RebornRecord("jewelry_update", {
-				source = source, raw = rawJewelry, gear = AZSGEAR,
+				source = source, raw = rawJewelry, gear = native or (not randomGear and AZSGEAR or nil),
 				preDedup = preDedup, items = items,
 				aggregate = aggregate, duplicates = duplicates,
 			})
 		end
 	end
-	jewelryStamp = AZSGEAR_UPDATED
 	return jewelryCache
 end
 
@@ -2635,7 +2691,10 @@ end
 -- clears AZS_ABILITIES on AZSZONE and sends no request automatically.
 local rebornLoader = CreateFrame("Frame")
 rebornLoader:RegisterEvent("PLAYER_ENTERING_WORLD")
+rebornLoader:RegisterEvent("PLAYER_LEAVING_WORLD")
 rebornLoader:SetScript("OnEvent", function()
+	equipmentRun, equipmentReady, equipment, jewelryCache = nil, nil, {}, nil
+	if event == "PLAYER_LEAVING_WORLD" then return end
 	SurvivorUI_RebornCheckRun()
 	SurvivorUI_RebornRequestAbilities(false)
 end)
@@ -2725,7 +2784,7 @@ function SurvivorUI_RebornSlash(argument)
 			Say("  aggregate (whole character, NOT per-item): " .. table.concat(parts, " "))
 		end
 		if jew.source == "none" then
-			Say("  No loadout / AZSGEAR jewelry was returned; the panel falls back to inventory slots.")
+			Say("  No current run jewelry snapshot is available.")
 		end
 		return
 	elseif arg == "upgrades" then

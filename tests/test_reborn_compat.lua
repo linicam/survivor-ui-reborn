@@ -293,7 +293,7 @@ eq("jewelry loadout: source", jew.source, "loadout")
 eq("jewelry loadout: items", table.getn(jew.items), 2)
 eq("jewelry loadout: first name", jew.items[1].name, "Band of Accuria")
 eq("jewelry loadout: first slot", jew.items[1].slot, "Ring")
-eq("jewelry loadout: first rank", jew.items[1].rank, "IV")
+eq("jewelry loadout: source rank is not an enhancement", jew.items[1].rank, nil)
 eq("jewelry loadout: first rarity", jew.items[1].rarity, "epic")
 -- Repeated call: no duplication.
 jew = SurvivorUI_RebornJewelry(true)
@@ -310,7 +310,7 @@ AZS_GetMeterLoadout = function(req)
 end
 jew = SurvivorUI_RebornJewelry(true)
 eq("jewelry upgrade: still one item", table.getn(jew.items), 1)
-eq("jewelry upgrade: rank updated", jew.items[1].rank, "V")
+eq("jewelry upgrade: changed source rank is still unknown", jew.items[1].rank, nil)
 
 -- Loadout error: kept, source none, no crash.
 AZS_GetMeterLoadout = function(req) return nil, { code = "NO_RUN", message = "no run", retryable = false } end
@@ -472,7 +472,7 @@ eq("round2 jewelry: slot from sourceKey (ring 2)", jew.items[2].slot, "Ring")
 eq("round2 jewelry: slot from sourceKey (trinket)", jew.items[3].slot, "Trinket")
 eq("round2 jewelry: slot from sourceKey (neck)", jew.items[4].slot, "Neck")
 check("round2 jewelry: two 55s are distinct pieces", jew.items[1].name ~= jew.items[3].name)
-eq("round2 jewelry: icon kept", jew.items[1].icon, "INV_Jewelry_Ring_01")
+eq("round2 jewelry: category icon is unverified for this instance", jew.items[1].icon, nil)
 eq("round2 jewelry: rarity kept, not invented", jew.items[4].rarity, "epic")
 check("round2 jewelry: rank-55 ring has no rarity", jew.items[1].rarity == nil)
 local raw = SurvivorUI_RebornJewelryRawLines()
@@ -521,7 +521,7 @@ AZS_GetMeterLoadout = function()
 	}, sources = { ["jewel:ring"] = { name = "Band", rank = 10, kind = "item" } } }
 end
 local jew2 = SurvivorUI_RebornJewelry(true)
-eq("audit jewelry: duplicate records merge", table.getn(jew2.items), 1)
+eq("audit jewelry: unverified identity never merges", table.getn(jew2.items), 2)
 eq("audit jewelry: no instance key, no acquisition count", jew2.items[1].count, 1)
 
 -- PR4 follow-up regressions.
@@ -800,9 +800,9 @@ local jew004 = SurvivorUI_RebornJewelry(true)
 eq("jewelry004: four rows", table.getn(jew004.items), 4)
 eq("jewelry004: chosen not insignia", jew004.items[1].name ~= "部落徽记", true)
 eq("jewelry004: chosen rank unknown", jew004.items[1].rank, nil)
-eq("jewelry004: insignia keeps source rank", jew004.items[2].rank, 54)
+eq("jewelry004: insignia amount is not an enhancement", jew004.items[2].rank, nil)
 eq("jewelry004: quick_strike not accuria", jew004.items[3].name ~= "埃库利亚指环", true)
-eq("jewelry004: accuria keeps source rank", jew004.items[4].rank, 520)
+eq("jewelry004: accuria amount is not an enhancement", jew004.items[4].rank, nil)
 -- Event curses expire as notifications, not at run end.
 AZS_GetRunTime = function() return 200 end
 AZS_BANNERS = { { 57, "curse", nil, "", "诅咒降临：精英正在伏击你！", 1239 } }
@@ -1072,6 +1072,73 @@ for _, sentEarly in ipairs({ false, true }) do
 	compatHandlers.AZSZONE()
 	eq("run boundary: stage sharing run ID keeps accepted data", SurvivorUI_RebornAbilities().complete, true)
 end
+
+-- Minimal field projection from the truncated 0.8.0 capture, with neutral names.
+resetGame()
+AZS_RequestAbilities = function() end
+AZS_GEN = { itemRules = {} }
+AZS_ZONE = { run = "azs:r12345678" }
+AZS_RUN = { ph = "playing" }
+local meterRequests = 0
+AZS_GetMeterLoadout = function()
+	meterRequests = meterRequests + 1
+	return { runJewelry = {}, sources = { ["jewel:trinket"] = { rank = 245 } } }
+end
+local sample033 = {
+	{ slot = "ring", bonus = "dragonslayer", name = "Test Ring", icon = "INV_Jewelry_Ring_41", rarity = 4, amount = 57, text = "暴击几率+56.6%" },
+	{ slot = "trinket", bonus = "chosen", name = "Test Trinket", rarity = 2, amount = 69, text = "幸运+69.3%" },
+	{ slot = "trinket", bonus = "blackhand", name = "Test Trinket", rarity = 4, amount = 245, text = "暴击伤害+245%" },
+	{ slot = "ring", bonus = "accuria", name = "Test Ring", rarity = 4, amount = 296, text = "伤害+296.2%" },
+	{ slot = "amulet", bonus = "south_seas_kelp", name = "Test Amulet", rarity = 0, amount = 5, text = "幸运+75.6% · 金币+63%" },
+}
+AZS_GEAR = sample033
+compatHandlers.AZSGEAR()
+eq("native jewelry: stale table before zone is unavailable", SurvivorUI_RebornJewelry().source, "none")
+compatHandlers.AZSZONE()
+eq("native jewelry: retained table after zone is unavailable", SurvivorUI_RebornJewelry().source, "none")
+compatHandlers.AZSGEAR()
+local native = SurvivorUI_RebornJewelry()
+eq("native jewelry: current World feed takes precedence", native.source, "gear")
+eq("native jewelry: five items including collided names", #native.items, 5)
+eq("native jewelry: slot + bonus identity", native.items[4].instanceKey, "gear:ring:accuria")
+eq("native jewelry: amount stays an amount", native.items[3].amount, 245)
+eq("native jewelry: count remains unknown", native.items[3].rank, nil)
+eq("native jewelry: decimal localized effect", native.items[4].effect, "伤害+296.2%")
+eq("native jewelry: two localized effects", native.items[5].effect, "幸运+75.6% · 金币+63%")
+eq("native jewelry: native icon normalized", native.items[1].icon, "Interface\\Icons\\INV_Jewelry_Ring_41")
+AZS_GEAR = { sample033[3], sample033[3], { name = "Unknown effect", amount = 3 } }
+compatHandlers.AZSGEAR()
+native = SurvivorUI_RebornJewelry()
+eq("native jewelry: ambiguous duplicate stays separate", #native.items, 3)
+eq("native jewelry: missing effects yield partial", native.complete, false)
+eq("native jewelry: no numeric effect fallback", native.items[3].effect, nil)
+AZS_GEAR = {}
+compatHandlers.AZSGEAR()
+native = SurvivorUI_RebornJewelry()
+eq("native jewelry: explicit empty replaces complete/partial immediately", #native.items, 0)
+eq("native jewelry: explicit empty is known", native.complete, true)
+eq("native jewelry: Meter cannot backfill known empty or unknown", meterRequests, 0)
+
+AZS_ARMOR = { { slot = 8, name = "Worn weapon" } }
+compatHandlers.AZSARMOR()
+AZS_END_LOOT = { { rarity = 4, name = "Reward" } }
+compatHandlers.AZSENDLOOT()
+eq("equipment: final is unavailable during pending notification", SurvivorUI_RebornEquipmentObservations().finalLoot, nil)
+compatHandlers.AZSEND()
+eq("equipment: final after matching end", SurvivorUI_RebornEquipmentObservations().finalLoot[1].name, "Reward")
+AZS_RUN.endless = 1
+compatHandlers.AZSRUN()
+eq("equipment: Endless start invalidates prior victory rewards", SurvivorUI_RebornEquipmentObservations().finalLoot, nil)
+AZS_ZONE = { run = "azs:r12345679" }
+compatHandlers.AZSZONE()
+eq("equipment: previous-run armor excluded", SurvivorUI_RebornEquipmentObservations().armor, nil)
+eq("native jewelry: previous-run empty is no longer known", SurvivorUI_RebornJewelry().source, "none")
+AZS_GEAR = sample033
+compatHandlers.AZSGEAR()
+eq("native jewelry: replacement in next run accepted", #SurvivorUI_RebornJewelry().items, 5)
+SurvivorUI_RebornForgetRun()
+eq("native jewelry: reinitialization waits for fresh native snapshot", SurvivorUI_RebornJewelry().source, "none")
+AZS_GEN, AZS_GEAR, AZS_ARMOR, AZS_END_LOOT = nil, nil, nil, nil
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

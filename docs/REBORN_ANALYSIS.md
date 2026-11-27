@@ -1,12 +1,12 @@
 # Reborn analysis
 
-Open SurvivorUI Options → Level Up! → Reborn analysis. The master switch is off on fresh and existing configurations. Enabling it shows Card values, Campaign pressure reference, and Live Build observations unless those switches were turned off individually. Experimental growth advice is off by default. Research diagnostics is independent of the master switch and requires an active Reborn recording.
+Open SurvivorUI Options → Level Up! → Reborn analysis. The master switch is off by default. It controls available card details and live observations. The 0.7.4 Campaign reference is archived. The random-equipment client withholds theoretical skill estimates and experimental mitigation recommendations. Research diagnostics is independent of the master switch and requires an active Reborn recording.
 
 ## Output
 
 - **Card values** are appended to supported native offers. A matching, already learned skill can show the server's damage bonus preview and an ideal cooldown. A single matching native meter row can illustrate the hypothetical whole-build DPS increase if that entire row scales. The preview assumes unchanged target supply and cast availability. The native meter cannot separate every trigger from the skill row. Multiple matching rows and unsupported lines withhold this number.
 - **Jewelry previews** preserve native before and after values and show the displayed item's difference for supported numeric lines. A known capped stat can show its remaining character-wide headroom. A piece's difference is not a character-wide stat delta. Replacements with incomplete information keep the game's comparison. Set bonuses, proc uptime, pet damage, and modifier stacking are not inferred.
-- **Campaign pressure** is on the existing run tracker header tooltip. Public zone factors and first/final boss templates are compared with Naxxramas Normal. Standard Campaign difficulty factors are taken from 0.7.4. The reference does not model optional challenges, affixes, extra creatures, boss scripts, clock-dependent scaling, or alternate modes.
+- **Campaign pressure (historical)** compared static enemy and boss factors to Naxxramas Normal. The 0.7.4 reference remains in the repository for offline regressions.
 - **Live Build observations** add sampled low health, enemy count, kills, damage taken, growth, and a recent effective DPS window when available. Boss HP loss is a net change of one identifiable boss. A window crossing a known boss/zone boundary is withheld. Build snapshots do not expose exact spawn health, cooldown downtime, effective shields, or a complete overkill breakdown.
 - **Experimental advice** may suggest a single supported mitigation option during repeated low health with observed incoming damage. Enemy buildup appears as an observation. Unverified meter attribution is excluded from card ranking. Disabling the Card values display leaves the model callable by the advisor.
 

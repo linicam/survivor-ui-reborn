@@ -54,6 +54,15 @@ ever read `rift` / `nbm` / `nbs`. Boss *health* was the healthy part: it
 is a live lookup in `AZS_UNITS` by name, and it is preserved unchanged.
 
 ### In-run jewelry
+
+For the 0.8.0 random-equipment client, native `AZSGEAR` messages supply
+`AZS_GEAR` as the current run's per-item snapshot. The Build List and new Run
+History records preserve each row and its localized effect. An explicit empty
+snapshot is authoritative. A missing or partial snapshot is shown as such.
+Native item identifiers use slot plus bonus, which is also the tuple used by
+the native Meter loadout. Meter source ranks can encode effect amounts.
+Enhancement counts are omitted until there is an authoritative count source.
+The following notes describe the earlier Meter-based implementation.
 Zero AZS integration. Both jewelry surfaces read WoW inventory slots
 via `GetInventoryItemLink` + `GameTooltip:SetInventoryItem` scraping,
 keyed by link text and Roman-numeral rank suffixes. If Reborn jewelry

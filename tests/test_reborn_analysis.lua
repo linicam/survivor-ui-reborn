@@ -135,6 +135,14 @@ assert(not string.find(analysis.CardText(1), "DPS", 1, true), "duplicate matchin
 ambiguous = nil
 analysis.AddTrackerTooltip(tooltip)
 assert(#lines > 3)
+SurvivorUIDB.rebornAnalysis.map = true
+function SurvivorUI_RebornRandomGear() return true end
+local previouslyMeasured = #lines
+assert(not analysis.CardText(1), "0.8.0 withholds theoretical skill advice")
+analysis.AddTrackerTooltip(tooltip)
+assert(#lines > previouslyMeasured, "measured observations remain")
+for _, line in ipairs(lines) do assert(not line:find("Campaign reference", 1, true)) end
+SurvivorUI_RebornRandomGear = nil
 analysis.Toggle("cards")
 analysis.Toggle("advisor")
 for time = 30, 45, 5 do tick(time, 65, 25) end

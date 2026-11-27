@@ -268,11 +268,17 @@ local function Snapshot(phase)
 	if SurvivorUI_BuildSnapshot then
 		record.build, record.buildComplete = SurvivorUI_BuildSnapshot()
 	end
-	record.gear = SurvivorUI_GearSnapshot and SurvivorUI_GearSnapshot() or nil
-	if SurvivorUI_ArmorSnapshot then
-		record.armor, record.armorSet = SurvivorUI_ArmorSnapshot()
+	if SurvivorUI_GearSnapshot then
+		record.gear, record.gearStatus = SurvivorUI_GearSnapshot()
 	end
-	record.loot = SurvivorUI_LootList and SurvivorUI_LootList(12) or {}
+	if SurvivorUI_ArmorSnapshot then
+		record.armor, record.armorSet, record.armorStatus = SurvivorUI_ArmorSnapshot()
+	end
+	if SurvivorUI_RebornFinalLootSnapshot and SurvivorUI_RebornActive() then
+		record.loot, record.lootStatus = SurvivorUI_RebornFinalLootSnapshot()
+	else
+		record.loot = SurvivorUI_LootList and SurvivorUI_LootList(12) or {}
+	end
 	-- Its marks and each boss's, as the loot list's title has them (LootLog.lua).
 	record.marks = SurvivorUI_RunMarks and SurvivorUI_RunMarks() or nil
 	-- The hero's numbers (the Stats panel's), every one, as they stand.
@@ -443,8 +449,20 @@ local function Keep(record)
 				if saved.buildComplete ~= true and record.buildComplete == true then
 					saved.build, saved.buildComplete = record.build, true
 				end
+				if saved.gearStatus and (record.gearStatus == "observed"
+					or (saved.gearStatus == "unavailable" and record.gearStatus == "partial")) then
+					saved.gear, saved.gearStatus = record.gear, record.gearStatus
+				end
+				if saved.armorStatus == "unavailable" and record.armorStatus == "partial" then
+					saved.armor, saved.armorStatus = record.armor, record.armorStatus
+				end
+				if saved.lootStatus == "unavailable" and record.lootStatus and record.lootStatus ~= "unavailable" then
+					saved.loot, saved.lootStatus = record.loot, record.lootStatus
+				end
 				for key, value in pairs(record) do
-					if saved[key] == nil and key ~= "buildComplete" then saved[key] = value end
+					local historicPayload = (key == "gearStatus" and saved.gear)
+						or (key == "armorStatus" and saved.armor) or (key == "lootStatus" and saved.loot)
+					if saved[key] == nil and key ~= "buildComplete" and not historicPayload then saved[key] = value end
 				end
 				return saved
 			end
@@ -543,7 +561,8 @@ local function Settle(summary)
 				or (result ~= "victory" and Settings().historyWhich == "victories") then return end
 			moment = Keep({ rebornRunId = summaryId, summaryOnly = true, buildComplete = false,
 				hero = "?", zone = "?", at = time(), when = date("%Y-%m-%d %H:%M"),
-				result = result, build = {}, time = Num(summary.t), kills = Num(summary.kills) })
+				result = result, build = {}, time = Num(summary.t), kills = Num(summary.kills),
+				gearStatus = "unavailable", armorStatus = "unavailable", lootStatus = "unavailable" })
 		end
 	elseif moment and moment.buildComplete == false and currentId and moment.rebornRunId == currentId
 		and not (Num(summary.endl) == 1 and result ~= "victory") then
@@ -564,6 +583,21 @@ local function Settle(summary)
 	end
 	if not moment then
 		return
+	end
+	if currentId and moment.rebornRunId == currentId then
+		if moment.gearStatus == "unavailable" or moment.gearStatus == "partial" then
+			local gear, status
+			if SurvivorUI_GearSnapshot then gear, status = SurvivorUI_GearSnapshot() end
+			if status == "observed" or (moment.gearStatus == "unavailable" and status == "partial") then
+				moment.gear, moment.gearStatus = gear, status
+			end
+		end
+		if moment.armorStatus == "unavailable" and SurvivorUI_ArmorSnapshot then
+			moment.armor, moment.armorSet, moment.armorStatus = SurvivorUI_ArmorSnapshot()
+		end
+		if moment.lootStatus == "unavailable" and SurvivorUI_RebornFinalLootSnapshot then
+			moment.loot, moment.lootStatus = SurvivorUI_RebornFinalLootSnapshot()
+		end
 	end
 	for field, key in pairs(SUMMARY_FIELDS) do
 		if summary[key] ~= nil then
@@ -3052,6 +3086,11 @@ local function GearLine(index)
 		-- Its piece's tooltip, from the link kept.
 		line:EnableMouse(true)
 		line:SetScript("OnEnter", function()
+			if this.runJewelry then
+				Aside(this, 2)
+				SurvivorUI_ShowRunJewelryTooltip(this.runJewelry)
+				return
+			end
 			if ShowKept(this, this.tip, 2) then
 				return
 			end
@@ -3177,7 +3216,7 @@ end
 function gearDraw.DrawArmor(run, top)
 	local armor = run.armor or {}
 	local count = table.getn(armor)
-	if count == 0 then
+	if count == 0 and not run.armorStatus then
 		buildBox.armorTitle:Hide()
 		buildBox.armorSet:Hide()
 		HideAll(buildBox.armor, 1)
@@ -3187,14 +3226,20 @@ function gearDraw.DrawArmor(run, top)
 	buildBox.armorTitle:SetPoint("TOPLEFT", buildBox, "TOPLEFT", 7, -top)
 	buildBox.armorTitle:Show()
 	-- The set as the tooltips said it; else as the names share it.
-	local kept = run.armorSet
-	local set, worn = gearDraw.SetOf(armor)
-	if kept and kept.name then
-		set, worn = kept.name, kept.count
+	if run.armorStatus then
+		buildBox.armorSet:SetText(SurvivorUI_T(run.armorStatus == "partial" and "Partial snapshot" or "Unavailable"))
+	else
+		local kept = run.armorSet
+		local set, worn = gearDraw.SetOf(armor)
+		if kept and kept.name then set, worn = kept.name, kept.count end
+		buildBox.armorSet:SetText(set and set.."  "..worn.."/"..(kept and kept.of or 8) or "")
 	end
-	buildBox.armorSet:SetText(set and set.."  "..worn.."/"..(kept and kept.of or 8) or "")
 	buildBox.armorSet:SetTextColor(0.85, 0.85, 0.88)
 	buildBox.armorSet:Show()
+	if count == 0 then
+		HideAll(buildBox.armor, 1)
+		return top + 16
+	end
 	-- As large as the row lets them be; the weapons a little apart.
 	local size = math.min(gearDraw.ICON, math.floor((INNER - 4) / count) - 2)
 	local apart = count * (size + 2) + 4 <= INNER and 4 or 0
@@ -3206,7 +3251,8 @@ function gearDraw.DrawArmor(run, top)
 		icon:SetHeight(size)
 		local color = piece.color or WHITE
 		local before = armor[index - 1]
-		if (piece.slot or 0) >= 16 and before and (before.slot or 0) < 16 then
+		local weapon = run.armorStatus and 8 or 16
+		if (piece.slot or 0) >= weapon and before and (before.slot or 0) < weapon then
 			x = x + apart
 		end
 		icon.item, icon.itemName, icon.tip, icon.color = piece.item, piece.name, piece.tip, color
@@ -3319,11 +3365,21 @@ local function DrawBuild(run)
 
 	-- The jewelry, a line a slot.
 	local gear = GearLines(run)
-	local lines = math.max(table.getn(gear), table.getn(GEAR_SLOT_NAMES))
+	local lines = run.gearStatus and table.getn(gear) or math.max(table.getn(gear), table.getn(GEAR_SLOT_NAMES))
+	local gearTitle = "Jewelry"
+	if run.gearStatus == "unavailable" then
+		gearTitle = "Run jewelry unavailable"
+	elseif run.gearStatus == "partial" then
+		gearTitle = "Run jewelry (partial)"
+	elseif run.gearStatus == "observed" and lines == 0 then
+		gearTitle = "No run jewelry"
+	end
+	buildBox.gearTitle:SetText(SurvivorUI_T(gearTitle))
 	for index = 1, lines do
 		local piece = gear[index] or { label = GEAR_SLOT_NAMES[index], empty = true }
 		local line = GearLine(index)
 		line.item, line.itemName, line.tip = piece.item, piece.name, piece.tip
+		line.runJewelry = piece.runJewelry and piece or nil
 		if piece.empty then
 			line.wash:SetVertexColor(0.5, 0.5, 0.55, 0.06)
 			Tint(line.edges, { 0.5, 0.5, 0.55 }, 0.15)
@@ -3348,7 +3404,11 @@ local function DrawBuild(run)
 			-- Its slot and rank ("Ring  I", "Trinket  III"), as the build list
 			-- reads (Lucas, 2026-11-08: "fica mais organizado"); its name is in
 			-- its tooltip.
-			gearDraw.FitLine(line, SurvivorUI_GearWords(piece.label or piece.name or ""), SurvivorUI_GearWords(piece.tags or "-"))
+			if piece.runJewelry then
+				gearDraw.FitLine(line, piece.label, SurvivorUI_RunJewelrySummary(piece))
+			else
+				gearDraw.FitLine(line, SurvivorUI_GearWords(piece.label or piece.name or ""), SurvivorUI_GearWords(piece.tags or "-"))
+			end
 			line.label:SetTextColor(color[1], color[2], color[3])
 			line.tags:SetTextColor(0.85, 0.85, 0.88)
 		end
@@ -3694,6 +3754,7 @@ function lootBox.More()
 end
 
 local function DrawLoot(run)
+	lootBox.title:SetText(SurvivorUI_T(run.lootStatus and "Final rewards" or "Loot"))
 	local loot = run.loot or {}
 	local shown = table.getn(loot)
 	if shown > lootBox.SHOWN + 1 then
@@ -3746,7 +3807,18 @@ local function DrawLoot(run)
 	else
 		lootBox.marks:Hide()
 	end
-	local height = Nothing(lootBox, table.getn(loot) == 0 and SurvivorUI_T("Nothing dropped.") or nil)
+	local note
+	if run.lootStatus == "unavailable" then
+		note = "Final rewards unavailable"
+	elseif run.lootStatus == "partial" then
+		note = "Partial reward snapshot"
+	elseif table.getn(loot) == 0 then
+		note = run.lootStatus and "No final rewards reported" or "Nothing dropped."
+	end
+	lootBox.none:ClearAllPoints()
+	lootBox.none:SetPoint("TOPLEFT", lootBox, "TOPLEFT", 8, -TOP - lines * ROW - 2)
+	local height = Nothing(lootBox, note and SurvivorUI_T(note))
+	if note and shown > 0 then height = height + lines * ROW end
 	return math.max(height, TOP + lines * ROW + 6)
 end
 
@@ -3898,7 +3970,8 @@ function statsPanel.Row(index)
 			GameTooltip:AddLine(this.tipText, 0.62, 0.62, 0.68, 1)
 			-- Its parts as the run stood: the gear worn, and the rest.
 			if this.gear then
-				GameTooltip:AddDoubleLine(SurvivorUI_T("Worn gear"), this.gear, 0.12, 1, 0, 0.12, 1, 0)
+				GameTooltip:AddDoubleLine(SurvivorUI_T(this.rebornStats and "Run jewelry contribution" or "Worn gear"),
+					this.gear, 0.12, 1, 0, 0.12, 1, 0)
 				if this.rest then
 					GameTooltip:AddDoubleLine(SurvivorUI_T("Everything else"), this.rest, 0.62, 0.62, 0.65, 0.85, 0.85, 0.85)
 				end
@@ -3919,8 +3992,8 @@ function statsPanel.Draw(run)
 		return Nothing(box, SurvivorUI_T("Not kept for runs before v3.0.12."))
 	end
 	Nothing(box, nil)
-	-- A number the game had not sent reads as 0, as in the Stats panel.
-	local stats = setmetatable({}, { __index = function(_, key) return kept[key] or 0 end })
+	local reborn = run.rebornRunId ~= nil or run.gearStatus ~= nil
+	local stats = reborn and kept or setmetatable({}, { __index = function(_, key) return kept[key] or 0 end })
 	local used, y = 0, TOP
 	local function Place(height, label, value, color, tip)
 		used = used + 1
@@ -3941,9 +4014,14 @@ function statsPanel.Draw(run)
 		local lines = {}
 		for each = 1, table.getn(section.rows) do
 			local entry = section.rows[each]
-			local ok, text = pcall(entry[2], stats)
+			local ok, text
+			if reborn and tonumber(stats[entry[4]]) == nil then
+				ok, text = true, "-"
+			else
+				ok, text = pcall(entry[2], stats)
+			end
 			text = ok and text and tostring(text)
-			if text and string.find(text, "[1-9]") then
+			if text and (reborn or string.find(text, "[1-9]")) then
 				table.insert(lines, { entry[1], text, entry[3] })
 			end
 		end
@@ -3961,7 +4039,8 @@ function statsPanel.Draw(run)
 				local row = Place(statsPanel.LINE, SurvivorUI_StatName and SurvivorUI_StatName(line[1]) or line[1],
 					line[2], color, line[3])
 				if SurvivorUI_StatGear then
-					row.gear, row.rest = SurvivorUI_StatGear(line[1], kept)
+					row.rebornStats = reborn
+					row.gear, row.rest = SurvivorUI_StatGear(line[1], kept, row.rebornStats)
 				end
 				row.wash:SetVertexColor(color[1], color[2], color[3], 0.07)
 				row.rule:SetVertexColor(color[1], color[2], color[3], 0.2)
