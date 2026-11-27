@@ -228,13 +228,65 @@ do
 		local chosen = solved.affordable or solved
 		assert(solved.minimumTargetCost == 408 and solved.complete and chosen.complete)
 		assert(chosen.gold == (budget < 408 and 0 or 408) and (chosen.outputPressure <= 100) == (budget >= 408))
-end
-local meets = Finish(P.Search(cat, outputCase, outputActual, outputRef, nil, 5000, P.Policy({ budget = 20000, target = 150 })))
-assert(meets.minimumTargetCost == 0 and meets.gold == 0 and meets.maxGear.gold > 0)
-local truncated = Finish(P.Search(cat, outputCase, outputActual, outputRef, nil, 1, P.Policy({ budget = 1200, target = 80 })))
-assert(not truncated.complete and not truncated.unreachable and not truncated.affordable.complete and truncated.affordable.gold <= 1200)
+	end
+	local meets = Finish(P.Search(cat, outputCase, outputActual, outputRef, nil, 5000, P.Policy({ budget = 20000, target = 150 })))
+	assert(meets.minimumTargetCost == 0 and meets.gold == 0 and meets.maxGear.gold > 0)
+	for _, target in ipairs({ 80, 100 }) do
+		local truncated = Finish(P.Search(cat, outputCase, outputActual, outputRef, nil, 1, P.Policy({ budget = 9520, target = target })))
+		assert(not truncated.complete and not truncated.unreachable and not truncated.affordable.complete)
+		assert(truncated.visited == 1 and truncated.affordable.visited == 1 and truncated.minimumTargetCost == nil)
+		assert(truncated.gold == 9520 and truncated.outputPressure < 104)
+		assert(truncated.affordable.gold == truncated.gold and truncated.affordable.outputPressure == truncated.outputPressure,
+			"R25: both cutoffs must retain the feasible seed already scored by the unrestricted pass")
+	end
+	local upgraded = { outputCase.pieces[1], Item("main_hand", "common", 1) }
+	local exactTarget = P.Difficulty(outputCase.demand, Eval(upgraded), outputRef).output
+	local scored = Finish(P.Search(cat, outputCase, outputActual, outputRef, nil, 4,
+		P.Policy({ budget = 9520, target = exactTarget })))
+	assert(scored.gold == 408 and scored.outputPressure == exactTarget and scored.affordable.gold == 408)
+	assert(not scored.complete and not scored.affordable.complete and scored.minimumTargetCost == nil)
+	local overBudget = Finish(P.Search(cat, outputCase, outputActual, outputRef, nil, 1, P.Policy({ budget = 1200, target = 80 })))
+	assert(not overBudget.complete and not overBudget.affordable.complete and overBudget.affordable.gold <= 1200)
 end
 AZS_GEN.pieces.slots[0].stats = headStats
+
+-- Two upgradeable slots. Independently price and evaluate each end state at
+-- the 100% display snap, where different raw damage can give equal output.
+local function OraclePressureSnap()
+	local main = AZS_GEN.pieces.slots[8]
+	local beforeMain, beforeHead = main.stats, AZS_GEN.pieces.slots[0].stats
+	local common = cat.tiers.common
+	local step, last = common.step, common.last
+	common.step, common.last = 0.1, 0
+	main.stats, AZS_GEN.pieces.slots[0].stats = { { "damage", 2e-7 } }, { { "damage", 1e-7 } }
+	local context = P.Copy(source)
+	context.pieces = { Item("head", "common", 0), Item("main_hand", "common", 3) }
+	local actualGear = Eval(context.pieces)
+	local reference = P.Reference(context, actualGear)
+	context.demand.output = reference.demand.output * (1 + 1.65e-8)
+	local bestGold, bestPressure
+	for head = 0, 5 do
+		for weapon = 3, 5 do
+			local gold = 0
+			for star = 1, head do gold = gold + priceTable.common[star] end
+			for star = 4, weapon do gold = gold + priceTable.common[star] end
+			if gold <= 2720 then
+				local pressure = P.Difficulty(context.demand, Eval({ Item("head", "common", head),
+					Item("main_hand", "common", weapon) }), reference).output
+				if not bestPressure or pressure < bestPressure or (pressure == bestPressure and gold < bestGold) then
+					bestGold, bestPressure = gold, pressure
+				end
+			end
+		end
+	end
+	local solved = Finish(P.Search(cat, context, actualGear, reference, nil, 5000, P.Policy({ target = 99, budget = 2720 })))
+	assert(bestPressure == 100 and bestGold == 408)
+	assert(solved.affordable.complete and solved.affordable.outputPressure == bestPressure and solved.affordable.gold == bestGold,
+		"the budget bound must retain cheaper configurations tied at the snapped pressure")
+	common.step, common.last = step, last
+	main.stats, AZS_GEN.pieces.slots[0].stats = beforeMain, beforeHead
+end
+OraclePressureSnap()
 
 -- Independent exhaustive oracle: every available star combination is evaluated
 -- with the public full-configuration evaluator, then ordered by the contract.
@@ -299,6 +351,13 @@ local stars = Finish(P.Search(cat, farming, farmingActual, farmingReference, nil
 local drops = Finish(P.Search(cat, farming, farmingActual, farmingReference, { exotic = true }, 2000))
 local _, acquisition = P.Changes(cat, farming.pieces, drops.pieces, { exotic = true }, "warlock")
 assert(stars.complete and stars.outputPressure > 100 and drops.complete and drops.outputPressure <= 100 and drops.gold == 0 and acquisition.acquisition)
+do
+	local fallback = Finish(P.Search(cat, farming, farmingActual, farmingReference, { exotic = true }, 1,
+		P.Policy({ budget = 0 })))
+	local _, quote = P.Changes(cat, farming.pieces, fallback.affordable.pieces, { exotic = true }, "warlock")
+	assert(not fallback.complete and not fallback.affordable.complete and not fallback.minimumTargetCost)
+	assert(fallback.affordable.gold == 0 and fallback.affordable.outputPressure <= 100 and quote.acquisition and not quote.unknown)
+end
 
 -- Oracle for a mixed-tier plan. Use one reachable and one unreachable target,
 -- with a four-piece combat effect protected and different HP/armor choices.
@@ -1016,6 +1075,13 @@ do
 	Click("Show equipment")
 	Enter("budget", "-1")
 	assert(Find("FontString", "Enter whole gold") and SurvivorUIDB.rebornGear.budget == 0)
+	Input("budget"):ClearFocus()
+	assert(Input("budget"):GetText() == "0" and not Find("FontString", "Enter whole gold"),
+		"blurring an invalid edit must restore the committed budget")
+	Input("budget").scripts.OnEditFocusGained()
+	Input("budget"):SetText("12345")
+	Input("budget").scripts.OnEscapePressed()
+	assert(VisiblePanel():IsShown() and Input("budget"):GetText() == "0" and searchCalls == beforeSettings + 6)
 	Enter("budget", "")
 	Click("Protect sets: Off")
 	Click("Reset")
@@ -1031,6 +1097,22 @@ Armor({ head })
 DrainSearch()
 assert(Find("FontString", "reachability unproven"))
 assert(Find("Button", "Economy").lit and Find("Button", "Max Gear reference"))
+do
+	Enter("budget", "1000000")
+	DrainSearch()
+	Click("Plan B · Stars only")
+	assert(planB.lines[3].text:find("Budget search incomplete", 1, true))
+	assert(not planB.lines[4].text:find("Best priced output within budget", 1, true))
+	local spent = assert(planB.lines[2].text:match("(%d+) gold"))
+	assert(tonumber(spent) > 0)
+	local pressure = StatCells(Named("Results"), "Output pressure")[2].text
+	assert(pressure ~= StatCells(Named("Results"), "Output pressure")[1].text)
+	Click("Load in Simulator")
+	assert(Find("FontString", "Calculable upgrade gold: " .. spent))
+	assert(StatCells(Named("Results"), "Output pressure")[2].text == pressure)
+	Click("Difficulty & Upgrade Planner")
+	Enter("budget", "")
+end
 searchLimit = nil
 local uiHeadStats = AZS_GEN.pieces.slots[0].stats
 AZS_GEN.pieces.slots[0].stats = { { "hp", 30 } }
@@ -1072,6 +1154,27 @@ Click("Load in Simulator")
 assert(StatCells(effectsPane.scrollChild, "Health")[2].text == economyHP and searchCalls == bSearches)
 assert(Find("FontString", "Calculable upgrade gold: " .. economyGold))
 Click("Difficulty & Upgrade Planner")
+do
+	local starQuote = G.StarQuote
+	G.StarQuote = function(catalog, slot, tier, star)
+		if tier == "legendary" and star == 5 then return end
+		return starQuote(catalog, slot, tier, star)
+	end
+	Zone("shadowmoon", 5, "warlock", "unpriced-ceiling")
+	Armor({ head, { slot = 8, rarity = 4, stars = 0 } })
+	DrainSearch()
+	Click("Plan B · Stars only")
+	assert(planB.lines[4].text:find("Unpriced options excluded", 1, true))
+	Click("Max Gear")
+	assert(planB.lines[2].text:find("gold known", 1, true))
+	assert(planB.lines[4].text:find("Additional price unavailable", 1, true)
+		and not planB.lines[4].text:find("Unpriced options excluded", 1, true),
+		"Max Gear can include steps with incomplete quotes")
+	Click("Execution order")
+	assert(Find("FontString", "Additional price unavailable"))
+	Click("Show equipment")
+	G.StarQuote = starQuote
+end
 AZS_GEN.pieces.slots[0].stats = uiHeadStats
 AZS_ZONE.affixes = { "Sanguine", "Explosive" }
 handlers.AZSZONE()

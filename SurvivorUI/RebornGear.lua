@@ -1054,13 +1054,19 @@ local function PlanFlags(plan, variant, quote, output)
 		if plan.budget and plan.minimumTargetCost > plan.budget then
 			table.insert(flags, F("Shortfall: %d", plan.minimumTargetCost - plan.budget))
 		end
-	elseif plan.outputPressure <= plan.target and plan.minimumTargetCost == nil then
-		table.insert(flags, F("Target star gold found: %d", plan.gold))
+	elseif plan.minimumTargetCost == nil then
+		local found = plan.outputPressure <= plan.target and plan.gold
+		local affordable = plan.affordable
+		if affordable and affordable.outputPressure <= plan.target then
+			found = found and math.min(found, affordable.gold) or affordable.gold
+		end
+		if found then table.insert(flags, F("Target star gold found: %d", found)) end
 	end
 	if plan.budget and variant == "economy" then table.insert(flags, F("Modeled budget left: %d", plan.budget - quote.gold)) end
 	if quote.acquisition then table.insert(flags, T("Drops required · gold covers stars")) end
 	if quote.estimated then table.insert(flags, T("Price estimated")) end
-	if plan.excluded then table.insert(flags, T("Unpriced options excluded")) end
+	if quote.unknown then table.insert(flags, T("Additional price unavailable"))
+	elseif plan.excluded and variant == "economy" then table.insert(flags, T("Unpriced options excluded")) end
 	if plan.unverifiedDrops then table.insert(flags, T("Unverified drops excluded")) end
 	if plan.unreachable and variant == "economy" and not plan.budget then table.insert(flags, T("Best priced output")) end
 	if plan.affordable and plan.affordable.complete and variant == "economy" and output > plan.target then
@@ -1515,18 +1521,22 @@ local function NumericInput(key, width, minimum, maximum, integer, errorText)
 	box:SetBackdrop(BORDER)
 	box:SetBackdropColor(0.12, 0.13, 0.16, 1)
 	box:SetBackdropBorderColor(0.38, 0.38, 0.43, 1)
+	local function ClearEditFocus()
+		box.editing, inputError = nil, nil
+		box:ClearFocus()
+	end
 	box:SetScript("OnEditFocusGained", function()
 		box.editing = true
 		inputError = "Press Enter to apply."
 		render()
 	end)
 	box:SetScript("OnEditFocusLost", function()
-		box.editing = nil
-		inputError = nil
+		if not box.editing then return end
+		box.editing, inputError = nil, nil
+		render()
 	end)
 	box:SetScript("OnEscapePressed", function()
-		box:ClearFocus()
-		inputError = nil
+		ClearEditFocus()
 		render()
 	end)
 	box:SetScript("OnEnterPressed", function()
@@ -1537,8 +1547,7 @@ local function NumericInput(key, width, minimum, maximum, integer, errorText)
 			render()
 			return
 		end
-		box:ClearFocus()
-		inputError = nil
+		ClearEditFocus()
 		local config = Settings()
 		if Planner.Policy(config)[key] ~= value then
 			config[key] = value

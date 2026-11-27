@@ -465,6 +465,10 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit, pol
 	local need, consume = SetState(requirements)
 	local ratio = context.demand.output / reference.demand.output
 	local function AtDamage(damage) return Pressure(ratio, reference.output, 1 + damage) end
+	local function DamageForPressure(pressure)
+		-- An entire interval reports 100%. Its least Damage is the safe bound.
+		return 100 * ratio * reference.output / (pressure + (pressure == 100 and EPS or 0)) - 1
+	end
 
 	result.worker = coroutine.create(function()
 		-- Native slot order makes equal-quality Max Gear choices reproducible.
@@ -480,6 +484,23 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit, pol
 		end)
 		local best = Suffix(groups, "priced", consume)
 		local root = assert(best(1, need), "No legal completion for the worn setup")
+		local affordable = budget and { outputPressure = current, gold = 0, acquisitionRank = 0,
+			pieces = result.pieces, visited = 0 }
+		local affordableDamage = DamageForPressure(current)
+		local function ConsiderAffordable(pressure, gold, rank, choices, pieces)
+			if not affordable or gold > budget then return end
+			local meets, hadTarget = pressure <= targetOutput, affordable.outputPressure <= targetOutput
+			local cheaper = Cheaper(gold, rank, affordable.gold, affordable.acquisitionRank)
+			if (meets and (not hadTarget or cheaper))
+				or (not meets and not hadTarget and (pressure < affordable.outputPressure
+					or (pressure == affordable.outputPressure and cheaper))) then
+				pieces = pieces or Pieces(choices)
+				affordable.outputPressure, affordable.gold, affordable.acquisitionRank = pressure, gold, rank
+				affordable.pieces = pieces
+				affordableDamage = DamageForPressure(meets and targetOutput or pressure)
+				return pieces
+			end
+		end
 		local seed = ReadPath(groups, best, need, consume)
 		local seedGold, seedRank = 0, 0
 		for _, option in ipairs(seed) do
@@ -487,6 +508,7 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit, pol
 		end
 		local seedPieces = Pieces(seed)
 		local seedOutput = Planner.Difficulty(context.demand, Planner.Evaluate(catalog, context.class, seedPieces), reference).output
+		ConsiderAffordable(seedOutput, seedGold, seedRank, seed, seedPieces)
 		if seedOutput <= targetOutput or seedOutput < current - EPS then
 			result.outputPressure, result.gold, result.acquisitionRank, result.pieces = seedOutput, seedGold, seedRank, seedPieces
 		end
@@ -496,7 +518,7 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit, pol
 		local guard = 1e-10
 		local bestPressure = AtDamage(root.damage)
 		local target = (bestPressure <= targetOutput or seedOutput <= targetOutput) and targetOutput or bestPressure + EPS
-		local requiredDamage = 100 * ratio * reference.output / (target + (targetOutput == 100 and target == 100 and EPS or 0)) - 1
+		local requiredDamage = DamageForPressure(target)
 		local prices = PriceBounds(groups)
 		local path = {}
 		local function Visit(i, remaining, gold, rank, damage)
@@ -512,8 +534,11 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit, pol
 			local group = groups[i]
 			if not group then
 				local pressure = AtDamage(damage)
+				-- The unrestricted tolerance and the budget objective can rank
+				-- a scored configuration differently.
+				local pieces = ConsiderAffordable(pressure, gold, rank, path)
 				if pressure <= target then
-					result.outputPressure, result.gold, result.acquisitionRank, result.pieces = pressure, gold, rank, Pieces(path)
+					result.outputPressure, result.gold, result.acquisitionRank, result.pieces = pressure, gold, rank, pieces or Pieces(path)
 				end
 				return true
 			end
@@ -535,8 +560,6 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit, pol
 			result.unreachable = result.complete and not result.unverifiedDrops and AtDamage(legal.damage + guard) > targetOutput
 		end
 		if budget and (result.gold > budget or result.outputPressure > targetOutput or not result.complete) then
-			local affordable = { outputPressure = current, damage = actual.output - 1, gold = 0, acquisitionRank = 0,
-				pieces = Planner.Copy(context.pieces), visited = 0 }
 			local function WithinBudget(i, remaining, gold, rank, damage)
 				if gold > budget then return true end
 				if affordable.visited >= limit then return false end
@@ -546,22 +569,11 @@ function Planner.Search(catalog, context, actual, reference, allowed, limit, pol
 				if not rest then return true end
 				local bound = prices[i]
 				local ceiling = damage + math.min(rest.damage, bound.free + (budget - gold) * bound.rate)
-				local threshold = affordable.outputPressure <= targetOutput
-					and (100 * ratio * reference.output / (targetOutput + (targetOutput == 100 and EPS or 0)) - 1)
-					or affordable.damage
-				if ceiling + guard < threshold then return true end
+				if ceiling + guard < affordableDamage then return true end
 				if affordable.outputPressure <= targetOutput and not Cheaper(gold, rank, affordable.gold, affordable.acquisitionRank) then return true end
 				local group = groups[i]
 				if not group then
-					local pressure = AtDamage(damage)
-					local meets, hadTarget = pressure <= targetOutput, affordable.outputPressure <= targetOutput
-					local cheaper = Cheaper(gold, rank, affordable.gold, affordable.acquisitionRank)
-					if (meets and (not hadTarget or cheaper))
-						or (not meets and not hadTarget and (pressure < affordable.outputPressure
-							or (pressure == affordable.outputPressure and cheaper))) then
-						affordable.outputPressure, affordable.damage = pressure, damage
-						affordable.gold, affordable.acquisitionRank, affordable.pieces = gold, rank, Pieces(path)
-					end
+					ConsiderAffordable(AtDamage(damage), gold, rank, path)
 					return true
 				end
 				for _, option in ipairs(group.priced) do
