@@ -231,11 +231,12 @@ do
 	end
 	local meets = Finish(P.Search(cat, outputCase, outputActual, outputRef, nil, 5000, P.Policy({ budget = 20000, target = 150 })))
 	assert(meets.minimumTargetCost == 0 and meets.gold == 0 and meets.maxGear.gold > 0)
-	for _, target in ipairs({ 80, 100 }) do
+	for _, target in ipairs({ 60, 100 }) do
 		local truncated = Finish(P.Search(cat, outputCase, outputActual, outputRef, nil, 1, P.Policy({ budget = 9520, target = target })))
 		assert(not truncated.complete and not truncated.unreachable and not truncated.affordable.complete)
 		assert(truncated.visited == 1 and truncated.affordable.visited == 1 and truncated.minimumTargetCost == nil)
 		assert(truncated.gold == 9520 and truncated.outputPressure < 104)
+		assert((truncated.outputPressure <= target) == (target == 100))
 		assert(truncated.affordable.gold == truncated.gold and truncated.affordable.outputPressure == truncated.outputPressure,
 			"R25: both cutoffs must retain the feasible seed already scored by the unrestricted pass")
 	end
@@ -337,8 +338,13 @@ assert(deadline.visited == 0)
 
 local protected = P.Copy(hard)
 protected.pieces = armor
-local preserves = Finish(P.Search(cat, protected, empowered, ref, { exotic = true }, 12000))
+local preserves = Finish(P.Search(cat, protected, empowered, ref, { exotic = true }, 12000, P.Policy({})))
 assert(preserves.complete and Eval(preserves.pieces).sets.common[2].strong)
+do
+	local sequence = P.Execution(cat, protected, empowered, preserves.maxGear.pieces, ref, { exotic = true })
+	assert(sequence.preserves and #sequence.steps > 0 and sequence.gold == preserves.maxGear.gold)
+	for _, step in ipairs(sequence.steps) do assert(step.afterSets.common[2].strong) end
+end
 
 local savedTop = cat.pieces.scale.top
 cat.pieces.scale.top = 0
@@ -416,6 +422,11 @@ assert(bothProtected.unreachable and bothProtected.maxGear.protectedHolds == 8)
 local maxSets = Eval(bothProtected.maxGear.pieces).sets
 assert(maxSets.legendary[1].pieces == 4 and maxSets.common[1].pieces == 4)
 do
+	local sequence = P.Execution(cat, mixed, twoSets, bothProtected.maxGear.pieces, twoSetsRef, { exotic = true })
+	assert(sequence.preserves and #sequence.steps > 0 and sequence.gold == bothProtected.maxGear.gold)
+	for _, step in ipairs(sequence.steps) do
+		assert(step.afterSets.legendary[1].pieces == 4 and step.afterSets.common[1].pieces == 4)
+	end
 	local unprotected = Finish(P.Search(cat, mixed, twoSets, twoSetsRef, { exotic = true }, 12000,
 		P.Policy({ protectSets = false, budget = 0 })))
 	local protectedBudget = Finish(P.Search(cat, mixed, twoSets, twoSetsRef, { exotic = true }, 12000, P.Policy({ budget = 0 })))
