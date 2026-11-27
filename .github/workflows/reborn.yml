@@ -35,7 +35,18 @@ jobs:
           echo "Lua syntax OK"
 
       - name: Mocked regression tests
-        run: lua tests/test_reborn_compat.lua
+        run: |
+          lua tests/test_reborn_compat.lua
+          lua tests/test_run_history.lua
+          lua tests/test_reborn_analysis.lua
+          lua tests/test_reborn_gear.lua
+
+      - name: Replay fixtures
+        run: |
+          set -e
+          for fixture in tests/fixtures/*_replay.lua; do
+            lua tests/replay_runner.lua "$fixture"
+          done
 
       - name: Validate manifests and runtime files
         run: python3 scripts/validate_addon.py
@@ -43,11 +54,18 @@ jobs:
       - name: Build SurvivorUI-Reborn.zip
         run: bash scripts/package.sh
 
-      - name: Upload installable ZIP
+      - name: Verify both ZIPs exist
+        run: |
+          test -s dist/SurvivorUI-Reborn.zip
+          test -s dist/SurvivorUI-Reborn-Diagnostics-Helper.zip
+
+      - name: Upload installable ZIPs
         uses: actions/upload-artifact@v4
         with:
           name: SurvivorUI-Reborn
-          path: dist/SurvivorUI-Reborn.zip
+          path: |
+            dist/SurvivorUI-Reborn.zip
+            dist/SurvivorUI-Reborn-Diagnostics-Helper.zip
           if-no-files-found: error
           retention-days: 90
 
@@ -71,7 +89,10 @@ jobs:
       - name: Attach ZIP to the release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/SurvivorUI-Reborn.zip
+          files: |
+            dist/SurvivorUI-Reborn.zip
+            dist/SurvivorUI-Reborn-Diagnostics-Helper.zip
+          fail_on_unmatched_files: true
           body: |
             SurvivorUI-Reborn: the Reborn-compatible SurvivorUI + SurvivorPlates.
             See REBORN_COMPATIBILITY.md for install instructions, feature

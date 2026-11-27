@@ -215,6 +215,7 @@ local function Snapshot(phase)
 		at = time(),
 		when = date("%Y-%m-%d %H:%M"),
 		result = phase,
+		rebornRunId = SurvivorUI_RebornStableRunId and SurvivorUI_RebornStableRunId() or nil,
 		hero = UnitName("player"),
 		race = UnitRace("player"),
 		class = zone.cname or UnitClass("player"),
@@ -263,7 +264,10 @@ local function Snapshot(phase)
 		crit.color = color and { color[1], color[2], color[3] } or nil
 		crit.icon = SurvivorUI_MeterIcon and SurvivorUI_MeterIcon(crit.ability) or nil
 	end
-	record.build = SurvivorUI_BuildSnapshot and SurvivorUI_BuildSnapshot() or {}
+	record.build = {}
+	if SurvivorUI_BuildSnapshot then
+		record.build, record.buildComplete = SurvivorUI_BuildSnapshot()
+	end
 	record.gear = SurvivorUI_GearSnapshot and SurvivorUI_GearSnapshot() or nil
 	if SurvivorUI_ArmorSnapshot then
 		record.armor, record.armorSet = SurvivorUI_ArmorSnapshot()
@@ -427,20 +431,41 @@ end
 local function Keep(record)
 	local history = History()
 	local last = history[1]
+	if record.rebornRunId then
+		for _, saved in ipairs(history) do
+			if saved.rebornRunId == record.rebornRunId and (saved.hero == record.hero or saved.summaryOnly) then
+				if saved.summaryOnly and not record.summaryOnly then
+					for key, value in pairs(record) do
+						if saved[key] == nil or key == "hero" or key == "zone" then saved[key] = value end
+					end
+					saved.summaryOnly = nil
+				end
+				if saved.buildComplete ~= true and record.buildComplete == true then
+					saved.build, saved.buildComplete = record.build, true
+				end
+				for key, value in pairs(record) do
+					if saved[key] == nil and key ~= "buildComplete" then saved[key] = value end
+				end
+				return saved
+			end
+		end
+	end
+	local distinctRuns = last and last.rebornRunId and record.rebornRunId
 	-- The same run kept already (a reload on the end screen): not again.
-	if last and last.zone == record.zone and (Same(last, record) or Same(last.endless, record)) then
-		return
+	if not distinctRuns and last and last.zone == record.zone and (Same(last, record) or Same(last.endless, record)) then
+		return record
 	end
 	TalentFor(record)
 	-- The same run a moment ago (an end message the game sends again and
 	-- again): this moment in its place, not one run more.
-	if SameRun(last, record) then
+	if not distinctRuns and SameRun(last, record) then
 		record.pinned = last.pinned
 		history[1] = record
-		return
+		return record
 	end
 	table.insert(history, 1, record)
 	Trim()
+	return record
 end
 
 -- The run kept at its victory, while it goes on in endless mode: the same
@@ -455,7 +480,10 @@ local function EndlessOf()
 	if last.endless and last.endless.result ~= "going" then
 		return nil
 	end
-	if (zone.zname or GetZoneText()) ~= last.zone or Num(run.t) < Num(last.time) then
+	local current = SurvivorUI_RebornStableRunId and SurvivorUI_RebornStableRunId()
+	local same = current and last.rebornRunId and current == last.rebornRunId
+	if (current and last.rebornRunId and not same)
+		or (not same and (zone.zname or GetZoneText()) ~= last.zone) or Num(run.t) < Num(last.time) then
 		return nil
 	end
 	return last
@@ -487,20 +515,51 @@ local SUMMARY_FIELDS = {
 -- moment taken while it lasted, brought to its end; else, a run the watcher
 -- did not see end (left from the menu), kept now.
 local function Settle(summary)
+	local rawId = summary.runId or summary.run
+	local summaryId = rawId and SurvivorUI_RebornStableRunId and SurvivorUI_RebornStableRunId(rawId)
+	local currentId = SurvivorUI_RebornStableRunId and SurvivorUI_RebornStableRunId()
+	if summaryId and currentId and summaryId ~= currentId then return false end
 	local result = END_RESULTS[summary.result] or "dead"
 	local moment = lastKept
+	if moment and moment.rebornRunId and (summaryId or currentId) and moment.rebornRunId ~= (summaryId or currentId) then
+		moment = nil
+	end
 	lastKept = nil
-	if not (moment and math.abs(time() - Num(moment.at)) < 60) then
+	if summaryId and not currentId and not (moment and moment.rebornRunId == summaryId) then
+		-- The HUD may already be back in a lobby or on a different hero.
+		-- Use the matching stored run or the summary alone in that case.
+		for _, saved in ipairs(History()) do
+			if saved.rebornRunId == summaryId then
+				if Num(summary.endl) == 1 and result ~= "victory" then
+					moment = saved.endless
+				else
+					moment = saved
+				end
+				break
+			end
+		end
+		if not moment or moment.rebornRunId ~= summaryId then
+			if (Num(summary.endl) == 1 and result ~= "victory")
+				or (result ~= "victory" and Settings().historyWhich == "victories") then return end
+			moment = Keep({ rebornRunId = summaryId, summaryOnly = true, buildComplete = false,
+				hero = "?", zone = "?", at = time(), when = date("%Y-%m-%d %H:%M"),
+				result = result, build = {}, time = Num(summary.t), kills = Num(summary.kills) })
+		end
+	elseif moment and moment.buildComplete == false and currentId and moment.rebornRunId == currentId
+		and not (Num(summary.endl) == 1 and result ~= "victory") then
+		moment = Keep(Snapshot(result))
+	end
+	if not (moment and ((summaryId and not currentId) or math.abs(time() - Num(moment.at)) < 60)) then
 		moment = nil
 		local last = History()[1]
 		if Num(summary.endl) == 1 and result ~= "victory" then
 			if last and last.result == "victory" and last.endless and last.endless.result ~= "dead"
+				and (not (summaryId or currentId) or not last.rebornRunId or last.rebornRunId == (summaryId or currentId))
 				and math.abs(time() - Num(last.endless.at)) < 30 then
 				moment = last.endless
 			end
 		elseif result == "victory" or (Settings().historyWhich or "all") ~= "victories" then
-			moment = Snapshot(result)
-			Keep(moment)
+			moment = Keep(Snapshot(result))
 		end
 	end
 	if not moment then
@@ -545,10 +604,12 @@ watcher:SetScript("OnUpdate", function()
 			-- Brought back: the run goes on.
 			heldEnd = nil
 		else
-			Settle(heldEnd)
+			local settled = Settle(heldEnd)
 			heldEnd = nil
-			captured = true
-			settledAt = GetTime()
+			if settled ~= false then
+				captured = true
+				settledAt = GetTime()
+			end
 		end
 	end
 	-- In a co-op party (the game's 0.113) a hero down is not the run's end,
@@ -567,8 +628,7 @@ watcher:SetScript("OnUpdate", function()
 				lastKept = entry.endless
 			elseif phase == "victory" or which ~= "victories" then
 				local record = Snapshot(phase)
-				Keep(record)
-				lastKept = record
+				lastKept = Keep(record)
 			end
 		end
 	elseif phase == "playing" or phase == "choosing" or phase == "paused" then
@@ -3214,7 +3274,11 @@ local function DrawBuild(run)
 		end
 	end
 	local filledCount = table.getn(spells)
-	buildBox.note:SetText((filledCount >= SLOTS and "|cffff8080" or "|cffd0d0d0")..math.min(filledCount, SLOTS).." / "..SLOTS.."|r")
+	local countText = (filledCount >= SLOTS and "|cffff8080" or "|cffd0d0d0")..math.min(filledCount, SLOTS).." / "..SLOTS.."|r"
+	if run.buildComplete == false then
+		countText = "|cffffc04c" .. SurvivorUI_T("Partial snapshot") .. "|r  " .. countText
+	end
+	buildBox.note:SetText(countText)
 
 	for place = 1, SLOTS + 1 do
 		local row = SpellRow(place)

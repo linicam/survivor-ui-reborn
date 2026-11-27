@@ -118,14 +118,14 @@ about it is hardcoded.
 ### Phase 2
 - **Ability upgrade tracking — rank history only.** The API exposes
   only `rank`; there is no per-upgrade selection table, event, or
-  function in the documented API. The addon therefore tracks rank
-  increases per ability per run (`/sui reborn upgrades`): "Fireball:
-  rank 1 → 2 at 63s". Tooltips say plainly that individual upgrade
-  choices are not exposed. No stacking assumption (additive vs
-  multiplicative) is made anywhere, and no upgrade effect text is
-  invented. If a future API exposes selections, `TrackRanks` /
-  `SurvivorUI_RebornRankEvents` in `RebornCompat.lua` is the place to
-  join it.
+  function in the documented API. Rank increases are tracked per
+  ability per run, and a rank increase is never presented as proof
+  of a particular upgrade choice. Whether Reborn's native tooltips
+  carry upgrade sections (as the original game's did) is under
+  investigation: `/sui reborn probe` now dumps raw native action and
+  spell tooltip lines per ability for a before/after comparison. No
+  stacking assumption (additive vs multiplicative) is made anywhere,
+  and no upgrade effect text is invented.
 - **Jewelry effects and tooltips — as far as the API allows.** Name,
   icon, slot, rank, and rarity are shown where the loadout gives them;
   per-item effect text and numeric bonuses are *not* shown, because
@@ -133,19 +133,18 @@ about it is hardcoded.
   hardcoding original-game values would be wrong if Reborn rebalanced
   them. Aggregate `g*` bonuses are available in diagnostics and are
   never attributed to a single piece.
-- **Curses — not implemented, by design.** No curse table, function,
-  event, banner kind, or data file is documented in the official Addon
-  API (the word "curse" does not appear on the page at all), and no
-  public native-UI/addon example exposing curses was found.
-  `SurvivorUI_RebornCurses()` therefore reports `supported = false`
-  with that reason, `/sui reborn curses` prints it, and `/sui reborn
-  probe` lists candidate globals (`AZS_CHESTS`, `AZS_BANNER`,
-  `AZS_BUFFS`, `AZS_DEBUFFS`) so an in-game tester can see what exists
-  without any of them being treated as curse data. Do not treat
-  `AZS_DEBUFFS` (debuffs on bosses/guardians) or `AZS_CHESTS` (cache
-  positions) as curses. If Reborn documents or exposes curse data in
-  future, this is the documented blocker to revisit — with in-game
-  payloads collected via `/sui reborn probe` first.
+- **Curses — banner-tracked, verified in game.** Curse effects arrive
+  as `kind="curse"` banners (Russian server text) and are tracked
+  through `AZS_RegisterBannerHandler` with dedup by banner id, a
+  per-run watermark against retained history, and per-curse expiry.
+  Remaining time is banner-derived (banner duration minus elapsed
+  run time) — an estimate, not an authoritative buff duration; no
+  buff is associated by duration similarity. Effect text maps the
+  documented categories (faster enemies, faster/thicker horde, more
+  damage taken, healing cut) plus one observed exact phrase; unknown
+  effects show as a plain curse, with the raw banner captured by
+  `/sui reborn probe`. Banners are not retold after a reload, so
+  curses taken before a reload cannot be reconstructed.
 
 ## Static data corrections (2026-11-25, from azreborn.com/data/v1)
 
@@ -340,6 +339,43 @@ unchanged in substance); the full audit is in the research notes
 
 ## Known limitations and unsupported features
 
+- Reborn keeps defeated guardians and available respawn timers in its
+  panels. Empty lairs have no world marker, minimap pin, or compass
+  bearing because their last coordinates cannot locate the next spawn.
+- A Rift Portal boss can be confirmed by its own zero-health sample or
+  by portal completion after observing a single portal boss. A missing
+  unit has no live health or target. The global boss counter is not
+  encounter-specific.
+- Opt-in recordings capture native card offers and the player's read-only
+  action observations, native spell tips, gear and Hex changes, Guardian
+  state and position changes, and Rift unit transitions. Guardian timers
+  have periodic samples. Card actions are intent until corroborated by
+  later server data.
+
+### Native snapshots and Stats tooltip
+
+- **Stat caps.** In a Reborn run, the Stats tooltip for Crit, Cooldown Reduction, Echo
+  and Dmg Reduction reads the matching `crit`, `cdr`, `echo` or `red`
+  cap through `AZS_GetStatCaps()` with a per-field `AZS_CAPS` fallback.
+  Both caps and `AZS_RUNSTATS` use whole percentages. The remaining increase uses
+  percentage points and is omitted if the current field is missing.
+  The run sheet values are already capped. The original-client tooltips
+  retain their descriptions. [Reborn Addon API](https://azreborn.com/guides/addon-api#5-the-azs-line-azs_stats)
+- **Run jewelry.** The installed Reborn client's `AzerothSurvivors/Units.lua`
+  handles the `AZSGEAR` message and assigns `AZS_GEAR` rows with
+  `slot`, `rarity`, `bonus`, `amount`, `icon`, `name` and `text`.
+  The existing production fallback refers to `AZSGEAR`, a distinct
+  global, and the raw jewelry probe targets that legacy name. The
+  production panel still prioritizes the verified meter loadout.
+  Native text is a candidate for enrichment once same-run receipt and
+  stable row correspondence are verified across reload and replacement.
+- **Other native observations.** `AzerothSurvivors/Spells.lua` stores
+  current tooltip text by spell key, `Cards.lua` handles `AZSCARDTIP`,
+  and `Units.lua` builds `AZS_HEXES` from `AZSHEX`. Establish the
+  lifecycle and identity of each feed before incorporating it into
+  tooltips or history. Static spell and amulet values describe base
+  data. [Reborn Data files](https://azreborn.com/guides/data-api)
+
 - **In-game verification is still required** for: the exact `AZSGEAR` /
   loadout source fields (rarity? rank? effect text?), which campaign
   bosses are Rift- vs time-triggered, the campaign→Endless transition
@@ -361,6 +397,22 @@ unchanged in substance); the full audit is in the research notes
   values.
 
 ## Diagnostics
+
+Use `/sui reborn record auto on` to capture a normal run and
+`/sui reborn record status` to check recording. Older `capture` commands
+point to the SavedVariables recorder. `probe` remains a manual current-state
+query, and `jewelry raw` reports the native gear feed alongside the loadout.
+
+Run History uses stable Reborn server IDs when present and retains its
+legacy matching for records without them. Build can show the native
+current spell description after receiving it for the same run and rank.
+New history records mark the Build snapshot as partial when the full
+Reborn ability snapshot was unavailable at the time of capture.
+After a run boundary the UI waits for a new request before admitting an
+ability snapshot. If an earlier request could still reply, the first
+ambiguous snapshot is discarded and the normal throttle governs a retry.
+The wire reply has no request or run ID, so this protects the observed
+boundary cases without providing protocol-level reply attribution.
 
 Debug logging is **off by default** (`SurvivorUIDB.rebornDebug`).
 Diagnostics never send addon messages except through the game's own

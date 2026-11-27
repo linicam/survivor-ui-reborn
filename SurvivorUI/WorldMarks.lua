@@ -431,11 +431,12 @@ local function ReadAll()
 	local lairs = {}
 	spots.lairs = lairs
 	-- When each empty lair is claimed again (AZS_LAIRS' "left", seconds from
-	-- its line, as Guardians.lua reads it). Not in Reborn: guardians do not
-	-- respawn at the fixed lair point there, so no countdown is shown.
+	-- its line, as Guardians.lua reads it). Reborn's empty lairs stay
+	-- in the panel because the last position is not the next spawn.
+	local reborn = SurvivorUI_RebornActive and SurvivorUI_RebornActive()
 	local refill = {}
 	local since = AZS_LAIRS_UPDATED and (GetTime() - AZS_LAIRS_UPDATED) or 0
-	if not (SurvivorUI_RebornActive and SurvivorUI_RebornActive()) then
+	if not reborn then
 		for index = 1, table.getn(AZS_LAIRS or {}) do
 			local lair = AZS_LAIRS[index]
 			local left = tonumber(Field(lair, "left", 5))
@@ -469,7 +470,7 @@ local function ReadAll()
 				spot = { anchor = entry.anchorId, attachment = "position", lift = beam and BEAM_TALL * 0.8 or 1.2,
 					look = "cache", arrow = true, beam = beam }
 			end
-		elseif entry.kind == "guardianLair" then
+		elseif entry.kind == "guardianLair" and (not reborn or entry.state ~= "empty") then
 			base = base or { id = entry.anchorId, x = entry.x, y = entry.y, z = entry.z }
 			local occupant = entry.occupantUnitId and units[tonumber(entry.occupantUnitId)]
 			if entry.x and entry.y then

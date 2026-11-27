@@ -543,6 +543,7 @@ end
 
 local lastSeconds
 local bossSeenUp = {}             -- [boss] = true once seen alive
+local resetRegistered = false
 local bossKilled = {}             -- [boss] = the run second it was seen to fall
 
 -- The boss alive under this name, for its health.
@@ -1113,11 +1114,17 @@ local function Draw(game, phase)
 		bossSeenUp, bossKilled = {}, {}
 	end
 	-- Reborn: a new run id means a new run even when the clock does not
-	-- rewind cleanly (RebornCompat also clears its own caches, and the
-	-- modules registered with it). First call in a run is harmless.
-	if SurvivorUI_RebornCheckRun and SurvivorUI_RebornCheckRun() then
-		bossSeenUp, bossKilled = {}, {}
-		endlessFrom = nil
+	-- rewind cleanly. The reset watcher fires once per transition
+	-- whoever detects it first; CheckRun only drives the transition.
+	if SurvivorUI_RebornRegisterReset and not resetRegistered then
+		resetRegistered = true
+		SurvivorUI_RebornRegisterReset(function()
+			bossSeenUp, bossKilled = {}, {}
+			endlessFrom = nil
+		end)
+	end
+	if SurvivorUI_RebornCheckRun then
+		SurvivorUI_RebornCheckRun()
 	end
 	lastSeconds = seconds
 
@@ -1380,6 +1387,56 @@ local function Draw(game, phase)
 	else
 		head.endlessSlain:Hide()
 	end
+	-- Summoned Rift Portal bosses (Reborn): extra rows from
+	-- AZS_UNITS kind="rift", independent of the schedule.
+	if SurvivorUI_RebornRiftBosses then
+		local riftBosses = SurvivorUI_RebornRiftBosses()
+		head.riftBossLines = head.riftBossLines or {}
+		for i = 1, table.getn(riftBosses) do
+			local boss = riftBosses[i]
+			local healthShare = not boss.missing and boss.healthShare
+			local line = head.riftBossLines[i]
+			if not line then
+				line = BossLine(table.getn(head.bosses) + 1)
+				head.bosses[table.getn(head.bosses)] = nil
+				head.riftBossLines[i] = line
+			end
+			line.name:SetText((boss.name or "?") .. "（" .. SurvivorUI_T("Rift") .. "）")
+			local shade = (boss.state == "dead" or boss.missing) and 0.55 or 1
+			line.name:SetTextColor(shade, shade, shade)
+			if boss.state == "dead" then
+				line.backing:Hide()
+				line.fill:Hide()
+				line.time:SetText(boss.fell and Clock(boss.fell) or "")
+				line.target = nil
+				line:EnableMouse(false)
+			elseif TrackerHealth() and healthShare then
+				line.backing:Show()
+				line.fill:SetWidth(math.max(1, WIDTH * healthShare))
+				line.fill:SetVertexColor(1.00, 0.55, 0.15, 0.85)
+				line.fill:Show()
+				local look = SurvivorUIDB and SurvivorUIDB.trackerHealthLook or "percent"
+				if SurvivorUI_HealthText then
+					line.time:SetText(SurvivorUI_HealthText(boss.hp, boss.hpm, look))
+				else
+					line.time:SetText(string.format("%.0f%%", healthShare * 100))
+				end
+				line.target = boss.name
+				line:EnableMouse(true)
+			else
+				line.backing:Hide()
+				line.fill:Hide()
+				line.time:SetText(healthShare and string.format("%.0f%%", healthShare * 100) or "")
+				line.target = not boss.missing and boss.name or nil
+				line:EnableMouse(line.target ~= nil)
+			end
+			line.time:SetTextColor(1, 1, 1)
+			y = Put(line, y, 13)
+		end
+		for i = table.getn(riftBosses) + 1, table.getn(head.riftBossLines) do
+			head.riftBossLines[i]:Hide()
+		end
+	end
 	-- An active curse (Reborn), under the boss lines.
 	if SurvivorUI_RebornCurses then
 		local curseItems = SurvivorUI_RebornCurses().items
@@ -1390,7 +1447,11 @@ local function Draw(game, phase)
 			end
 			local parts = {}
 			for i = 1, table.getn(curseItems) do
-				table.insert(parts, curseItems[i].text .. " " .. string.format("%ds", math.ceil(curseItems[i].left)))
+				if curseItems[i].left then
+					table.insert(parts, curseItems[i].text .. " " .. string.format("%ds", math.ceil(curseItems[i].left)))
+				else
+					table.insert(parts, curseItems[i].text)
+				end
 			end
 			head.curseLine.name:SetText(SurvivorUI_T("Curse") .. "：" .. table.concat(parts, " · "))
 			head.curseLine.name:SetTextColor(1, 0.45, 0.45)
@@ -1486,6 +1547,19 @@ function SurvivorUI_TrackerSnapshot()
 		end
 		table.insert(shot.bosses, boss)
 	end
+	if SurvivorUI_RebornRiftBosses then
+		local riftBosses = SurvivorUI_RebornRiftBosses()
+		for i = 1, table.getn(riftBosses) do
+			local boss = riftBosses[i]
+			table.insert(shot.bosses, {
+				name = (boss.name or "?") .. "（" .. SurvivorUI_T("Rift") .. "）",
+				state = boss.state == "dead" and "dead" or "up",
+				fell = boss.fell,
+				hp = not boss.missing and boss.healthShare or nil,
+				rift = true,
+			})
+		end
+	end
 	if shot.endless and (tonumber(game.nb) or -1) >= 0 then
 		shot.nextBoss = { name = "Next boss", left = tonumber(game.nb) }
 	end
@@ -1540,6 +1614,9 @@ local function HideLines()
 	head.timeline:Hide()
 	head.shade:Hide()
 	for _, line in pairs(head.bosses) do
+		line:Hide()
+	end
+	for _, line in pairs(head.riftBossLines or {}) do
 		line:Hide()
 	end
 	if head.nextBoss then
@@ -1713,6 +1790,7 @@ head:SetScript("OnEnter", function()
 			end
 		end
 	end
+	if SurvivorUI_RebornAnalysis then SurvivorUI_RebornAnalysis.AddTrackerTooltip(GameTooltip) end
 	GameTooltip:AddLine(SurvivorUI_MoveHint().." "..SurvivorUI_T("/sui tracker hides it."), 0.7, 0.7, 0.7, 1)
 	GameTooltip:Show()
 end)

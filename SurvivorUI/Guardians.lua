@@ -414,6 +414,7 @@ local function Draw()
 	end
 	local north = Settings().guardiansNorth
 	local healths = Healths()
+	local reborn = SurvivorUI_RebornActive and SurvivorUI_RebornActive()
 	local since = AZS_LAIRS_UPDATED and (GetTime() - AZS_LAIRS_UPDATED) or 0
 	if AZS_GetPhase and AZS_GetPhase() ~= "playing" then
 		since = 0
@@ -436,13 +437,14 @@ local function Draw()
 		local entry = { place = place, state = state, alive = state ~= "empty", name = Field(lair, "name", 3) or "?",
 			id = tonumber(Field(lair, "id", 4)) or 0 }
 		if state == "empty" then
-			-- Reborn: no respawn countdown. Guardians do not come
-			-- back at the fixed lair point there, so a countdown
-			-- pinned to it misleads; the lair's place and distance
-			-- still show. (AZS_LAIRS.left is documented, but the
-			-- fixed-point respawn it describes is the original
-			-- game's behaviour.)
-			if not (SurvivorUI_RebornActive and SurvivorUI_RebornActive()) then
+			-- One shared countdown model: in Reborn the documented
+			-- AZS_LAIRS.left (time until the empty lair fills),
+			-- sampled and decayed on the run clock; the original
+			-- game keeps its own arithmetic. Every guardian view
+			-- reads entry.left, so all displays agree.
+			if reborn and SurvivorUI_RebornGuardianLeft then
+				entry.left = SurvivorUI_RebornGuardianLeft(lair)
+			else
 				entry.left = (tonumber(Field(lair, "left", 5)) or -1) - since
 			end
 		elseif state == "awake" then
@@ -462,14 +464,16 @@ local function Draw()
 			entry.share = healths[entry.id]
 		end
 		local east, south
-		local lx, ly = tonumber(Field(lair, "x", 6)), tonumber(Field(lair, "y", 7))
-		if px and lx and ly then
-			east, south = SurvivorUI_WorldWay(px, py, lx, ly)
-		else
-			local mx = SurvivorUI_MapShare and SurvivorUI_MapShare(Field(lair, "mx", 9))
-			local my = SurvivorUI_MapShare and SurvivorUI_MapShare(Field(lair, "my", 10))
-			if heroX and span and mx and my then
-				east, south = (mx - heroX) * span.across, (my - heroY) * span.down
+		if entry.alive or not reborn then
+			local lx, ly = tonumber(Field(lair, "x", 6)), tonumber(Field(lair, "y", 7))
+			if px and lx and ly then
+				east, south = SurvivorUI_WorldWay(px, py, lx, ly)
+			else
+				local mx = SurvivorUI_MapShare and SurvivorUI_MapShare(Field(lair, "mx", 9))
+				local my = SurvivorUI_MapShare and SurvivorUI_MapShare(Field(lair, "my", 10))
+				if heroX and span and mx and my then
+					east, south = (mx - heroX) * span.across, (my - heroY) * span.down
+				end
 			end
 		end
 		if east then
@@ -501,12 +505,10 @@ local function Draw()
 		end
 		if entry.state == "empty" then
 			row.name:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
-			if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
-				row.state:SetText("")
-			elseif entry.left and entry.left > 0 then
+			if entry.left and (entry.left > 0 or (reborn and entry.left == 0)) then
 				row.state:SetText(Clock(entry.left))
 			else
-				row.state:SetText(SurvivorUI_T("soon"))
+				row.state:SetText(reborn and "—" or SurvivorUI_T("soon"))
 			end
 			row.state:SetTextColor(RESPAWN[1], RESPAWN[2], RESPAWN[3])
 			row.color = MUTED

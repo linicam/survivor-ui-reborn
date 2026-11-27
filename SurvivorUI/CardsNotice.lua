@@ -7,6 +7,91 @@
 
 if SurvivorUI_Standby then return end
 
+-- The native hand fits its content after filling the cards and changing
+-- Shift comparison. Refit only when an attribute label actually changes.
+local function HookCardCapHints()
+	if not (AZSCardsFrame and hooksecurefunc and SurvivorUI_RebornCardCapLines) then return end
+	local clearAnalysis, refreshAnalysis = {}, {}
+	for index = 1, 4 do
+		local button = getglobal("AZSCard" .. index)
+		if button and type(button.Fit) == "function" and button.detail then
+			local slot = index
+			local original, annotated, paintedHand, refitting
+			local capDisplay
+			local loggedHand
+			-- Native FillCards writes the label before fitting. Shift comparison
+			-- and late card tips only write the detail, including on an outgoing hand.
+			local tracksHand = button.label and pcall(hooksecurefunc, button.label, "SetText", function()
+				paintedHand = AZS_CARDS
+			end)
+			local function SetDetail(text)
+				refitting = true
+				button.detail:SetText(text)
+				local ok, err = pcall(button.Fit)
+				refitting = false
+				if not ok then error(err) end
+			end
+			clearAnalysis[slot] = function()
+				if not annotated or annotated == capDisplay then return end
+				if button.saved and button.saved[1] == annotated then
+					button.saved[1] = capDisplay
+				elseif button.detail:GetText() == annotated then
+					SetDetail(capDisplay)
+				end
+				annotated = capDisplay
+			end
+			local function Decorate()
+				if refitting or button.saved then return end
+				local hand = AZS_CARDS
+				if tracksHand and paintedHand ~= hand then return end
+				local display = button.detail:GetText()
+				local base = display == annotated and original or display
+				local card = hand and hand.kind == "jewel" and hand.cards and hand.cards[slot]
+				capDisplay = SurvivorUI_RebornCardCapLines(card, base)
+				local updated = capDisplay
+				local analysis = SurvivorUI_RebornAnalysis
+				if tracksHand and paintedHand and analysis and analysis.WantsCardHints() then
+					local ok, hint = pcall(analysis.CardText, slot)
+					if ok and hint and hint ~= "" then
+						updated = (updated and updated ~= "" and updated .. "\n" or "") .. "|cff92dce5" .. hint .. "|r"
+					end
+				end
+				original, annotated = base, updated
+				if updated ~= display then
+					SetDetail(updated)
+				end
+				if card and capDisplay ~= base and loggedHand ~= hand and SurvivorUI_RebornRecording
+					and SurvivorUI_RebornRecording() then
+					loggedHand = hand
+					SurvivorUI_RebornRecord("card_cap_hint", { slot = slot, mode = card.mode, text = capDisplay })
+				end
+			end
+			hooksecurefunc(button, "Fit", Decorate)
+			refreshAnalysis[slot] = function()
+				if paintedHand and paintedHand == AZS_CARDS and AZSCardsFrame:IsShown()
+					and button:IsShown() then Decorate() end
+			end
+		end
+	end
+	if SurvivorUI_RebornAnalysis then
+		SurvivorUI_RebornAnalysis.ClearCardDisplay = function()
+			for _, clear in pairs(clearAnalysis) do pcall(clear) end
+		end
+		SurvivorUI_RebornAnalysis.RefreshCardDisplay = function()
+			for _, refresh in pairs(refreshAnalysis) do pcall(refresh) end
+		end
+	end
+	return true
+end
+
+if not HookCardCapHints() and hooksecurefunc then
+	local cardWatch = CreateFrame("Frame")
+	cardWatch:RegisterEvent("PLAYER_ENTERING_WORLD")
+	cardWatch:SetScript("OnEvent", function()
+		if HookCardCapHints() then this:UnregisterEvent("PLAYER_ENTERING_WORLD") end
+	end)
+end
+
 local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 local WIDTH = 440
 local PAD = 16

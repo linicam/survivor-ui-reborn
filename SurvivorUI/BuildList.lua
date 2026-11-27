@@ -430,7 +430,7 @@ local function Row(index)
 			for i = 1, table.getn(lines) do
 				local line = lines[i]
 				if not (skipBase and line.kind == "base") then
-					local grey = line.kind ~= "base"
+					local grey = line.kind ~= "base" and line.kind ~= "current"
 					GameTooltip:AddLine(line.text, grey and 0.7 or 1, grey and 0.7 or 1, grey and 0.7 or 1, 1)
 				end
 			end
@@ -473,12 +473,38 @@ local function Row(index)
 		else
 			GameTooltip:SetPoint("TOPRIGHT", this, "TOPLEFT", -((this:GetLeft() or 0) - (list:GetLeft() or 0)) - 6, 0)
 		end
-		GameTooltip:SetAction(this.actionSlot)
-		-- Reborn: the client's button tooltip already carries the base
-		-- description, so only rank, rank history and the honest note
-		-- are appended (the base line is skipped, not repeated).
+		-- Reborn: the native action tooltip is a legacy WoW spell
+		-- tooltip (verified in real sessions: English Rank 1 text at
+		-- Reborn rank 31), not Reborn skill data. Build the tooltip
+		-- from the verified localized AZS_ABILITIES text instead.
 		if reborn then
-			AddRebornLines(true)
+			local ability = this.abilityKey and SurvivorUI_RebornAbilityByKey
+				and SurvivorUI_RebornAbilityByKey(this.abilityKey) or nil
+			if not ability then
+				ability = {
+					key = this.abilityKey, rank = this.abilityRank,
+					passive = this.passive, text = this.abilityText,
+				}
+			end
+			local plan = SurvivorUI_RebornBuildTooltipPlan and SurvivorUI_RebornBuildTooltipPlan(ability) or nil
+			GameTooltip:ClearLines()
+			GameTooltip:SetText(this.ability, 1, 0.82, 0)
+			if plan then
+				for i = 1, table.getn(plan.lines) do
+					local line = plan.lines[i]
+					local grey = line.kind ~= "base" and line.kind ~= "current"
+					GameTooltip:AddLine(line.text, grey and 0.7 or 1, grey and 0.7 or 1, grey and 0.7 or 1, 1)
+				end
+			else
+				if this.passive then
+					GameTooltip:AddLine(SurvivorUI_T("Passive"), 0.7, 0.7, 0.7)
+				end
+				if this.abilityRank then
+					GameTooltip:AddLine(SurvivorUI_TF("Rank {1}", this.abilityRank), 0.7, 0.7, 0.7)
+				end
+			end
+		else
+			GameTooltip:SetAction(this.actionSlot)
 		end
 		GameTooltip:Show()
 	end)
@@ -1540,12 +1566,12 @@ local function SpellSlotFor(key)
 			return Slot(index, count)
 		end
 	end
-	-- Reborn: actives the bar layout does not carry sit on the extra
-	-- buttons (7 account-talent, 12 racial).
+	-- Reborn: the racial active the bar layout does not carry sits
+	-- on the extra button (12).
 	if SurvivorUI_RebornAbilityByKey then
 		local ability = SurvivorUI_RebornAbilityByKey(key)
-		if ability and not ability.passive then
-			return ability.kind == "racial" and 12 or 7
+		if ability and not ability.passive and ability.kind == "racial" then
+			return 12
 		end
 	end
 	return nil
@@ -1861,6 +1887,7 @@ scan:SetOwner(WorldFrame, "ANCHOR_NONE")
 -- tooltip's lines with a number in them. An upgrade renames the piece, so the
 -- link alone says when to read it again.
 local pieces = {}               -- [item link] = { rank, spell, tags }
+local resetRegistered = false
 
 -- A name or bonus line in English, whatever language the game is in (Locale.lua).
 local function English(name)
@@ -2309,9 +2336,16 @@ local function DrawGear()
 	local paint = GEAR_PAINT[db.jewelryColor or "row"] or GEAR_PAINT.row
 	local shown = 0
 	-- A new run clears the inventory-piece cache, so a rank read in the
-	-- last run can never be shown for this one.
-	if SurvivorUI_RebornCheckRun and SurvivorUI_RebornCheckRun() then
-		pieces = {}
+	-- last run can never be shown for this one. The reset watcher
+	-- fires once per run transition whoever detects it first.
+	if SurvivorUI_RebornRegisterReset and not resetRegistered then
+		resetRegistered = true
+		SurvivorUI_RebornRegisterReset(function()
+			pieces = {}
+		end)
+	end
+	if SurvivorUI_RebornCheckRun then
+		SurvivorUI_RebornCheckRun()
 	end
 	-- Reborn first: the meter loadout / AZSGEAR list, when the game gave
 	-- one. Inventory slots are the fallback (original game, or a Reborn
@@ -2320,8 +2354,7 @@ local function DrawGear()
 	-- (a sixth piece is no longer dropped), and no "empty" rows are
 	-- shown for slots the loadout does not claim.
 	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry() or nil
-	if rebornJewelry and (rebornJewelry.source == "loadout" or rebornJewelry.source == "gear")
-		and table.getn(rebornJewelry.items) > 0 then
+	if rebornJewelry and (rebornJewelry.source == "loadout" or rebornJewelry.source == "gear") then
 		local count = table.getn(rebornJewelry.items)
 		for index = 1, count do
 			local line = GearLine(index)
@@ -2560,6 +2593,8 @@ function SurvivorUI_BuildSnapshot()
 	-- not "all but the last entry are actives and the last is the
 	-- racial".
 	local rebornActives, rebornRacial, rebornPassives = RebornBuild()
+	local complete
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then complete = rebornActives ~= nil end
 	local spells, count
 	if rebornActives then
 		spells = rebornActives
@@ -2614,7 +2649,7 @@ function SurvivorUI_BuildSnapshot()
 	elseif count >= 1 then
 		Add(spells[count], Slot(count, count), true)
 	end
-	return list
+	return list, complete
 end
 
 -- For the range rings (WorldMarks.lua): the longest reach among the build's
@@ -2820,8 +2855,7 @@ function SurvivorUI_GearSnapshot()
 	-- name / rank / rarity / icon where the API gave them, and no
 	-- invented effect text.
 	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry() or nil
-	if rebornJewelry and (rebornJewelry.source == "loadout" or rebornJewelry.source == "gear")
-		and table.getn(rebornJewelry.items) > 0 then
+	if rebornJewelry and (rebornJewelry.source == "loadout" or rebornJewelry.source == "gear") then
 		local gear = {}
 		for index = 1, table.getn(rebornJewelry.items) do
 			local item = rebornJewelry.items[index]

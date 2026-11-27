@@ -949,14 +949,47 @@ for position = 1, 8 do
 	AddBacking(slot)
 end
 
--- Reborn's extra actives (button 7 account-talent, button 12 racial)
--- are not placed by the game, and PickupSpell cannot pick up spells
--- the spellbook does not hold (selected racials, account talents).
--- Secure buttons over those two slots cast them directly; their
--- spell is set out of combat by SurvivorUI_SetExtraButton.
+-- Reborn's racial active (button 12) is not placed by the game, and
+-- PickupSpell cannot pick up spells the spellbook does not hold
+-- (selected racials). A secure button over that slot casts it
+-- directly; its spell is set out of combat by
+-- SurvivorUI_SetExtraButton. (The former button-7 overlay for the
+-- account-talent active was removed: no supported trigger exists.)
+-- One visual cooldown path for the extra button: verified Reborn
+-- cooldown data wins (a verified zero clears the sweep and never
+-- falls back to the legacy API); the legacy API is only for
+-- non-Reborn use. Cooldown numbers come from the addon's
+-- CooldownFrame_SetTimer wrapper, as on normal buttons.
+function SurvivorUI_RenderExtraCooldown(frame)
+	if not CooldownFrame_SetTimer or not frame or not frame.spell then
+		return
+	end
+	if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+		-- Reborn: never fall back to legacy spell cooldown data,
+		-- which does not cover the auto-cast racial; missing or
+		-- stale verified data clears the sweep instead.
+		local remaining, cdmax
+		if SurvivorUI_RebornRacialCooldown then
+			remaining, cdmax = SurvivorUI_RebornRacialCooldown(frame.spell, true)
+		end
+		if remaining ~= nil and cdmax and cdmax > 0 and remaining > 0 and GetTime then
+			CooldownFrame_SetTimer(frame.cooldown, GetTime() - (cdmax - remaining), cdmax, 1)
+		else
+			CooldownFrame_SetTimer(frame.cooldown, 0, 0, 0)
+		end
+		return
+	end
+	if GetSpellCooldown then
+		local start, duration = GetSpellCooldown(frame.spell)
+		if start and duration then
+			CooldownFrame_SetTimer(frame.cooldown, start, duration, 1)
+		end
+	end
+end
+
 do
 	row.extraButtons = {}
-	for _, spec in pairs({ { button = 7, position = 7, key = "7" }, { button = 12, position = 8, key = "=" } }) do
+	for _, spec in pairs({ { button = 12, position = 8, key = "=" } }) do
 		local frame = CreateFrame("Button", "SurvivorUIExtra" .. spec.button, row, "SecureActionButtonTemplate")
 		frame:SetWidth(BUTTON_SIZE)
 		frame:SetHeight(BUTTON_SIZE)
@@ -974,18 +1007,68 @@ do
 				return
 			end
 			self.cdElapsed = 0
-			if GetSpellCooldown and CooldownFrame_SetTimer then
-				local start, duration = GetSpellCooldown(self.spell)
-				if start and duration then
-					CooldownFrame_SetTimer(self.cooldown, start, duration, 1)
-				end
-			end
+			SurvivorUI_RenderExtraCooldown(self)
 		end)
 		frame:Hide()
-		if SetBindingClick then
-			SetBindingClick(spec.key, "SurvivorUIExtra" .. spec.button)
-		end
+		frame.key = spec.key
+		frame.ownedBinding = false
 		row.extraButtons[spec.button] = frame
+	end
+end
+
+-- Binding claim/release and the reset watcher are deferred to the
+-- first SetExtraButton call: SurvivorUI.lua loads before
+-- RebornCompat.lua, so neither SurvivorUI_RebornActive nor
+-- SurvivorUI_RebornRegisterReset exists at file scope here.
+-- Scoped in a do-block: this file is at Lua's 200-local limit.
+do
+local extraButtonsReady = false
+local lastExtraButtonState = nil
+local function RecordExtraButton(state, data)
+	if state == lastExtraButtonState then
+		return
+	end
+	lastExtraButtonState = state
+	if SurvivorUI_RebornRecord then
+		SurvivorUI_RebornRecord("extra_button", data)
+	end
+end
+local function ExtraButtonsReady()
+	if extraButtonsReady then
+		return
+	end
+	extraButtonsReady = true
+	if SurvivorUI_RebornRegisterReset then
+		SurvivorUI_RebornRegisterReset(function()
+			SurvivorUI_SetExtraButton(12, nil)
+		end)
+	end
+end
+
+local function ClaimBinding(frame)
+	-- Never silently overwrite an existing binding, and only in
+	-- Reborn: claim the key when it is unbound or already clicks
+	-- this button.
+	if not (SurvivorUI_RebornActive and SurvivorUI_RebornActive()) then
+		return
+	end
+	if SetBindingClick and GetBindingAction and frame.key then
+		local action = GetBindingAction(frame.key)
+		if not action or action == "" or action == "CLICK SurvivorUIExtra12:LeftButton" then
+			SetBindingClick(frame.key, "SurvivorUIExtra12")
+			frame.ownedBinding = true
+		end
+	end
+end
+
+local function ReleaseBinding(frame)
+	-- Release only a binding this addon owns; never touch a
+	-- binding the user set themselves.
+	if frame.ownedBinding and SetBinding and GetBindingAction and frame.key then
+		if GetBindingAction(frame.key) == "CLICK SurvivorUIExtra12:LeftButton" then
+			SetBinding(frame.key, nil)
+		end
+		frame.ownedBinding = false
 	end
 end
 
@@ -994,25 +1077,48 @@ function SurvivorUI_SetExtraButton(button, spell, icon)
 	if not frame then
 		return
 	end
-	if not spell then
-		frame:Hide()
+	ExtraButtonsReady()
+	if InCombatLockdown and InCombatLockdown() then
+		-- Protected changes defer to the next out-of-combat call
+		-- (PlaceRacialButton runs on every build draw).
+		frame.pendingSpell = spell
+		frame.pendingIcon = icon
+		frame.hasPending = true
+		RecordExtraButton("deferred:" .. tostring(spell), {
+			button = 12, spell = frame.spell, pendingSpell = spell,
+			visible = frame.spell ~= nil, deferred = true,
+		})
 		return
 	end
-	if InCombatLockdown and InCombatLockdown() then
+	if frame.hasPending then
+		frame.hasPending = false
+		if spell == nil and frame.pendingSpell ~= nil then
+			spell, icon = frame.pendingSpell, frame.pendingIcon
+		end
+		frame.pendingSpell, frame.pendingIcon = nil, nil
+	end
+	if not spell then
+		frame.spell = nil
+		frame:SetAttribute("spell", nil)
+		frame.icon:SetTexture(nil)
+		if CooldownFrame_SetTimer then
+			CooldownFrame_SetTimer(frame.cooldown, 0, 0, 0)
+		end
+		frame:Hide()
+		ReleaseBinding(frame)
+		RecordExtraButton("cleared", { button = 12, spell = nil, visible = false })
 		return
 	end
 	frame:SetAttribute("spell", spell)
 	frame.spell = spell
-	if icon then
-		frame.icon:SetTexture(icon)
-	end
+	frame.icon:SetTexture(icon)
 	frame:Show()
-	if GetSpellCooldown and CooldownFrame_SetTimer then
-		local start, duration = GetSpellCooldown(spell)
-		if start and duration then
-			CooldownFrame_SetTimer(frame.cooldown, start, duration, 1)
-		end
-	end
+	ClaimBinding(frame)
+	RecordExtraButton("spell:" .. tostring(spell) .. "|owned:" .. tostring(frame.ownedBinding), {
+		button = 12, spell = spell, visible = true, ownedBinding = frame.ownedBinding,
+	})
+	SurvivorUI_RenderExtraCooldown(frame)
+end
 end
 
 ------------------------------------------------------------------------------
@@ -4513,6 +4619,8 @@ SlashCmdList["SURVIVORUI"] = function(msg)
 		else
 			DEFAULT_CHAT_FRAME:AddMessage("Survivor UI: Reborn diagnostics are not loaded (RebornCompat.lua).")
 		end
+	elseif command == "gear" then
+		if SurvivorUI_RebornGearOpen then SurvivorUI_RebornGearOpen(argument) end
 	elseif msg == "damage" then
 		SurvivorUI_ToggleDamage()
 	elseif msg == "damage side" then
@@ -4550,7 +4658,10 @@ SlashCmdList["SURVIVORUI"] = function(msg)
 		DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Survivor UI: /sui crits  shows or hides the Biggest Crits box (off by default)"))
 		DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Survivor UI: /sui hover  switches the white outline around what the mouse is on"))
 		DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Survivor UI: /sui scale 0.85  sizes the panels, 0.6 to 1.4, for smaller screens"))
-		DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Survivor UI: /sui reborn probe  prints the Reborn diagnostics: boss mode, abilities, jewelry, curses, and API availability (/sui reborn boss|abilities|jewelry|upgrades|curses, /sui reborn debug on|off)"))
+		DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Reborn diagnostics: /sui reborn probe | record status | record auto on/off"))
+		if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+			DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Reborn gear: /sui gear opens map comparisons, /sui gear worn opens upgrade gains, /sui gear keys lists input keys."))
+		end
 		DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Survivor UI: /sui meter  switches between SurvivorUI's damage meter, with the crits, and Default"))
 		DEFAULT_CHAT_FRAME:AddMessage(SurvivorUI_T("Survivor UI: /sui meter now  opens or closes the meter now: the last 30 seconds, since its Reset or the boss fight"))
 	end

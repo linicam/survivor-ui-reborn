@@ -1643,6 +1643,14 @@ end
 
 local page = pages.global
 Header(page, "Global", "Settings for the whole addon: its font, its color and its size, and the mouse cursor.")
+if SurvivorUI_RebornGearOpen and SurvivorUI_RebornActive() then
+	Button(page, "Open Gear & Difficulty", 200, 0, function()
+		if SurvivorUI_RebornGearOpen("show") then panel:Hide() end
+	end)
+	page.y = page.y - 28
+	Check(page, "Enable Gear & Difficulty", SurvivorUI_RebornGearEnabled, SurvivorUI_RebornGearToggle,
+		"Read current equipment in Dalaran and Campaigns. Compare difficulty and plan upgrades in Campaigns.")
+end
 Subheader(page, "Font")
 FontPicker(page, "Global font",
 	function() return SurvivorUI_GlobalFont and SurvivorUI_GlobalFont() end,
@@ -5137,6 +5145,23 @@ Swatches(page, "Color", SurvivorUI_LEVELUP_COLORS or {},
 	function() return DB().levelUpColor or "class" end,
 	function(key) DB().levelUpColor = key end)
 Note(page, "The levels waiting also show by your level on the XP bar: Lv. 12 +3. While this tab is open the button shows, to be placed.")
+
+if SurvivorUI_RebornAnalysis and SurvivorUI_RebornActive() then
+	Subheader(page, "Reborn analysis")
+	local analysisOptions = {
+		{ "enabled", "Enable Reborn analysis", "Show read-only estimates in native cards and the run tracker." },
+		{ "cards", "Card values", "Show supported skill previews, jewelry changes and cap room on cards." },
+		{ "map", "Campaign pressure reference", "Show map factors and boss templates in the tracker tooltip." },
+		{ "live", "Live Build observations", "Show recent damage, health, kills and growth in the tracker tooltip." },
+		{ "advisor", "Experimental growth advice", "Flag a supported mitigation option when recent samples show sustained low health." },
+		{ "diagnostics", "Research diagnostics", "Add analysis observations to an explicitly enabled Reborn recording." },
+	}
+	for _, option in ipairs(analysisOptions) do
+		local key = option[1]
+		Check(page, option[2], function() return SurvivorUI_RebornAnalysis.IsSet(key) end,
+			function() SurvivorUI_RebornAnalysis.Toggle(key) end, option[3])
+	end
+end
 
 ------------------------------------------------------------------------------
 -- Loot list (LootLog.lua).
