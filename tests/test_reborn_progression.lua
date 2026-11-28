@@ -167,7 +167,24 @@ local function NativeSpell(rank)
 end
 local fixture = dofile("tests/fixtures/session033_progression.lua")
 Start("azs:r00000001", 0, 1)
-Learned({ NativeSpell(1) }, true)
+Offer()
+local starter = NativeSpell(1)
+starter.cdmax = 1.2
+AZS_RUN.t = fixture.startup[1]
+Emit("AZSRUN")
+Learned({ starter }, true)
+assert(progress.Skill("shadow_bolt").complete and progress.Skill("shadow_bolt").count == 0)
+local startingRows = {
+	starter,
+	{ key = "the_human_spirit", spell = 0, rank = 1, kind = "racial", passive = true },
+	{ key = "war_stomp", spell = 20549, rank = 1, kind = "racial", cdmax = 15 },
+}
+AZS_RUN.t = fixture.startup[2]
+Learned(startingRows, false)
+AZS_RUN.t = fixture.startup[3]
+Emit("AZSRUN")
+Learned(startingRows, false)
+assert(progress.Skill("the_human_spirit").complete and progress.Skill("war_stomp").complete)
 Gear()
 assert(not SurvivorUI_RebornRecording() and progress.Live().complete)
 local bondText
@@ -188,11 +205,13 @@ end
 local bond = progress.Skill("demonic_knowledge")
 assert(bond.rank == 10 and bond.count == 10 and bond.acquisitions == 1 and bond.complete)
 assert(bond.totals.d == 255 and bond.totals.c == 20 and bond.totals.t == 4 and not next(bond.unknown))
-assert(bond.rarities[0] == 3 and bond.rarities[1] == 1 and bond.rarities[2] == 4 and bond.rarities[3] == 2)
+assert(bond.rarities[0] == 3 and bond.rarities[1] == 1 and bond.rarities[2] == 3
+	and bond.rarities[3] == 3 and not bond.rarities[4])
+assert(progress.Live().choices[1].rarity == 3 and progress.Live().choices[1].type == "acquire")
 assert(progress.Live().choices[1].affixes[1].applied == 34)
 local cap = progress.Live().choices[10].affixes[1]
 assert(cap.amount == 17 and cap.before == 13 and cap.after == 28 and cap.applied == 20)
-assert(progress.Live().choices[10].level == 11 and progress.Live().choices[10].time == 20)
+assert(progress.Live().choices[10].level == 11 and math.abs(progress.Live().choices[10].time - 25.546) < 0.001)
 local currentLines = SurvivorUI_RebornAbilityTooltipLines({ key = "demonic_knowledge", rank = 10,
 	passive = true, snapshotRank = 9, text = "Older interval 13%" })
 assert(currentLines[2].text == bondText and currentLines[1].kind == "current_label")
@@ -212,13 +231,15 @@ Pick("skip")
 assert(#progress.Live().choices == 10)
 Offer("spell", Skill("shadow_bolt", 686, 2, 4, "d65:0:65a40:0:40"))
 Pick()
-Offer("spell", Skill("shadow_bolt", 686, 3, 0, "c7:0:7"))
+Offer("spell", Skill("shadow_bolt", 686, 3, 0, "c7:0:7u12:0:12"))
 Learned({ NativeSpell(2) }, true)
 Pick()
 Learned({ NativeSpell(3) }, true)
 Tip("shadow_bolt", "Deals 140 damage to the nearest enemy.")
 assert(progress.Skill("shadow_bolt").count == 2 and progress.Skill("shadow_bolt").acquisitions == 0)
 assert(progress.Skill("shadow_bolt").unknown.c and progress.Skill("shadow_bolt").totals.c == nil)
+assert(progress.Skill("shadow_bolt").unknown.u and progress.Skill("shadow_bolt").totals.u == nil)
+assert(progress.Skill("shadow_bolt").offered.c == 7 and progress.Skill("shadow_bolt").offered.u == 12)
 assert(#progress.Live().choices[11].affixes == 2)
 
 local function Jewel(def, mode, effect, detail, rarity)
@@ -330,14 +351,22 @@ SurvivorUI_GoldButton = GoldButton
 function SurvivorUI_RunRarityColor() return 0.8, 0.8, 0.8 end
 function SurvivorUI_PieceTextStep() return 3 end
 dofile("SurvivorUI/RebornProgressionView.lua")
+-- Earlier snapshots can recover the preview from their saved choices.
+saved.progression.skills.shadow_bolt.offered = nil
 progress.ShowHistory(saved, saved)
 local window = SurvivorUIProgression
 assert(window and UISpecialFrames[1] == "SurvivorUIProgression")
 assert(window.heading:GetText() == "Skill upgrades" and window.status:GetText():find("Campaign", 1, true))
 assert(window.content.rows[1].title:GetText():find("35691", 1, true) == nil)
-local bondHeader
-for _, row in ipairs(window.content.rows) do if row.key == "demonic_knowledge" then bondHeader = row end end
+local bondHeader, shadowHeader
+for _, row in ipairs(window.content.rows) do
+	if row.key == "demonic_knowledge" then bondHeader = row end
+	if row.key == "shadow_bolt" then shadowHeader = row end
+end
 assert(bondHeader and bondHeader.detail:GetText():find("-20% attack interval", 1, true))
+assert(not bondHeader.detail:GetText():find("28%", 1, true))
+assert(shadowHeader.detail:GetText():find("-7% cooldown (last offer)", 1, true))
+assert(shadowHeader.detail:GetText():find("+12% duration (last offer)", 1, true))
 if bondHeader.closed then bondHeader.scripts.OnClick() end
 local foundCap
 for _, row in ipairs(window.content.rows) do
@@ -363,6 +392,37 @@ local lines = SurvivorUI_RebornAbilityTooltipLines({ key = "shadow_bolt", rank =
 assert(lines[#lines].text:find("记录不完整", 1, true))
 progress.Toggle()
 assert(not window:IsShown() and not progress.Enabled() and progress.Live())
+
+-- A level-1 reload without the beginning sample stays partial, as does an
+-- unobserved acquisition once this run has offered its first skill hand.
+Start("azs:r00000003", fixture.startup[3], 1)
+Learned({ starter }, true)
+assert(not progress.Live().complete and not progress.Skill("shadow_bolt").complete)
+Start("azs:r00000004", 0, 1)
+Learned({ starter }, true)
+Offer("spell", Skill("searing_pain", 5676, 1, 0, "", 1))
+Offer()
+Learned({ starter, { key = "searing_pain", spell = 5676, rank = 1 } }, true)
+assert(not progress.Live().complete and not progress.Skill("searing_pain").complete)
+
+language = "en"
+Start("azs:r00000005", 80, 16)
+local searing = fixture.searingPain
+Learned({ { key = "searing_pain", spell = 5676, rank = searing[3] - 1 } }, true)
+Offer("spell", Skill("searing_pain", 5676, searing[3], searing[2], searing[1]))
+Pick()
+local current = "Deals 245 damage."
+Tip("searing_pain", current)
+Learned({ { key = "searing_pain", spell = 5676, rank = searing[3], cdmax = 1.4 } }, true)
+local pain = progress.Skill("searing_pain")
+assert(pain.totals.c == nil and pain.offered.c == 67)
+local tip = {}
+for _, line in ipairs(SurvivorUI_RebornAbilityTooltipLines({
+	key = "searing_pain", rank = searing[3], cdmax = 1.4, text = "Base description."
+})) do table.insert(tip, line.text) end
+tip = table.concat(tip, "\n")
+assert(tip:find("-67% cooldown (last offer)", 1, true))
+assert(tip:find(current, 1, true) and tip:find("Current cooldown: 1.4 s", 1, true))
 
 AZS_RequestAbilities = nil
 Start("original", 0, 1)

@@ -29,6 +29,7 @@ SurvivorUI_WORDS.zh = {
 	["{1} acquired · {2} enhanced"] = "习得 {1} 次 · 强化 {2} 次",
 	["Unknown rarity"] = "稀有度未知",
 	["Card modifiers: {1}"] = "卡牌加成：{1}",
+	["{1} (last offer)"] = "{1}（上次卡牌预览）",
 	["Current cooldown: {1} s"] = "当前冷却：{1} 秒",
 	["Card modifiers unavailable"] = "卡牌加成不可用",
 	["{1} unavailable"] = "{1}不可用",

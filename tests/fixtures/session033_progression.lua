@@ -1,9 +1,12 @@
 -- Sanitized Session 033 projection. Only the selected card fields and
 -- numerical parts of the learned tooltip are retained. Timing is supplied
--- by the host harness, and early tooltip / closed hand / learned order is preserved.
+-- by the host harness except for the retained recorder-relative startup times.
+-- The early tooltip / closed hand / learned order is preserved.
 return {
+	startup = { 0.012, 0.012, 5.546 },
+	searingPain = { "c17:60:67", 3, 15 },
 	bond = {
-		{ "d34:0:34", 2, 34, 0, 0 },
+		{ "d34:0:34", 3, 34, 0, 0 },
 		{ "t1:0:1", 0, 34, 0, 1 },
 		{ "d34:34:80", 2, 80, 0, 1 },
 		{ "t2:1:3", 3, 80, 0, 3 },

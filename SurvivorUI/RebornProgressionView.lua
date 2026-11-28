@@ -28,20 +28,33 @@ local function Rarity(rarity)
 	return "|c"..color..T(RARITIES[rarity] or "Unknown rarity").."|r"
 end
 
-local function Modifiers(key, skill, seen)
+local function Modifiers(key, skill, seen, historyChoices)
 	local parts, shown = {}, {}
+	local offered = skill.offered
+	if not offered then
+		-- Early schema 1 snapshots stored the same offers in the choices.
+		offered = {}
+		for _, choice in ipairs(historyChoices or {}) do
+			for _, affix in ipairs(choice.affixes or {}) do
+				if affix.after ~= nil then offered[affix.code] = affix.after end
+			end
+		end
+	end
 	local function Add(code)
 		if shown[code] then return end
 		shown[code] = true
 		local total = skill.totals[code]
-		if total ~= nil and (not seen or seen[code] ~= total) then
-			table.insert(parts, Boost(key, code, total))
+		if total ~= nil then
+			if not seen or seen[code] ~= total then table.insert(parts, Boost(key, code, total)) end
+		elseif offered[code] ~= nil then
+			table.insert(parts, TF("{1} (last offer)", Boost(key, code, offered[code])))
 		elseif skill.unknown[code] then
 			local label = string.gsub(string.gsub(BoostTemplate(key, code), "[+-]?%%d%%%%", ""), "[+-]?%%d", "")
 			table.insert(parts, TF("{1} unavailable", (string.gsub(label, "^%s*(.-)%s*$", "%1"))))
 		end
 	end
 	for _, code in ipairs(ORDER) do Add(code) end
+	for code in pairs(offered) do Add(code) end
 	for code in pairs(skill.unknown) do Add(code) end
 	return table.concat(parts, SEP)
 end
@@ -230,7 +243,7 @@ local function Draw(reset)
 			for _, key in ipairs(keys) do
 				local skill = data.skills[key]
 				local name, icon = AbilityName(key, skill)
-				local totals = Modifiers(key, skill)
+				local totals = Modifiers(key, skill, nil, groups[key])
 				local detail = Count(skill)
 				if totals ~= "" then detail = detail..SEP..totals end
 				if not skill.complete or skill.historyPartial then detail = detail..SEP..T("Partial history") end

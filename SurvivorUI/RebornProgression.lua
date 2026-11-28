@@ -6,7 +6,7 @@ SurvivorUI_RebornProgression = Progress
 
 local Model = SurvivorUI_RebornAnalysisModel
 local MAX_CHOICES, MAX_PENDING, REPLY_SECONDS = 512, 12, 15
-local state, hand, picked, pending, gear, tips, ready, campaign, startedAtBeginning, choiceOrder
+local state, hand, picked, pending, gear, tips, ready, campaign, startingAbilities, choiceOrder
 local CopySnapshot
 
 local function Changed()
@@ -23,7 +23,7 @@ end
 local function Reset()
 	state, hand, picked, pending, gear, tips, ready = nil, nil, nil, {}, nil, {}, nil
 	campaign = nil
-	startedAtBeginning, choiceOrder = nil, 0
+	startingAbilities, choiceOrder = nil, 0
 	Changed()
 end
 Reset()
@@ -46,10 +46,13 @@ local function ObserveRun()
 	if not run or not AZS_RUN or not AZS_RUN.ph then return end
 	if not state or state.run ~= run then
 		Reset()
-		startedAtBeginning = tonumber(AZS_RUN.t) == 0 and tonumber(AZS_RUN.lvl) == 1
-			and AZS_RUN.ph == "playing" and tonumber(AZS_RUN.endless) ~= 1
-		state = { version = 1, run = run, choices = {}, skills = {}, jewelry = {}, complete = startedAtBeginning }
+		startingAbilities = tonumber(AZS_RUN.t) == 0 and tonumber(AZS_RUN.lvl) == 1
+			and (AZS_RUN.ph == "ready" or AZS_RUN.ph == "playing") and tonumber(AZS_RUN.endless) ~= 1
+		state = { version = 1, run = run, choices = {}, skills = {}, jewelry = {}, complete = startingAbilities }
 	end
+	-- The action bar and requested passives can arrive in separate replies.
+	-- Level 1 before the first skill hand can still supply starting abilities.
+	if tonumber(AZS_RUN.lvl) ~= 1 or tonumber(AZS_RUN.endless) == 1 then startingAbilities = false end
 	if tonumber(AZS_RUN.endless) == 1 and not campaign then campaign = CopySnapshot() end
 	ready = true
 end
@@ -78,6 +81,7 @@ end
 local function ObserveHand(newHand)
 	if not Current() or newHand == hand then return end
 	hand, picked = newHand, nil
+	if hand and hand.kind == "spell" and hand.cards and hand.cards[1] then startingAbilities = false end
 	Expire()
 end
 
@@ -226,8 +230,8 @@ local function ObserveSkill(ability)
 		local choice = intent and intent.choice
 		local contiguous = skill and rank == skill.rank + 1
 		if not skill then
-			skill = { totals = {}, unknown = {}, count = 0, acquisitions = 0, rarities = {},
-				complete = choice and choice.type == "acquire" or (startedAtBeginning and rank == 1 and tonumber(AZS_RUN.t) == 0) }
+			skill = { totals = {}, offered = {}, unknown = {}, count = 0, acquisitions = 0, rarities = {},
+				complete = choice and choice.type == "acquire" or (startingAbilities and rank == 1) }
 			state.skills[key] = skill
 		elseif not (choice and contiguous) then
 			skill.complete, skill.totals, skill.unknown = false, {}, {}
@@ -245,6 +249,7 @@ local function ObserveSkill(ability)
 				local code = affix.code
 				local applied = previewApplies[code] and affix.after or nil
 				affix.applied = applied
+				if affix.after ~= nil then skill.offered[code] = affix.after end
 				skill.totals[code], skill.unknown[code] = applied, applied == nil or nil
 			end
 			ApplyTip(skill, key, intent.tip, choice)
