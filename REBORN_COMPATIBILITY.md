@@ -36,6 +36,32 @@ identify its recipient. Generated equipment capabilities do not enable old
 Reborn card projections, advice or static map references. Native card changes,
 caps and measured trends remain available. See the [PR #9 review](docs/reviews/PR-009.md).
 
+### Build progression in Reborn 0.8.0
+
+Open **Skill picks** in Build, **Skill upgrades** in Run History, or use
+`/sui upgrades`. The viewer opens grouped by skill. **Order by time**
+shows the latest confirmed skill choices first. The Modules switch
+controls the viewer. The Build hover and worn jewelry rows still use
+the same observations when the viewer is disabled.
+
+The shared store starts on the native run-state event and uses the
+existing `AZSCARDS` and `AZSCMD` observation path. A pick records intent.
+A matching learned rank or a matching change to native jewelry confirms it.
+The card gain, offered totals and verified applied totals remain distinct.
+The tooltip's current damage and cooldown come from native descriptions
+and cooldown fields. Native effective values can also reflect changes in
+character stats and buffs.
+
+The store keeps up to 512 confirmed choices in memory and freezes a copy
+with each kept run phase. Campaign victory and Endless get separate
+snapshots, and Endless carries the live Campaign build forward. A late
+start or mid-run reload shows partial history. Existing runs remain
+readable and show progression as unavailable. Jewelry counts follow
+unique native slot-plus-bonus observations. A new piece starts at zero
+after acquisition is confirmed. A missing baseline or ambiguous identity
+can make the count unavailable. This path sends no extra game requests
+and runs with diagnostics disabled.
+
 ### Earlier compatibility work
 
 One new file, `SurvivorUI/RebornCompat.lua`, holds everything Reborn-
@@ -56,7 +82,7 @@ localization, SurvivorPlates — is untouched.
 | Install path | `benilla-config\AddOns` | `Interface\AddOns` (players install SurvivorUI themselves; Reborn does not ship it). |
 | Boss spawning | `AZS_SCHEDULE` is a complete fixed list of `{at, name, final, state}`; `AZS_RUN.nb` is only read in Endless mode | `AZS_RUN.nbs` (`known`/`unknown`/`up`/`none`), `nbm` (`rift`/`time`), `nb` (countdown, or the latest minute in rift mode, else −1), `nbc` (boss number), `nbn` (name, empty in Endless), `rift` (0–100). In Endless `nbm` is `time`, `nbn` is empty, `left` is −1. A missing field is missing, never 0; never derive a rift percent from the clock or from `nb`. |
 | Abilities | `AZS_SPELLS` is the full learned list: 6 slotted actives + racial last, every row's icon/tooltip from the action-bar button at the same index | `AZS_SPELLS` keeps its action-bar layout only. The full list — including passives and selected racials — is the *requested* snapshot `AZS_ABILITIES` (`{key, spell, rank, passive, kind, cd, cdmax, name, icon, text}`, `kind` = `class`/`racial`, `spell` = 0 when none). It starts empty, clears on `AZSZONE`/reload, and no request is sent automatically. |
-| Jewelry | Run jewelry occupies real WoW inventory slots 2/11/12/13/14 with real item links, Roman-numeral ranks, and tooltip lines to scrape | Live jewelry is exposed through `AZS_GetMeterLoadout()` (data include `AZSGEAR`); the `AZSGEAR` row shape is **not published** in the docs. Static `jewelry.json` has only `{key, name, icon, slot}` — no rarity, level, or effects. `AZS_STATS` `g*` fields are **aggregate** jewelry contributions, never per-item effects. |
+| Jewelry | Run jewelry occupies real WoW inventory slots 2/11/12/13/14 with real item links, Roman-numeral ranks, and tooltip lines to scrape | The 0.8.0 native `AZSGEAR` feed provides per-item effects through `AZS_GEAR`. Static `jewelry.json` supplies identity and art. `AZS_STATS` `g*` fields describe aggregate jewelry contributions. |
 | Run identity | Run resets detected by the run clock rewinding > 3 s (or a chat line) | `AZS_ZONE.run` is the run id (`azs:r<hex>`), stable across reload and host handover, new for each run. |
 | Tables | Read once, keep a reference | The game replaces each `AZS_*` table on every line: re-read the global each time; each table has a `<TABLE>_UPDATED` stamp. After `/reload` tables start empty and are re-sent by `sync` on `PLAYER_ENTERING_WORLD`. |
 
@@ -79,7 +105,7 @@ History records preserve each row and its localized effect. An explicit empty
 snapshot is authoritative. A missing or partial snapshot is shown as such.
 Native item identifiers use slot plus bonus, which is also the tuple used by
 the native Meter loadout. Meter source ranks can encode effect amounts.
-Enhancement counts are omitted until there is an authoritative count source.
+Enhancement counts come from observed and confirmed growth choices.
 The following notes describe the earlier Meter-based implementation.
 Zero AZS integration. Both jewelry surfaces read WoW inventory slots
 via `GetInventoryItemLink` + `GameTooltip:SetInventoryItem` scraping,
@@ -413,8 +439,9 @@ unchanged in substance); the full audit is in the research notes
   values, and whether `AZS_ABILITIES` includes every passive for every
   class. The code is written defensively for all of these, but only a
   real run can confirm them. See the checklist below.
-- **Ability upgrades**: rank only (above). No per-upgrade identity,
-  counts beyond rank rises, or cumulative bonuses.
+- **Ability upgrades**: choice history starts with the addon's first
+  run-scoped observation. A rank jump can reveal a gap. Unreconciled
+  modifiers remain unavailable and their card previews remain visible.
 - **Curses**: not exposed (above).
 - **Jewelry per-item effects**: not exposed (above).
 - **Treasure Goblin tracking, jewelry classifications, automation**:
@@ -503,15 +530,17 @@ run `/sui reborn probe` in that run and keep the output.
 - [ ] `/sui reborn abilities`: `source=abilities`, `complete=true`,
       and the listed passives/racials match what you see in the list.
 - [ ] Level an ability up: `/sui reborn upgrades` records one rank
-      increase for it. The tooltip does *not* claim a specific upgrade
-      was picked.
+      increase for diagnostics. Build's **Skill picks** shows the
+      confirmed choice and distinguishes the card preview from the applied
+      total. Compare the Build tooltip with the matching native tooltip.
 
 ### Jewelry
 - [ ] Pick an item and upgrade it. The worn row shows its name, icon and
       current effects once the native feed updates. Each native row stays
       separate even when two names match.
 - [ ] Hover live and saved rows. Both show the full native name and effects,
-      including decimals and special effects. The enhancement count is omitted.
+      including decimals and special effects. Check the enhancement count
+      after a new acquisition, a confirmed upgrade, and a replacement.
 - [ ] Compare `/sui reborn jewelry` before and after a fresh native observation.
       Expect `source=none` before receipt and `source=gear` after receipt,
       including when the game sends an empty list.

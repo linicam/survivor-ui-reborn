@@ -89,7 +89,7 @@ local function NoOp() end
 local function Color() return 1, 1, 1 end
 local function FontString()
 	local font = { value = "", size = 9, face = "UnitTest", flags = "OUTLINE", ClearAllPoints = NoOp,
-		SetPoint = NoOp, SetTextColor = NoOp }
+		SetPoint = NoOp, SetTextColor = NoOp, Show = NoOp, Hide = NoOp }
 	function font:SetText(value) self.value = value end
 	function font:GetText() return self.value end
 	function font:SetFont(face, size, flags) self.face, self.size, self.flags = face, size, flags end
@@ -113,6 +113,7 @@ function ui.GearLine(index)
 	if not rows[index] then
 		rows[index] = {
 			label = FontString(), tags = FontString(), icon = { SetTexture = NoOp, Show = NoOp, Hide = NoOp },
+			CreateFontString = FontString,
 			Show = function(row) row.shown = true end,
 			Hide = function(row) row.shown = false end,
 		}
@@ -493,6 +494,34 @@ do
 	assert(First().gear[1].name == "Co-op final")
 	print("Run History native event order, final freshness, mode and world isolation passed")
 end
+
+-- Reserve room for the count even beside a long localized name and icon.
+AZS_ZONE = { run = "azs:r00000007" }
+AZS_RUN = { ph = "playing" }
+nativeHandlers.AZSZONE()
+nativeHandlers.AZSRUN()
+AZS_GEAR = { { slot = "ring", bonus = "accuria", name = "埃库利亚指环的长名称用于测试换行",
+	icon = "INV_Jewelry_Ring_15", text = "伤害+296.2% · 幸运+75.6%", amount = 296 } }
+nativeHandlers.AZSGEAR()
+SurvivorUI_RebornProgression = {
+	Live = function() return "live" end,
+	JewelryCount = function(_, snapshot)
+		if snapshot == "live" then return 2, true end
+		if snapshot == "historical" then return 1, false end
+	end,
+	EnhancementText = function(count, complete) return tostring(count)..":"..tostring(complete) end,
+}
+drawGear()
+assert(rows[1].enhancements:GetText() == "+2")
+assert(rows[1].label:GetStringWidth() + rows[1].tags:GetStringWidth() <= 160 - 8 - 10 - 18 - rows[1].countSpace)
+local historic = SurvivorUI_GearSnapshot(SurvivorUI_RebornEquipmentObservations(), "historical")
+assert(historic[1].enhancements == 1 and historic[1].enhancementsComplete == false)
+assert(historic[1].effect == "伤害+296.2% · 幸运+75.6%")
+local tipLines = {}
+GameTooltip.AddLine = function(_, value) tipLines[#tipLines + 1] = value end
+SurvivorUI_ShowRunJewelryTooltip(historic[1])
+assert(tipLines[1] == historic[1].effect and tipLines[2] == "1:false")
+SurvivorUI_RebornProgression = nil
 
 AZS_RequestAbilities, GetInventoryItemLink = nil, nil
 assert(not SurvivorUI_RebornActive())

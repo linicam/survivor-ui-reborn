@@ -19,6 +19,7 @@ local CRITICAL = {
 	jewelry_update = true, error = true, mark = true,
 	boss_unit = true, guardian_lairs = true, card_offer = true, card_action = true,
 	analysis_pick_before = true, analysis_pick_result = true,
+	progression_choice = true,
 }
 
 local recording = false
@@ -624,8 +625,9 @@ if AZS and type(AZS.On) == "function" then
 		if key then ObserveNative("spell:" .. key, value, "native_spell_tip", { key = key, text = value }) end
 	end)
 	AZS.On("AZSCARDS", function()
-		if not recording or type(AZS_CARDS) ~= "table" then return end
 		local hand = AZS_CARDS
+		if SurvivorUI_RebornProgression then SurvivorUI_RebornProgression.Offer(hand) end
+		if not recording or type(hand) ~= "table" then return end
 		SurvivorUI_RebornRecord("card_offer", { hand = hand, stats = AZS_RUNSTATS, caps = AZS_CAPS })
 	end)
 	AZS.On("AZSCARDTIP", function(msg)
@@ -649,15 +651,18 @@ end
 
 if hooksecurefunc and SendAddonMessage then
 	hooksecurefunc("SendAddonMessage", function(prefix, command)
-		if not recording or prefix ~= "AZSCMD" or type(command) ~= "string" then return end
+		if prefix ~= "AZSCMD" or type(command) ~= "string" then return end
 		local hand = AZS_CARDS
 		if type(hand) ~= "table" or (hand.kind ~= "spell" and hand.kind ~= "jewel") then return end
 		local action, index = string.match(command, "^(%a+) (%d+)$")
 		if action == "pick" or action == "banish" or command == "reroll" or command == "skip" then
-			SurvivorUI_RebornRecord("card_action", { action = action or command, index = tonumber(index), kind = hand.kind,
+			index = tonumber(index)
+			if SurvivorUI_RebornProgression then SurvivorUI_RebornProgression.Action(hand, action or command, index) end
+			if not recording then return end
+			SurvivorUI_RebornRecord("card_action", { action = action or command, index = index, kind = hand.kind,
 				remainingBanishes = hand.bn, remainingRerolls = hand.rr })
 			if action == "pick" and SurvivorUI_RebornAnalysis then
-				pcall(SurvivorUI_RebornAnalysis.RecordPick, hand, tonumber(index))
+				pcall(SurvivorUI_RebornAnalysis.RecordPick, hand, index)
 			end
 		end
 	end)

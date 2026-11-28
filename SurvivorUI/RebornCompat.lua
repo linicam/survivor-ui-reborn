@@ -33,11 +33,11 @@
 --   * Tables are replaced on every line: re-read the global each time,
 --     never keep a reference; each table has a <TABLE>_UPDATED stamp.
 --
+-- RebornProgression correlates observed card commands with this file's
+-- learned ability and worn jewelry feeds. Rank changes alone remain
+-- diagnostic observations.
+--
 -- NOT documented, and therefore NOT invented here:
---   * Per-ability upgrade selections (which card/upgrade was picked, how
---     damage bonuses stack). Only `rank` is exposed. This file tracks
---     rank increases per ability per run and labels them exactly as that:
---     rank history, not upgrade identity.
 --   * Curses from cursed chests. The word "curse" does not appear in the
 --     official Addon API at all. SurvivorUI_RebornCurses() reports
 --     supported = false and the probe lists candidate globals without
@@ -425,7 +425,10 @@ local function ObserveEquipment(kind, rows)
 			end
 		end
 		equipment[kind] = snapshot
-		if kind == "jewelry" then jewelryCache = nil end
+		if kind == "jewelry" then
+			jewelryCache = nil
+			if SurvivorUI_RebornProgression then SurvivorUI_RebornProgression.Gear(snapshot) end
+		end
 	end
 end
 
@@ -478,7 +481,9 @@ local function ObserveEnd()
 		hero = UnitName and UnitName("player"), zone = AZS_ZONE.zname,
 		down = (repeatEnd and previous.down) or (SurvivorUI_InParty and SurvivorUI_InParty()
 			and SurvivorUI_IsDown and SurvivorUI_IsDown()),
-		equipment = { jewelry = rows.jewelry, armor = rows.armor, finalLoot = rewards } }
+		equipment = { jewelry = rows.jewelry, armor = rows.armor, finalLoot = rewards },
+		progression = repeatEnd and previous.progression or (SurvivorUI_RebornProgression
+			and SurvivorUI_RebornProgression.Snapshot(run, endless, copy.result == "victory")) }
 end
 
 ------------------------------------------------------------------------------
@@ -705,10 +710,12 @@ local function NormaliseAbility(entry, fromSpells)
 		}
 	end
 	local passive = Field(entry, "passive", 4)
+	local rank = Num(Field(entry, "rank", 3))
 	return {
 		key = key,
 		spell = Num(Field(entry, "spell", 2)),
-		rank = Num(Field(entry, "rank", 3)),
+		rank = rank,
+		snapshotRank = rank,
 		passive = passive == true or passive == 1,
 		kind = Field(entry, "kind", 5),
 		cd = Num(Field(entry, "cd", 6)),
@@ -808,6 +815,7 @@ local function RefreshAbilitiesCache()
 		end
 	end
 	TrackRanks(merged)
+	if SurvivorUI_RebornProgression then SurvivorUI_RebornProgression.Abilities(merged) end
 	-- Only a genuinely new AZS_ABILITIES snapshot may move the
 	-- racial cooldown sample; AZS_SPELLS-only refreshes reuse the
 	-- same stale cd and must keep the original timestamp.
@@ -1098,6 +1106,13 @@ local function RegisterAbilitiesHandler()
 				end
 				equipmentRun, equipmentReady = run, run ~= nil
 				SurvivorUI_RebornCheckRun()
+				if SurvivorUI_RebornProgression then SurvivorUI_RebornProgression.Zone() end
+			end)
+			pcall(AZS.On, "AZSSPELLS", function()
+				if SurvivorUI_RebornProgression and SurvivorUI_RebornProgression.Live() then
+					CheckAbilityRun()
+					RefreshAbilitiesCache()
+				end
 			end)
 			pcall(AZS.On, "AZSGEAR", function() ObserveEquipment("jewelry", AZS_GEAR) end)
 			pcall(AZS.On, "AZSARMOR", function() ObserveEquipment("armor", AZS_ARMOR) end)
@@ -1119,6 +1134,7 @@ local function RegisterAbilitiesHandler()
 				local key, description = string.match(message, "^key=([^;]+);text=(.*)$")
 				local runId = SurvivorUI_RebornRunId()
 				if not key or not runId then return end
+				if SurvivorUI_RebornProgression then SurvivorUI_RebornProgression.SpellTip(key, description) end
 				local rank
 				for _, spell in ipairs((AZS_SPELLS ~= blockedSpellsTable and AZS_SPELLS) or {}) do
 					if Field(spell, "key", 1) == key then
@@ -1215,11 +1231,7 @@ function SurvivorUI_RebornRankEventsFor(key)
 	return out
 end
 
--- Lines for an ability tooltip: base text (from the API, when present),
--- passive flag, and rank. Rank-rise history is deliberately not shown:
--- without the concrete upgrade effects (which the API does not expose)
--- a list of rise timestamps is clutter, not information. The rises are
--- still recorded for diagnostics (SurvivorUI_RebornRankEvents).
+-- Build tooltip lines use the native description and confirmed progression.
 function SurvivorUI_RebornAbilityTooltipLines(ability)
 	local lines = {}
 	if not ability then
@@ -1229,7 +1241,12 @@ function SurvivorUI_RebornAbilityTooltipLines(ability)
 		table.insert(lines, { text = ability.text, kind = "base" })
 	end
 	local live = ability.key and nativeSpellTips[ability.key]
-	if live and live.run == SurvivorUI_RebornRunId() and type(AZS_SPELLTIPS) == "table"
+	local progress = SurvivorUI_RebornProgression
+	local skill = progress and progress.Skill(ability.key)
+	if skill and skill.tipRank == tonumber(ability.rank) and skill.tip and skill.tip ~= ability.text then
+		table.insert(lines, { text = T("Current effect"), kind = "current_label" })
+		table.insert(lines, { text = skill.tip, kind = "current" })
+	elseif live and live.run == SurvivorUI_RebornRunId() and type(AZS_SPELLTIPS) == "table"
 		and AZS_SPELLTIPS[ability.key] == live.text then
 		if not live.rank and AZS_SPELLS ~= blockedSpellsTable then
 			for _, spell in ipairs(AZS_SPELLS or {}) do
@@ -1246,10 +1263,18 @@ function SurvivorUI_RebornAbilityTooltipLines(ability)
 			table.insert(lines, { text = live.text, kind = "current" })
 		end
 	end
+	local cd = tonumber(ability.cdmax)
+	if cd and cd > 0 and not ability.passive and skill and skill.rank == tonumber(ability.rank) then
+		local description = skill.tip or ability.text or ""
+		local period = tonumber(string.match(description, "[Ee]very ([%d.]+) sec")
+			or string.match(description, "每([%d.]+)秒"))
+		if period ~= cd then table.insert(lines, { text = TF("Current cooldown: {1} s", cd), kind = "current" }) end
+	end
 	if ability.passive then
 		table.insert(lines, { text = T("Passive"), kind = "passive" })
 	end
 	table.insert(lines, { text = TF("Rank {1}", ability.rank or 0), kind = "rank" })
+	if progress and progress.TooltipLines then progress.TooltipLines(ability, lines) end
 	return lines
 end
 
@@ -1340,6 +1365,13 @@ local function DedupJewelryItems(items)
 	return out, merged
 end
 
+function SurvivorUI_RebornJewelryIdentity(row)
+	local slot, bonus = row.slot, row.bonus
+	if type(slot) == "string" and slot ~= "" and type(bonus) == "string" and bonus ~= "" then
+		return "gear:" .. slot .. ":" .. bonus
+	end
+end
+
 local function NativeJewelry(rows)
 	local items, complete = {}, true
 	for _, row in ipairs(rows) do
@@ -1353,7 +1385,7 @@ local function NativeJewelry(rows)
 			end
 			-- Meter.lua constructs this item identity from the same two fields.
 			-- Multiple rows with the same identity remain separate observations.
-			local identity = slot and key and ("gear:" .. slot .. ":" .. key) or nil
+			local identity = SurvivorUI_RebornJewelryIdentity(row)
 			table.insert(items, {
 				key = key, slot = SlotLabelOf(slot), slotRaw = slot, instanceKey = identity,
 				name = type(row.name) == "string" and row.name ~= "" and row.name or nil,

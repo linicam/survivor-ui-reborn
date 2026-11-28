@@ -78,20 +78,29 @@ function Model.Skill(card, current, share)
 	return result
 end
 
-function Model.Jewelry(card, statKey, readCap)
-	if type(card.detail) ~= "string" or card.detail == "" or string.len(card.detail) > 2048 then return nil end
-	local result = { kind = "jewel", changes = {} }
-	for wire in string.gmatch(card.detail, "[^%^]+") do
+function Model.JewelryChanges(detail)
+	if type(detail) ~= "string" or detail == "" or string.len(detail) > 2048 then return nil end
+	local changes = {}
+	for wire in string.gmatch(detail, "[^%^]+") do
 		local label, before, after, way = string.match(wire, "^(.-)=(.-)=(.-)=(.)$")
 		if not label or label == "" or (way ~= "+" and way ~= "-" and way ~= "=")
-			or table.getn(result.changes) >= 8 then return nil end
+			or table.getn(changes) >= 8 then return nil end
+		table.insert(changes, { label = label, before = before, after = after, way = way })
+	end
+	if table.getn(changes) > 0 then return changes end
+end
+
+function Model.Jewelry(card, statKey, readCap)
+	local changes = Model.JewelryChanges(card.detail)
+	if not changes then return nil end
+	for _, change in ipairs(changes) do
+		local label, before, after, way = change.label, change.before, change.after, change.way
 		local from = Model.Number(string.match(before, "^%+?([%d%.]+)%%$"))
 		local to = Model.Number(string.match(after, "^%+?([%d%.]+)%%$"))
 		if not from then from = Model.Number(before) end
 		if not to then to = Model.Number(after) end
 		local percent = string.sub(before, -1) == "%" and string.sub(after, -1) == "%"
 		local flat = not string.find(before, "%%") and not string.find(after, "%%")
-		local change = { label = label, before = before, after = after, way = way }
 		if from and to and (percent or flat) and way ~= "=" then
 			change.delta = to - from
 			change.percent = percent
@@ -102,9 +111,8 @@ function Model.Jewelry(card, statKey, readCap)
 			change.stat = key
 			change.cap, change.room = readCap(key)
 		end
-		table.insert(result.changes, change)
 	end
-	if table.getn(result.changes) > 0 then return result end
+	return { kind = "jewel", changes = changes }
 end
 
 -- Standard Campaign tier factors in 0.7.4. They do not include challenges, affixes or boss scripts.
