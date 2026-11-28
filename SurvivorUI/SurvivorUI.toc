@@ -41,6 +41,7 @@ Marks.lua
 Affixes.lua
 RebornMapReference.lua
 RebornAnalysisModel.lua
+RebornProgression.lua
 RebornAnalysis.lua
 Tracker.lua
 AbilityTooltip.lua
@@ -57,6 +58,7 @@ BuildList.lua
 JewelryData.lua
 Jewelry.lua
 RunHistory.lua
+RebornProgressionView.lua
 Career.lua
 Guide.lua
 Confirm.lua

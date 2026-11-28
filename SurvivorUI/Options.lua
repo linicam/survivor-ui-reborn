@@ -2026,6 +2026,10 @@ end
 if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
 	table.insert(MODULES[4][2], { "Translate curse warnings", OnUnlessOff("rebornCurseWarnings"), Flip("rebornCurseWarnings"),
 		"Translate recognized curse warnings. Off uses the game's original warning text." })
+	if SurvivorUI_RebornProgression then
+		table.insert(MODULES[3][2], { "Skill upgrades", SurvivorUI_RebornProgression.Enabled, SurvivorUI_RebornProgression.Toggle,
+			"Open skill upgrades from Build or Run History." })
+	end
 end
 
 for group = 1, table.getn(MODULES) do

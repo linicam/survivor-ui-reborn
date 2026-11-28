@@ -1607,6 +1607,8 @@ local function Draw()
 	if SurvivorUI_RebornCheckRun then
 		SurvivorUI_RebornCheckRun()
 	end
+	local progression = SurvivorUI_RebornProgression
+	if progression and progression.BuildEntry then progression.BuildEntry(list) end
 	-- The columns as chosen; changed, every row laid out again.
 	if Columns(Shows()) then
 		PlaceHead()
@@ -2143,7 +2145,8 @@ local function FitTags(line, text)
 	local face, labelSize = line.label:GetFont()
 	face = face or SurvivorUI_FONT
 	local iconSpace = line.rebornItem and line.rebornItem.icon and GEAR_ROW or 0
-	local key = (line.label:GetText() or "").."|"..text.."|"..step.."|"..math.floor((labelSize or 0) + 0.5).."|"..face.."|"..iconSpace
+	local countSpace = line.rebornItem and line.countSpace or 0
+	local key = (line.label:GetText() or "").."|"..text.."|"..step.."|"..math.floor((labelSize or 0) + 0.5).."|"..face.."|"..iconSpace.."|"..countSpace
 	if line.tagText == key then
 		return
 	end
@@ -2151,7 +2154,7 @@ local function FitTags(line, text)
 	-- A label not drawn yet measures nothing: sized again next time (none,
 	-- the slot and rank both off, measures nothing too).
 	line.tagText = (labelWidth > 0 or (line.label:GetText() or "") == "") and key or nil
-	local room = WIDTH - 8 - labelWidth - 10 - iconSpace
+	local room = WIDTH - 8 - labelWidth - 10 - iconSpace - countSpace
 	-- Its size told to EditCard.lua's Dress as its own (base) and as the one
 	-- it is at, so the text size is not added twice.
 	local function Fits(size, words)
@@ -2332,6 +2335,7 @@ local function RarityColor(rarity, native)
 	end
 	return 0.5, 0.5, 0.55
 end
+SurvivorUI_RunRarityColor = RarityColor
 
 local JEWELRY_TAGS = {
 	["critical strike chance"] = "CRIT", ["crit chance"] = "CRIT", ["暴击几率"] = "CRIT", ["暴击率"] = "CRIT",
@@ -2361,6 +2365,9 @@ end
 function SurvivorUI_ShowRunJewelryTooltip(item)
 	GameTooltip:SetText(item.name or SurvivorUI_T("Jewelry"), 1, 0.82, 0)
 	GameTooltip:AddLine(item.effect or SurvivorUI_T("Effects unavailable"), 1, 1, 1, 1)
+	if SurvivorUI_RebornProgression and SurvivorUI_RebornProgression.EnhancementText then
+		GameTooltip:AddLine(SurvivorUI_RebornProgression.EnhancementText(item.enhancements, item.enhancementsComplete), 0.7, 0.7, 0.7, 1)
+	end
 	GameTooltip:Show()
 end
 
@@ -2397,6 +2404,8 @@ local function DrawGear()
 			local line = GearLine(index)
 			line.slot = nil
 			local item = rebornJewelry.items[index]
+			local progression = SurvivorUI_RebornProgression
+			if progression then item.enhancements, item.enhancementsComplete = progression.JewelryCount(item, progression.Live()) end
 			line.rebornItem = item
 			shown = shown + 1
 			PlaceGear(line, shown)
@@ -2416,14 +2425,34 @@ local function DrawGear()
 				line.label:ClearAllPoints()
 				line.label:SetPoint("LEFT", line, "LEFT", 4, 0)
 			end
-			if line.alone then
+			if progression and progression.EnhancementText then
+				if not line.enhancements then
+					line.enhancements = line:CreateFontString(nil, "OVERLAY")
+					line.enhancements:SetPoint("RIGHT", line, "RIGHT", -4, 0)
+					line.enhancements:SetTextColor(0.8, 0.8, 0.85)
+				end
+				local step = SurvivorUI_PieceTextStep and SurvivorUI_PieceTextStep("Jewelry worn") or 0
+				local face = line.label:GetFont()
+				line.enhancements:SetFont(face or SurvivorUI_FONT, math.max(7, 9 + FONT_BUMP + step), "OUTLINE")
+				local observed = item.enhancements
+				line.enhancements:SetText(item.enhancementsComplete and ("+"..observed)
+					or (observed and observed > 0 and ("≥"..observed) or "?"))
+				line.enhancements:Show()
+				local reserve = math.max(22, math.ceil(line.enhancements:GetStringWidth()) + 5)
+				if line.countSpace ~= reserve or line.alone then
+					line.countSpace = reserve
+					line.tags:ClearAllPoints()
+					line.tags:SetPoint("RIGHT", line, "RIGHT", -4 - reserve, 0)
+				end
+				line.alone = nil
+			elseif line.alone then
 				line.alone = nil
 				line.tags:ClearAllPoints()
 				line.tags:SetPoint("RIGHT", line, "RIGHT", -4, 0)
 			end
 			local name = item.name or item.slot
 			local summary = SurvivorUI_RunJewelrySummary(item)
-			FitName(line, name, math.floor(WIDTH * 0.48) + (item.icon and GEAR_ROW or 0))
+			FitName(line, name, math.floor(WIDTH * 0.48) + (item.icon and GEAR_ROW or 0) + (line.countSpace or 0))
 			FitTags(line, summary)
 			if paint.plain then
 				PaintGear(line, PLAIN[1], PLAIN[2], PLAIN[3], paint.fill, paint.edge)
@@ -2465,6 +2494,12 @@ local function DrawGear()
 		local line = gearLines[index]
 		line.slot = slot
 		line.rebornItem = nil
+		if line.enhancements then
+			line.enhancements:Hide()
+			line.countSpace = nil
+			line.tags:ClearAllPoints()
+			line.tags:SetPoint("RIGHT", line, "RIGHT", -4, 0)
+		end
 		line.icon:Hide()
 		line.label:ClearAllPoints()
 		line.label:SetPoint("LEFT", line, "LEFT", 4, 0)
@@ -2900,12 +2935,15 @@ end
 
 -- For the last runs too: the jewelry lines as they read, one a slot: { label,
 -- tags, color, item, name, tip }, or { label, empty } for a slot with nothing.
-function SurvivorUI_GearSnapshot(observations)
+function SurvivorUI_GearSnapshot(observations, progression)
 	local rebornJewelry = SurvivorUI_RebornJewelry and SurvivorUI_RebornJewelry(false, observations) or nil
 	if rebornJewelry and (observations or SurvivorUI_RebornActive()) then
 		local gear = {}
 		for index = 1, table.getn(rebornJewelry.items) do
 			local item = rebornJewelry.items[index]
+			local progress = SurvivorUI_RebornProgression
+			local enhancements, enhancementsComplete
+			if progress then enhancements, enhancementsComplete = progress.JewelryCount(item, progression) end
 			local r, g, b = RarityColor(item.rarity, item.native)
 			table.insert(gear, {
 				label = item.name or item.slot,
@@ -2913,6 +2951,7 @@ function SurvivorUI_GearSnapshot(observations)
 				color = { r, g, b },
 				name = item.name, icon = item.icon, effect = item.effect,
 				jewelryKey = item.instanceKey or item.key, runJewelry = true,
+				enhancements = enhancements, enhancementsComplete = enhancementsComplete,
 			})
 		end
 		local status = rebornJewelry.source == "none" and "unavailable"

@@ -283,11 +283,15 @@ local function Snapshot(phase, observations)
 		crit.icon = SurvivorUI_MeterIcon and SurvivorUI_MeterIcon(crit.ability) or nil
 	end
 	record.build = {}
+	local progress = SurvivorUI_RebornProgression
+	if progress and record.rebornRunId and not observations then
+		record.progression = progress.Snapshot(record.rebornRunId, tonumber(run.endless) == 1)
+	end
 	if SurvivorUI_BuildSnapshot then
 		record.build, record.buildComplete = SurvivorUI_BuildSnapshot()
 	end
 	if SurvivorUI_GearSnapshot then
-		record.gear, record.gearStatus = SurvivorUI_GearSnapshot(observations)
+		record.gear, record.gearStatus = SurvivorUI_GearSnapshot(observations, record.progression)
 	end
 	if SurvivorUI_ArmorSnapshot then
 		record.armor, record.armorSet, record.armorStatus = SurvivorUI_ArmorSnapshot(observations)
@@ -607,6 +611,9 @@ local function SettleReborn(summary, id, endless, ending)
 
 	if moment.rebornSettled and (moment.result ~= result or (summary.t ~= nil and moment.rebornEndTime ~= nil
 		and Num(summary.t) ~= moment.rebornEndTime)) then return false end
+	if ending and ending.progression and not moment.rebornSettled then
+		moment.progression = ending.progression
+	end
 	if observations then
 		-- At the first native end, an explicit empty or a partial observation
 		-- also supersedes an earlier complete snapshot. Repeat ends can only
@@ -617,7 +624,7 @@ local function SettleReborn(summary, id, endless, ending)
 			return status ~= "unavailable" and status ~= nil
 				and (not moment.rebornSettled or BetterObservation(old, status))
 		end
-		local gear, gearStatus = SurvivorUI_GearSnapshot(observations)
+		local gear, gearStatus = SurvivorUI_GearSnapshot(observations, moment.progression)
 		local armor, armorSet, armorStatus = SurvivorUI_ArmorSnapshot(observations)
 		local loot, lootStatus = SurvivorUI_RebornFinalLootSnapshot(observations)
 		if Accept("gear", gearStatus) then moment.gear, moment.gearStatus = gear, gearStatus end
@@ -1529,6 +1536,17 @@ careerButton:SetScript("OnClick", function()
 		SurvivorUI_ShowCareer(window)
 	end
 end)
+
+window.progression = SurvivorUI_GoldButton(window, 109,
+	"Interface\\AddOns\\SurvivorUI\\Art\\HistoryIconWhite", nil, "Skill upgrades")
+window.progression:SetPoint("LEFT", careerButton, "RIGHT", 6, 0)
+window.progression:SetScript("OnClick", function()
+	local progress = SurvivorUI_RebornProgression
+	local run = History()[shown]
+	local moment = run and view ~= "victory" and run.endless or run
+	if moment and progress and progress.ShowHistory then progress.ShowHistory(moment, run) end
+end)
+window.progression:Hide()
 
 local footer = Font(window, 9, MUTED, "", "CENTER")
 footer:SetPoint("BOTTOM", window, "BOTTOM", 0, 12)
@@ -4314,6 +4332,7 @@ local function DrawEmpty()
 	pageButton:Hide()
 	deleteButton:Hide()
 	pinButton:Hide()
+	window.progression:Hide()
 	footer:SetText("")
 	before:Disable()
 	after:Disable()
@@ -4496,7 +4515,18 @@ Draw = function()
 		moment, base = final, run
 	end
 	DrawHeader(run, final, moment)
+	local progress = SurvivorUI_RebornProgression
+	if progress and progress.Enabled and progress.Enabled() then
+		window.progression.text:SetText(SurvivorUI_T("Skill upgrades"))
+		window.progression:Show()
+	else
+		window.progression:Hide()
+	end
 	DrawPanels(moment, base)
+end
+
+function SurvivorUI_RefreshHistoryProgression()
+	if window:IsShown() then Draw() end
 end
 
 -- Once more on the next frame: a text not drawn yet measures nothing, and

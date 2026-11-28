@@ -4560,6 +4560,8 @@ SlashCmdList["SURVIVORUI"] = function(msg)
 		if SurvivorUI_ToggleBuild then
 			SurvivorUI_ToggleBuild()
 		end
+	elseif msg == "upgrades" and SurvivorUI_RebornProgression and SurvivorUI_RebornProgression.Show then
+		SurvivorUI_RebornProgression.Show()
 	elseif msg == "crits" then
 		if SurvivorUI_ToggleCrits then
 			SurvivorUI_ToggleCrits()
