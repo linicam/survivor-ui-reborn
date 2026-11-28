@@ -899,6 +899,46 @@ raidNoticeHook(RaidWarningFrame, warningText)
 eq("curse: native raid warning in English", warningText, "Curse: Enemy speed increased 50% (20 sec)!")
 curseClock = 320
 eq("curse: enemy movement expires", EnemySpeedCurse(), nil)
+do
+	local horde = "Проклятие тяготеет над тобой: орда накатывает волной (20 с)!"
+	local damage = "Проклятие тяготеет над тобой: ты получаешь на 40% больше урона (20 с)!"
+	local unknown = "Проклятие тяготеет над тобой: орда уходит (20 с)!"
+	warningText = horde
+	raidNoticeHook(RaidWarningFrame, warningText)
+	eq("curse: native horde warning translated", warningText, "Curse: Horde surges (20 sec)!")
+	warningText = damage
+	raidNoticeHook(RaidWarningFrame, warningText)
+	eq("curse: native damage warning translated", warningText, "Curse: Damage taken increased 40% (20 sec)!")
+	warningText = unknown
+	raidNoticeHook(RaidWarningFrame, warningText)
+	eq("curse: unknown Russian warning stays visible", warningText, unknown)
+	SurvivorUIDB.rebornCurseWarnings = false
+	warningText = horde
+	raidNoticeHook(RaidWarningFrame, warningText)
+	eq("curse: native warning mode reads original text", warningText, horde)
+	SurvivorUIDB.rebornCurseWarnings = nil
+	locale, localeTime = "zh", 1010
+	warningText = horde
+	raidNoticeHook(RaidWarningFrame, warningText)
+	check("curse: Chinese horde warning keeps duration", warningText ~= horde and warningText:find("20秒", 1, true))
+	warningText = damage
+	raidNoticeHook(RaidWarningFrame, warningText)
+	check("curse: Chinese damage warning keeps percentage and duration",
+		warningText ~= damage and warningText:find("40%", 1, true) and warningText:find("20秒", 1, true))
+	locale, localeTime, curseClock = "en", 1012, 360
+	local first = { id = 71, kind = "curse", text = AZS_BANNERS[1].text, time = localeTime }
+	AZS_BANNERS = { first }
+	check("curse: fresh speed warning is live", EnemySpeedCurse() ~= nil)
+	curseClock = 361
+	AZS_BANNERS = { first, { id = 72, kind = "curse", text = "狂乱消退了。", time = localeTime + 1 } }
+	eq("curse: verified frenzy ending clears speed early", EnemySpeedCurse(), nil)
+	eq("curse: ending replay retains raw message", AZS_BANNERS[2].text, "狂乱消退了。")
+	local objectives = SurvivorUI_RebornObjectiveText({ fin = 1200, target = 1320, hunt = "4,15", gk = 13 }, 1200)
+	eq("objectives: native target and hunt remain distinct", objectives, "Target time 22:00  ·  Minibosses 4/15")
+	eq("objectives: missing fields do not substitute boss data", SurvivorUI_RebornObjectiveText({ fin = 1200, bk = 4 }), nil)
+	eq("objectives: malformed hunt does not invent progress", SurvivorUI_RebornObjectiveText({ hunt = "4,0" }), nil)
+	eq("objectives: zero progress is observed", SurvivorUI_RebornObjectiveText({ hunt = "0,15" }), "Minibosses 0/15")
+end
 
 AZS_SPELLTIPS = {}
 local nativeSessionId = SurvivorUI_RebornRecordStart()
@@ -947,6 +987,29 @@ eq("spell tips: older rank excluded", table.getn(SurvivorUI_RebornAbilityTooltip
 spell.rank = 3
 AZS_ZONE.run = "azs:rabcdef02"
 eq("spell tips: earlier run excluded", table.getn(SurvivorUI_RebornAbilityTooltipLines(spell)), 2)
+
+do
+	SurvivorUI_RebornForgetRun()
+	AZS_ZONE.run, AZS_SPELLS = "azs:rabcdef03", {}
+	AZS_ABILITIES = { { key = "demonic_knowledge", spell = 35691, rank = 10, passive = true,
+		kind = "class", name = "Demonic Knowledge", text = "Requires Demonic Familiar." } }
+	AZS_ABILITIES_UPDATED = 1040
+	compatHandlers.AZSABILITIES()
+	local passive = SurvivorUI_RebornAbilities().passives[1]
+	check("spell tips: passive identity without an action-bar row", passive and passive.key == "demonic_knowledge")
+	local text = "Demon damage +255%. Attack interval reduced by 20% (cap 20%). +4 extra targets."
+	AZS_SPELLTIPS = { demonic_knowledge = text }
+	AZS_CARDS = { kind = "spell", tips = { "Offered rank description" } }
+	compatHandlers.AZSSPELLTIP("key=demonic_knowledge;text="..text)
+	local plan = SurvivorUI_RebornBuildTooltipPlan(passive)
+	eq("spell tips: native passive current modifiers retain all values", plan.lines[3] and plan.lines[3].text, text)
+	passive.rank = 11
+	eq("spell tips: stale passive native rank excluded", #SurvivorUI_RebornAbilityTooltipLines(passive), 3)
+	passive.rank = 10
+	AZS_ZONE.run = "azs:rabcdef04"
+	compatHandlers.AZSZONE()
+	eq("spell tips: stale passive text excluded after zone transition", #SurvivorUI_RebornAbilityTooltipLines(passive), 3)
+end
 
 for _, sentEarly in ipairs({ false, true }) do
 	SurvivorUI_RebornForgetRun()

@@ -1754,12 +1754,17 @@ local GAME = {
 
 -- The Default shows while SurvivorUI's is off, and it is wanted.
 local function GameShown(game, oursOn)
+	if game.paired then return not oursOn() end
 	return not oursOn() and not DB()[game.key] and not (game.also and DB()[game.also])
 end
 
 -- Ticked on: SurvivorUI's goes (and what else stood in), the Default comes;
 -- ticked off: it goes, and with SurvivorUI's off, neither shows.
 local function GameToggle(game, oursOn, oursToggle)
+	if game.paired then
+		if oursOn() then oursToggle() end
+		return
+	end
 	if GameShown(game, oursOn) then
 		DB()[game.key] = true
 	else
@@ -1806,7 +1811,7 @@ local function GameTick(page, x, y, width, label, game, oursOn, oursToggle)
 		this:Refresh()
 		GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
 		GameTooltip:SetText(SurvivorUI_OTF("The game's {1}", SurvivorUI_OT(game.name)), color[1], color[2], color[3])
-		GameTooltip:AddLine(SurvivorUI_OTF(game.also
+		GameTooltip:AddLine(SurvivorUI_OTF(game.paired and "Switch back to the game's own {1}." or game.also
 			and "The game's own {1}, shown while SurvivorUI's is off. Ticked, SurvivorUI's goes (and the run tracker's boss health); untick both for neither."
 			or "The game's own {1}, shown while SurvivorUI's is off. Ticked, SurvivorUI's goes; untick both for neither.",
 			SurvivorUI_OT(game.name)), 1, 1, 1, 1)
@@ -1998,6 +2003,16 @@ local MODULES = {
 			"Survivor Plates: a plate over the enemies near you, set in the Nameplates tab.", nil, PlatesThere },
 	} },
 }
+
+if SurvivorUI_ClassicCardsAvailable and SurvivorUI_ClassicCardsAvailable() then
+	table.insert(MODULES[4][2], { "Classic upgrade cards", SurvivorUI_ClassicCardsOn, SurvivorUI_ToggleClassicCards,
+		"Use SurvivorUI's compact spell and jewelry card layout. The game's controls stay in place.",
+		nil, nil, { name = "upgrade cards", paired = true } })
+end
+if SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+	table.insert(MODULES[4][2], { "Translate curse warnings", OnUnlessOff("rebornCurseWarnings"), Flip("rebornCurseWarnings"),
+		"Translate recognized curse warnings. Off uses the game's original warning text." })
+end
 
 for group = 1, table.getn(MODULES) do
 	Subheader(page, MODULES[group][1])

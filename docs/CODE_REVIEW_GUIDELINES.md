@@ -44,6 +44,7 @@ Trace relevant paths through the source, Git diff, upstream and downstream calle
 - Check the actual game client and Lua runtime, differences between Reborn and the original game, and existing compatibility fixes.
 - Verify locale-sensitive behavior, especially in English and Simplified Chinese, and coexistence with other addons.
 - Check for unintended changes to native UI handlers, globals, or HUD elements managed by other addons.
+- Exercise the existing module and Game HUD controls in both modes. Verify that disabling the replacement restores native visuals, visibility and interactions independently, including when the replacement cannot render. Check immediate switching where practical and keep diagnostic and history data independent of presentation.
 - Preserve compatibility with existing settings, SavedVariables, and historical data. Consider the cost of future upstream synchronization.
 
 ### 7. Maintainability
@@ -58,6 +59,7 @@ Trace relevant paths through the source, Git diff, upstream and downstream calle
 - Look for inappropriate coupling, cycles, responsibility leakage, and modules that accumulate too many responsibilities.
 - Check the separation of data acquisition, processing, state ownership, and UI presentation. Identify duplicate parsing or state maintenance across modules.
 - Assess the value and maintenance cost of added frameworks, abstraction layers, or modules. Prefer local improvements and require a clear benefit for any broad rewrite.
+- Compare the change with existing renderers, settings, formatters, positioning, localization, caches and providers. Extend them where they meet the requirement and preserve the established design.
 
 ### 9. Test quality
 
@@ -144,6 +146,7 @@ Preserve technical terminology, API names, and code identifiers in the report.
 
 - Prioritize correctness, empirical evidence, simplicity, reliability, and user value.
 - Address root causes before adding defensive checks. Keep fixes local where practical.
+- Weigh likelihood, severity, implementation cost and regression risk against verified native guarantees. Prioritize practical gameplay failures. Document acceptable limits and justify additional polling, state machines or compatibility layers with a demonstrated need. A finding can be resolved with evidence when a code change adds little value.
 - Base performance recommendations on measurements whenever possible.
 - Avoid unnecessary churn. Treat personal style preferences as preferences and time-box review and refactoring.
 - During an independent review, leave production code unchanged. Existing tests, temporary verification scripts, and runtime data analysis are appropriate.
