@@ -65,7 +65,9 @@ end
 
 local reborn = true
 function SurvivorUI_RebornActive() return reborn end
-function SurvivorUI_RebornCardCapLines(_, text) return text end
+function SurvivorUI_RebornCardCapLines(card, text)
+	return card and card.mode == "grow" and text .. " (addon cap)" or text
+end
 SurvivorUI_FONT = "Addon font"
 SurvivorUIDB = {}
 AZSCardsFrame = Frame()
@@ -81,9 +83,15 @@ for slot = 1, 4 do
 	card.icon:SetWidth(60)
 	card.icon:SetHeight(60)
 	card.Fit = function()
+		-- Native Fit measures the current text and resets these fonts and the
+		-- bonus anchor. The other region anchors and sizes come from creation.
+		local tight = card.detail:GetStringHeight() > 100
 		card.label:ClearAllPoints()
-		card.label:SetPoint("TOP", card.detail, "BOTTOM", 0, -8)
-		card.label:SetFont("Game font", 15, "OUTLINE")
+		card.label:SetPoint("TOP", card.detail, "BOTTOM", 0, tight and -4 or -8)
+		card.label:SetFont("Game font", tight and 11 or 15, "OUTLINE")
+		card.title:SetFont("Game title", tight and 14 or 20, "OUTLINE")
+		card.detail:SetFont("Game detail", tight and 11 or 13, "OUTLINE")
+		card.detail:SetSpacing(tight and 0 or 3)
 	end
 	_G["AZSCard"..slot] = card
 end
@@ -95,6 +103,7 @@ local function Hand(kind, count, label, detail, offer)
 	AZS_CARDS = { kind = kind, cards = {} }
 	for slot = 1, 4 do
 		local button = _G["AZSCard"..slot]
+		button.saved = nil
 		if slot <= count then
 			AZS_CARDS.cards[slot] = offer or {}
 			button:Show()
@@ -140,6 +149,85 @@ reborn = false
 assert(not SurvivorUI_ClassicCardsAvailable(), "original clients do not opt into the style")
 reborn = true
 print("PASS: spell and jewelry card geometry, native restoration, controls, multiple affixes and overflow fallback")
+
+do
+	local picks = 0
+	local pick = function() picks = picks + 1 end
+	card.scripts.OnClick, card.scripts.OnKeyDown = pick, pick
+	local function NativeChrome(spell, label, size, y)
+		assert(card.art:IsShown() and card.glow:IsShown() and card.rim[1]:IsShown())
+		assert(card.pennant:IsShown() and card.texts[10]:IsShown() and card.crystalGlow:IsShown() == spell)
+		assert(card.icon:GetWidth() == 60 and card.icon:GetHeight() == 60 and card.icon:GetPoint(1) == "CENTER")
+		local face, points = card.label:GetFont()
+		local point, relative, anchor, _, offset = card.label:GetPoint(1)
+		assert(face == "Game font" and points == size and card.label:GetText() == label)
+		assert(point == "TOP" and relative == card.detail and anchor == "BOTTOM" and offset == y)
+		assert(card.scripts.OnClick == pick and card.scripts.OnKeyDown == pick)
+	end
+	card.detail.stringHeight = nil
+	Hand("spell", 3, spellLabel, "First spell description", { lines = "d65:0:65t2:0:2", new = 1 })
+	card.scripts.OnClick()
+	Hand("jewel", 4, "Jewelry bonus", "Current jewelry before and after", { mode = "grow" })
+	assert(SurvivorUI_ClassicCardsOn() and not card.art:IsShown())
+	assert(card.detail:GetText() == "Current jewelry before and after (addon cap)")
+	card.saved = { card.detail:GetText(), "Current note" }
+	card.detail:SetText("Current jewelry Shift comparison")
+	card.detail.stringHeight = 130
+	card.Fit()
+	SurvivorUI_ToggleClassicCards()
+	NativeChrome(false, "Jewelry bonus", 11, -4)
+	assert(card.detail:GetText() == "Current jewelry Shift comparison")
+	assert(card.saved[1] == "Current jewelry before and after")
+	card.detail:SetText(card.saved[1])
+	card.saved, card.detail.stringHeight = nil, nil
+	card.Fit()
+	NativeChrome(false, "Jewelry bonus", 15, -8)
+
+	SurvivorUI_ToggleClassicCards()
+	Hand("jewel", 4, "Different jewelry", "Different comparison", { mode = "grow" })
+	card.scripts.OnKeyDown()
+	Hand("spell", 3, spellLabel, "Next spell description", { lines = "d65:0:65t2:0:2", new = 1 })
+	assert(not AZSCard4:IsShown() and not card.art:IsShown())
+	SurvivorUI_ToggleClassicCards()
+	NativeChrome(true, spellLabel, 15, -8)
+	assert(card.detail:GetText() == "Next spell description" and not card.saved and picks == 2)
+	print("PASS: successive spell and jewelry hands restore their own native fit after selection in both directions")
+end
+
+do
+	local plates = Read("SurvivorPlates/SurvivorPlates.lua")
+	local gate = assert(Load(Section(plates, "SurvivorPlates_Standby =", "local FLAT =") .. "return 'addon'"))
+	local options = Read("SurvivorUI/Options.lua")
+	local controls = assert(Load("local needsReload = false\n"
+		.. Section(options, "local function PlatesPresentationOn()", "-- The parts the game")
+		.. Section(options, "local function GameShown(", "-- The Default's tick")
+		.. "return PlatesPresentationOn, TogglePlatesPresentation, GameShown, GameToggle, function() return needsReload end"))
+	SurvivorPlatesDB = { hidden = true, show = { elite = true, normal = false }, keysAllowed = true }
+	local settings, changes = SurvivorPlatesDB, 0
+	AZS_RequestAbilities = function() end
+	function GetCVar(key) assert(key == "nameplateShowEnemies"); return "0" end
+	function ShowNameplates() changes = changes + 1 end
+	function HideNameplates() changes = changes + 1 end
+	assert(gate() == "addon" and changes == 0)
+	local on, switch, nativeShown, nativeClick, reload = controls()
+	local game = { paired = true }
+	assert(on() and not nativeShown(game, on), "hidden addon plates still belong to the addon presentation")
+	nativeClick(game, on, switch)
+	assert(nativeShown(game, on) and reload() and SurvivorPlatesDB == settings and settings.hidden)
+	local frameCount = #frames
+	SlashCmdList = {}
+	dofile("SurvivorPlates/SurvivorPlates.lua")
+	assert(#frames == frameCount and changes == 0 and not SlashCmdList.SURVIVORPLATES and not SurvivorPlates_PlateShows,
+		"native reload installs no plate engine, visibility writes or world marker claims")
+	on, switch, nativeShown, nativeClick, reload = controls()
+	assert(not on() and nativeShown(game, on) and not reload())
+	SurvivorPlates_Toggle()
+	assert(changes == 1, "existing binding can explicitly switch native visibility")
+	switch()
+	assert(on() and reload() and settings.hidden and settings.keysAllowed and settings.show.elite and not settings.show.normal)
+	assert(gate() == "addon")
+	print("PASS: Modules native plate selection survives reload and returns to preserved preferences")
+end
 
 do
 	local source = Read("SurvivorPlates/SurvivorPlates.lua")

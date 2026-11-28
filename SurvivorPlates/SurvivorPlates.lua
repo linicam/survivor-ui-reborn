@@ -80,6 +80,30 @@
 SurvivorPlates_Standby = SurvivorUIClassicDB and SurvivorUIClassicDB.use == "classic" or nil
 if SurvivorPlates_Standby then return end
 
+BINDING_HEADER_SURVIVORPLATES = "Survivor Plates"
+BINDING_NAME_SURVIVORPLATES_TOGGLE = "Nameplates on or off"
+
+-- Leave the preference accessible to Options even when the plate engine is off.
+function SurvivorPlates_UsesNative()
+	return SurvivorPlatesDB and SurvivorPlatesDB.nativePresentation == true
+end
+
+function SurvivorPlates_SetNative(on)
+	SurvivorPlatesDB = SurvivorPlatesDB or {}
+	SurvivorPlatesDB.nativePresentation = on and true or nil
+end
+
+if SurvivorPlates_UsesNative() then
+	function SurvivorPlates_Toggle()
+		-- Only an explicit binding press changes the game's visibility here.
+		local shown = NAMEPLATES_ON
+		if AZS_RequestAbilities and GetCVar then shown = GetCVar("nameplateShowEnemies") == "1" end
+		if shown then HideNameplates() else ShowNameplates() end
+		NAMEPLATES_ON = not shown and 1 or nil
+	end
+	return
+end
+
 local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 local ART = "Interface\\AddOns\\SurvivorPlates\\Art\\"
 -- Our rounded bar (bot\ferramentas\make_plate_round.py --plates), drawn in
@@ -1478,9 +1502,6 @@ local COMMAND_KINDS = { normal = "normal", all = "normal", elites = "elite", gua
 	pets = "pet", friends = "pet", totems = "totem", party = "party", coop = "party" }
 local KIND_NAMES = { normal = "The rank and file", elite = "Elites", guardian = "Guardians", boss = "Bosses",
 	pet = "Your pets and summons", totem = "Your totems", party = "Co-op members" }
-
-BINDING_HEADER_SURVIVORPLATES = "Survivor Plates"
-BINDING_NAME_SURVIVORPLATES_TOGGLE = "Nameplates on or off"
 
 SLASH_SURVIVORPLATES1 = "/splates"
 SlashCmdList["SURVIVORPLATES"] = function(msg)

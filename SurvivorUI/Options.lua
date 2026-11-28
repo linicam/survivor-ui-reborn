@@ -1738,6 +1738,17 @@ local function PlatesOn()
 	return PlatesThere() and not (SurvivorPlatesDB and SurvivorPlatesDB.hidden)
 end
 
+local function PlatesPresentationOn()
+	return SurvivorPlates_UsesNative and not SurvivorPlates_UsesNative()
+end
+
+local function TogglePlatesPresentation()
+	if SurvivorPlates_SetNative then
+		SurvivorPlates_SetNative(PlatesPresentationOn())
+		needsReload = true
+	end
+end
+
 -- The parts the game has its own of, the Default: its HUD's part, its name,
 -- and what else of SurvivorUI's keeps it away (the run tracker's boss health).
 local GAME = {
@@ -1783,7 +1794,7 @@ local function GameToggle(game, oursOn, oursToggle)
 end
 
 -- The Default's tick: a small square and its name, what it is on hover.
-local function GameTick(page, x, y, width, label, game, oursOn, oursToggle)
+local function GameTick(page, x, y, width, label, game, oursOn, oursToggle, reload)
 	local color = page.color
 	local tick = CreateFrame("Button", nil, page)
 	tick:SetWidth(width)
@@ -1815,6 +1826,7 @@ local function GameTick(page, x, y, width, label, game, oursOn, oursToggle)
 			and "The game's own {1}, shown while SurvivorUI's is off. Ticked, SurvivorUI's goes (and the run tracker's boss health); untick both for neither."
 			or "The game's own {1}, shown while SurvivorUI's is off. Ticked, SurvivorUI's goes; untick both for neither.",
 			SurvivorUI_OT(game.name)), 1, 1, 1, 1)
+		if reload then GameTooltip:AddLine(SurvivorUI_OT("Takes hold after a reload."), 0.6, 0.6, 0.65, 1) end
 		GameTooltip:Show()
 	end)
 	tick:SetScript("OnLeave", function()
@@ -1902,7 +1914,7 @@ local function ModuleCheck(page, x, y, item)
 	table.insert(widgets, check)
 	side.Index(page, label, tip, y, ROW)
 	if game then
-		GameTick(page, x + PAGE_WIDTH / 2 - 92, y, 86, "The game's", game, isOn, toggle)
+		GameTick(page, x + PAGE_WIDTH / 2 - 92, y, 86, "The game's", game, isOn, toggle, reload)
 	end
 end
 
@@ -1999,8 +2011,10 @@ local MODULES = {
 			"The game's menu buttons in the bottom left corner, shown on hover.", true },
 		{ "White outline", OnUnlessOff("hover"), Call("SurvivorUI_ToggleHover"),
 			"Around the frame or button the mouse is on." },
-		{ "Nameplates", PlatesOn, function() Plates("none") end,
-			"Survivor Plates: a plate over the enemies near you, set in the Nameplates tab.", nil, PlatesThere },
+		{ "Nameplates", PlatesPresentationOn, TogglePlatesPresentation,
+			"Choose the plate style here. The Nameplates tab and the plate key control visibility.",
+			true, function() return SurvivorPlates_SetNative ~= nil end,
+			SurvivorPlates_SetNative and { name = "nameplates", paired = true } },
 	} },
 }
 
@@ -10445,7 +10459,9 @@ do
 	local line = "Survivor Plates puts a plate over the enemies near your hero and over your friends, each kind in its color."
 	if not PlatesThere() then
 		Kit.Head(tab, { line = line })
-		Note(tab, "Survivor Plates is not installed. It comes in the same download as Survivor UI.")
+		Note(tab, SurvivorPlates_UsesNative and
+			"The game draws nameplates. To use Survivor Plates, select Nameplates in Modules and reload." or
+			"Survivor Plates is not installed. It comes in the same download as Survivor UI.")
 	else
 		Kit.Head(tab, { line = line, isOn = PlatesOn, toggle = function() Plates("none") end })
 
