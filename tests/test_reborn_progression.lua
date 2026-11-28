@@ -347,6 +347,8 @@ end
 assert(foundCap and window.range > 0)
 window.sort.scripts.OnClick()
 assert(window.sort.text:GetText() == "Group by skill")
+assert(window.content.rows[1].title:GetText():find("Shadow Bolt", 1, true))
+assert(window.content.rows[1].detail:GetText():find("Enhancement", 1, true))
 arg1 = -1
 window.scroll.scripts.OnMouseWheel()
 assert(window.scroll:GetVerticalScroll() > 0)

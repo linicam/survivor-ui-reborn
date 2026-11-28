@@ -193,11 +193,16 @@ local function Draw(reset)
 		return row.closed
 	end
 	local function AddChoice(choice, skill)
-		local title = table.concat({ TF("Lv. {1}", choice.level or "—"), Clock(choice.time), Rarity(choice.rarity),
+		local selection = table.concat({ TF("Lv. {1}", choice.level or "—"), Clock(choice.time), Rarity(choice.rarity),
 			T(choice.type == "acquire" and "Acquisition" or "Enhancement") }, SEP)
-		local name, icon = AbilityName(choice.key, skill)
-		if chronological then title = name..SEP..title else icon = nil end
-		Add(title, ChoiceDetail(choice), icon)
+		local detail = ChoiceDetail(choice)
+		if chronological then
+			local name, icon = AbilityName(choice.key, skill)
+			local title = name..SEP..TF("Rank {1}", choice.rank)
+			Add(title, selection..(detail ~= "" and "\n"..detail or ""), icon)
+		else
+			Add(selection, detail)
+		end
 	end
 	local choices, keys, groups = {}, {}, {}
 	if data then
