@@ -109,7 +109,7 @@ end
 
 local function Clock(seconds)
 	if seconds == nil then return "—" end
-	return string.format("%d:%02d", math.floor(seconds / 60), math.floor(seconds) % 60)
+	return string.format("%d:%02d", math.floor(seconds / 60), math.mod(math.floor(seconds), 60))
 end
 
 local function ChoiceDetail(choice)
@@ -143,6 +143,9 @@ local function Draw(reset)
 	if data then status = T(data.complete and "Current run observed" or "Partial history") end
 	if history and data and data.complete then status = T("Saved progression") end
 	window.status:SetText(context and (status..SEP..context) or status)
+	scroll:ClearAllPoints()
+	scroll:SetPoint("TOPLEFT", window, "TOPLEFT", PAD, -math.max(58, 45 + window.status:GetStringHeight()))
+	scroll:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -PAD - 16, PAD)
 	local index, top = 0, 0
 	local function Add(title, detail, icon, key)
 		index = index + 1
@@ -282,8 +285,6 @@ local function Create()
 	window.sort:SetScript("OnClick", function() chronological = not chronological; Draw(true) end)
 
 	local scroll = CreateFrame("ScrollFrame", nil, window)
-	scroll:SetPoint("TOPLEFT", window, "TOPLEFT", PAD, -58)
-	scroll:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -PAD - 16, PAD)
 	window.scroll = scroll
 	local content = CreateFrame("Frame", nil, scroll)
 	content:SetWidth(WIDTH - 2 * PAD - 16)

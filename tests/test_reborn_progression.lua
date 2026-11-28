@@ -193,6 +193,9 @@ assert(progress.Live().choices[1].affixes[1].applied == 34)
 local cap = progress.Live().choices[10].affixes[1]
 assert(cap.amount == 17 and cap.before == 13 and cap.after == 28 and cap.applied == 20)
 assert(progress.Live().choices[10].level == 11 and progress.Live().choices[10].time == 20)
+local currentLines = SurvivorUI_RebornAbilityTooltipLines({ key = "demonic_knowledge", rank = 10,
+	passive = true, snapshotRank = 9, text = "Older interval 13%" })
+assert(currentLines[2].text == bondText and currentLines[1].kind == "current_label")
 assert(requests == 0)
 
 -- A lost selection, unselected offers and actions like banish never count.

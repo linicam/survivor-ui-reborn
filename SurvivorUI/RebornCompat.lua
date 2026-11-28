@@ -1237,15 +1237,19 @@ function SurvivorUI_RebornAbilityTooltipLines(ability)
 	if not ability then
 		return lines
 	end
-	if ability.text and ability.text ~= "" then
-		table.insert(lines, { text = ability.text, kind = "base" })
-	end
 	local live = ability.key and nativeSpellTips[ability.key]
 	local progress = SurvivorUI_RebornProgression
 	local skill = progress and progress.Skill(ability.key)
-	if skill and skill.tipRank == tonumber(ability.rank) and skill.tip and skill.tip ~= ability.text then
+	local current = skill and skill.tipRank == tonumber(ability.rank) and skill.tip
+	-- Reborn descriptions can contain live numbers. The ability-list
+	-- description can lag a rank behind the explicit current spell tip.
+	local olderBase = current and ability.snapshotRank and ability.snapshotRank < tonumber(ability.rank)
+	if ability.text and ability.text ~= "" and not olderBase then
+		table.insert(lines, { text = ability.text, kind = "base" })
+	end
+	if current and (current ~= ability.text or olderBase) then
 		table.insert(lines, { text = T("Current effect"), kind = "current_label" })
-		table.insert(lines, { text = skill.tip, kind = "current" })
+		table.insert(lines, { text = current, kind = "current" })
 	elseif live and live.run == SurvivorUI_RebornRunId() and type(AZS_SPELLTIPS) == "table"
 		and AZS_SPELLTIPS[ability.key] == live.text then
 		if not live.rank and AZS_SPELLS ~= blockedSpellsTable then
