@@ -271,6 +271,22 @@ local function Put(object, y, height)
 	return y - height
 end
 
+-- Shared by Classic and Dial and carried with their existing mover.
+local function DrawObjectives(game, phase, seconds, y)
+	local active = phase == "playing" or phase == "paused" or phase == "choosing"
+	local text = active and SurvivorUI_RebornObjectiveText and SurvivorUI_RebornObjectiveText(game, seconds)
+	if not text then
+		if head.objectives then head.objectives:Hide() end
+		return y
+	end
+	if not head.objectives then
+		head.objectives = HeadText(10)
+		head.objectives:SetWidth(WIDTH)
+	end
+	head.objectives:SetText(text)
+	return Put(head.objectives, y, math.max(14, head.objectives:GetHeight() + 2))
+end
+
 -- A boss's color says where it stands, as in a Mythic+ timer: grey still to
 -- come, white the next one, orange alive, green slain.
 local STATE_COLORS = {
@@ -1183,6 +1199,7 @@ local function Draw(game, phase)
 		head.clock:SetTextColor(1, 1, 1)
 	end
 	y = Put(head.clock, y - 1, 24)
+	y = DrawObjectives(game, phase, seconds, y)
 	-- The cache's coin, when the game tells its price and it is chosen (off
 	-- first: the kills and gold line shows the gold): it shines (its own
 	-- OnUpdate) while the gold pays for the cache, red and still while not.
@@ -1638,6 +1655,8 @@ local function DrawLook(game, phase)
 			HideLines()
 		end
 		head.content = SurvivorUI_DrawDial(game, phase)
+		local seconds = (AZS_GetRunTime and AZS_GetRunTime()) or Num(game.t)
+		head.content = -DrawObjectives(game, phase, seconds, -head.content)
 		head:SetHeight(head.content + (SurvivorUI_GuardianListRoom and SurvivorUI_GuardianListRoom(head.content) or 0))
 		return
 	end
@@ -1653,6 +1672,41 @@ local function DrawLook(game, phase)
 	end
 	shownLook = "classic"
 	Draw(game, phase)
+end
+
+-- Claim the Reborn clock only once the addon has drawn its replacement.
+-- The user's independent clock preference still applies with the module off.
+local function ApplyGameHud()
+	if not (AZS_SetHudShown and AZS_IsHudShown) then return end
+	local settings = Settings()
+	local hide = settings.tracker or settings.noGameClock
+	if settings.tracker and SurvivorUI_RebornActive and SurvivorUI_RebornActive() then
+		hide = head:IsShown() and Game() ~= nil
+	end
+	if hide then
+		if AZS_IsHudShown("clock") then
+			AZS_SetHudShown("clock", false)
+			settings.hidGameClock = true
+		end
+	elseif settings.hidGameClock then
+		AZS_SetHudShown("clock", true)
+		settings.hidGameClock = nil
+	end
+end
+
+local function UpdateTracker()
+	local game, phase = Game()
+	local showing = game and Settings().tracker
+	if showing and not head:IsShown() then
+		ApplyGameHud()
+		DrawLook(game, phase)
+		head:Show()
+		ApplyGameHud()
+	elseif not showing and head:IsShown() then
+		head:Hide()
+		ApplyGameHud()
+	end
+	return showing
 end
 
 local elapsed = 0
@@ -1678,16 +1732,7 @@ watcher:SetScript("OnUpdate", function()
 		return
 	end
 	watched = 0
-	local game, phase = Game()
-	local showing = game and Settings().tracker
-	if showing then
-		if not head:IsShown() then
-			DrawLook(game, phase)
-			head:Show()
-		end
-	elseif head:IsShown() then
-		head:Hide()
-	end
+	local showing = UpdateTracker()
 	-- Off, its place the guardians' list's, hung there: as tall as the list,
 	-- so what hangs under the tracker stays clear of it.
 	if not showing and SurvivorUI_GuardianListRoom then
@@ -1801,22 +1846,6 @@ head:SetScript("OnLeave", function() GameTooltip:Hide() end)
 -- for them. The setting is the game's and is saved, so the addon remembers
 -- that it was the one to turn it off.
 
-local function ApplyGameHud()
-	if not (AZS_SetHudShown and AZS_IsHudShown) then
-		return
-	end
-	local settings = Settings()
-	if settings.tracker or settings.noGameClock then
-		if AZS_IsHudShown("clock") then
-			AZS_SetHudShown("clock", false)
-			settings.hidGameClock = true
-		end
-	elseif settings.hidGameClock then
-		AZS_SetHudShown("clock", true)
-		settings.hidGameClock = nil
-	end
-end
-
 -- For the options: off, the Default one, or nothing ("When off").
 SurvivorUI_GameHud = SurvivorUI_GameHud or {}
 SurvivorUI_GameHud.clock = ApplyGameHud
@@ -1824,6 +1853,7 @@ SurvivorUI_GameHud.clock = ApplyGameHud
 function SurvivorUI_ToggleTracker()
 	local settings = Settings()
 	settings.tracker = not settings.tracker
+	UpdateTracker()
 	ApplyGameHud()
 	DEFAULT_CHAT_FRAME:AddMessage("Survivor UI: "..(settings.tracker
 		and "run tracker on; the Default clock is put away."

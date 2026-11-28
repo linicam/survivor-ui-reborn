@@ -80,6 +80,30 @@
 SurvivorPlates_Standby = SurvivorUIClassicDB and SurvivorUIClassicDB.use == "classic" or nil
 if SurvivorPlates_Standby then return end
 
+BINDING_HEADER_SURVIVORPLATES = "Survivor Plates"
+BINDING_NAME_SURVIVORPLATES_TOGGLE = "Nameplates on or off"
+
+-- Leave the preference accessible to Options even when the plate engine is off.
+function SurvivorPlates_UsesNative()
+	return SurvivorPlatesDB and SurvivorPlatesDB.nativePresentation == true
+end
+
+function SurvivorPlates_SetNative(on)
+	SurvivorPlatesDB = SurvivorPlatesDB or {}
+	SurvivorPlatesDB.nativePresentation = on and true or nil
+end
+
+if SurvivorPlates_UsesNative() then
+	function SurvivorPlates_Toggle()
+		-- Only an explicit binding press changes the game's visibility here.
+		local shown = NAMEPLATES_ON
+		if AZS_RequestAbilities and GetCVar then shown = GetCVar("nameplateShowEnemies") == "1" end
+		if shown then HideNameplates() else ShowNameplates() end
+		NAMEPLATES_ON = not shown and 1 or nil
+	end
+	return
+end
+
 local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 local ART = "Interface\\AddOns\\SurvivorPlates\\Art\\"
 -- Our rounded bar (bot\ferramentas\make_plate_round.py --plates), drawn in
@@ -350,6 +374,7 @@ end
 local overlays = {}
 local visible, shownCount = {}, 0 -- the plates on the screen, this frame
 local anchors, named = {}, {}    -- the anchors alive; their kinds by name
+local anchorUnits, plateUnits, unitPlates = {}, {}, {}
 local lit, litId, litOverlay     -- the enemy to line: its name, its unit's id, its plate
 local hovered                    -- the plate under the mouse
 local targetName, targetKind
@@ -368,7 +393,7 @@ local function Mark(list, name, kind)
 end
 
 local function ReadAnchors()
-	local found, kinds, cursor = {}, {}, nil
+	local found, kinds, units, cursor = {}, {}, {}, nil
 	for page = 1, 4 do
 		local ok, result = pcall(AZS_GetWorldAnchors, QUERY, cursor, 256)
 		if not ok or not result or not result.entries then
@@ -377,6 +402,7 @@ local function ReadAnchors()
 		for index = 1, table.getn(result.entries) do
 			local entry = result.entries[index]
 			local kind = KIND_OF[entry.kind or ""]
+			if kind and entry.unitId then units[tostring(entry.unitId)] = kind end
 			if kind and entry.name and entry.anchorId then
 				table.insert(found, { id = entry.anchorId, kind = kind, name = entry.name,
 					unit = entry.unitId and tostring(entry.unitId) })
@@ -388,7 +414,51 @@ local function ReadAnchors()
 		end
 		cursor = result.nextCursor
 	end
-	anchors, named = found, kinds
+	anchors, named, anchorUnits = found, kinds, units
+end
+
+-- Where the client exposes nameplate unit events, take the unit identity
+-- directly. Declaring the listener does not scan units or send game requests.
+if C_NamePlate and type(C_NamePlate.GetNamePlateForUnit) == "function" and AZS_UnitKind and AZS_RequestAbilities then
+	local listener = CreateFrame("Frame")
+	if pcall(listener.RegisterEvent, listener, "NAME_PLATE_UNIT_ADDED") then
+		listener:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
+		listener:RegisterEvent("PLAYER_LEAVING_WORLD")
+		listener:SetScript("OnEvent", function(self, message, token)
+			local notice, unit = message or event, token or arg1
+			if notice == "PLAYER_LEAVING_WORLD" then
+				anchors, named, anchorUnits, plateUnits, unitPlates = {}, {}, {}, {}, {}
+			elseif unit then
+				local plate = unitPlates[unit]
+				if plate and plateUnits[plate] and plateUnits[plate].token == unit then plateUnits[plate] = nil end
+				unitPlates[unit] = nil
+				if notice == "NAME_PLATE_UNIT_ADDED" then
+					plate = C_NamePlate.GetNamePlateForUnit(unit)
+					local guid = UnitGUID and UnitGUID(unit)
+					local id = guid and tonumber(string.sub(guid, -6), 16)
+					if plate and id then
+						local previous = plateUnits[plate]
+						if previous then unitPlates[previous.token] = nil end
+						plateUnits[plate] = { token = unit, id = tostring(id), kind = KIND_OF[AZS_UnitKind(unit)] }
+						unitPlates[unit] = plate
+					end
+				end
+			end
+		end)
+	end
+end
+
+local function EnemyKind(overlay, name, isTarget, now)
+	local claimed = overlay.claim and overlay.claimName == name and now - overlay.claimAt < CLAIM_LASTS
+	local unit = plateUnits[overlay.plate]
+	if unit then
+		local kind = (isTarget and targetKind) or anchorUnits[unit.id] or unit.kind
+		if kind then return kind, claimed and kind == overlay.claim end
+	end
+	if claimed then return overlay.claim, true end
+	if isTarget and targetKind then return targetKind, false end
+	if name and named[name] ~= "mixed" and named[name] then return named[name], false end
+	return overlay.baseKind, false
 end
 
 -- Each anchor on the screen claims the nearest plate of its name, one plate
@@ -969,13 +1039,7 @@ local function Update(overlay, settings, hasTarget, now)
 	-- else its name's.
 	local kind, sure = overlay.baseKind, false
 	if not FRIEND_KINDS[kind] then
-		if overlay.claim and overlay.claimName == name and now - overlay.claimAt < CLAIM_LASTS then
-			kind, sure = overlay.claim, true
-		elseif isTarget and targetKind then
-			kind = targetKind
-		elseif named[name] and named[name] ~= "mixed" then
-			kind = named[name]
-		end
+		kind, sure = EnemyKind(overlay, name, isTarget, now)
 	end
 	if kind ~= overlay.kind then
 		Dress(overlay, kind)
@@ -1438,9 +1502,6 @@ local COMMAND_KINDS = { normal = "normal", all = "normal", elites = "elite", gua
 	pets = "pet", friends = "pet", totems = "totem", party = "party", coop = "party" }
 local KIND_NAMES = { normal = "The rank and file", elite = "Elites", guardian = "Guardians", boss = "Bosses",
 	pet = "Your pets and summons", totem = "Your totems", party = "Co-op members" }
-
-BINDING_HEADER_SURVIVORPLATES = "Survivor Plates"
-BINDING_NAME_SURVIVORPLATES_TOGGLE = "Nameplates on or off"
 
 SLASH_SURVIVORPLATES1 = "/splates"
 SlashCmdList["SURVIVORPLATES"] = function(msg)

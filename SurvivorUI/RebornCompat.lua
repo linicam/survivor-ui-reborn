@@ -80,6 +80,27 @@ local function FormatRunTime(seconds)
 	return string.format("%d:%02d", math.floor(seconds / 60), seconds - math.floor(seconds / 60) * 60)
 end
 
+-- Adventure objectives are independent of run length and boss timing.
+function SurvivorUI_RebornObjectiveText(run, seconds)
+	if not SurvivorUI_RebornActive() or type(run) ~= "table" then return nil end
+	local target = tonumber(run.target)
+	local hunted, goal = string.match(tostring(run.hunt), "^(%d+),(%d+)$")
+	if not (target and target > 0 and target < math.huge) then target = nil end
+	hunted, goal = tonumber(hunted), tonumber(goal)
+	if not target and not (goal and goal > 0) then return nil end
+	local clock, hunt
+	if target then
+		clock = string.format(T("Target time %s"), FormatRunTime(math.floor(target)))
+		if seconds and seconds >= target then clock = "|cffff7777"..clock.."|r" end
+	end
+	if goal and goal > 0 and goal < math.huge and hunted < math.huge then
+		hunt = string.format(T("Minibosses %d/%d"), hunted, goal)
+		if hunted >= goal then hunt = "|cff80df80"..hunt.."|r" end
+	end
+	if clock and hunt then return clock.."  ·  "..hunt end
+	return clock or hunt
+end
+
 local function Num(v)
 	return tonumber(v) or 0
 end
@@ -1094,6 +1115,7 @@ local function RegisterAbilitiesHandler()
 			end)
 			pcall(AZS.On, "AZSSPELLTIP", function(message)
 				if not SurvivorUI_RebornActive() or type(message) ~= "string" then return end
+				CheckAbilityRun()
 				local key, description = string.match(message, "^key=([^;]+);text=(.*)$")
 				local runId = SurvivorUI_RebornRunId()
 				if not key or not runId then return end
@@ -1105,6 +1127,7 @@ local function RegisterAbilitiesHandler()
 					end
 				end
 				local known = abilitiesSeen[key]
+				if not rank and known and known.passive then rank = tonumber(known.rank) end
 				nativeSpellTips[key] = description ~= "" and { run = runId, rank = rank,
 					text = description, baseText = known and known.text } or nil
 			end)
@@ -1238,7 +1261,7 @@ function SurvivorUI_RebornBuildTooltipPlan(ability)
 	local lines = SurvivorUI_RebornAbilityTooltipLines(ability)
 	local hasBase = false
 	for i = 1, table.getn(lines) do
-		if lines[i].kind == "base" and lines[i].text and lines[i].text ~= "" then
+		if (lines[i].kind == "base" or lines[i].kind == "current") and lines[i].text and lines[i].text ~= "" then
 			hasBase = true
 		end
 	end
@@ -1401,6 +1424,15 @@ end
 -- matched by ID, never by localized display text.
 local function CurseEffectId(text)
 	local pct = string.match(text, "(%d+)%%")
+	if text == "орда накатывает волной" or string.find(text, "орда накатывает волной (", 1, true) then
+		return "horde_surge", nil, false, true
+	end
+	if string.match(text, "^ты получаешь на %d+%% больше урона$") then
+		return "damage_taken", pct, false, true
+	end
+	if string.match(text, "^враги движутся на %d+%% быстрее$") then
+		return "enemy_speed", pct, false, true
+	end
 	if string.find(text, "精英正在伏击", 1, true) then
 		return "elite_ambush", nil, true
 	end
@@ -1454,21 +1486,19 @@ local function CurseEffectDisplay(id, pct)
 	return T(key) .. (pct and (pct .. "%") or "")
 end
 
-local function CurseEffectText(text)
-	local id, pct = CurseEffectId(text)
-	return CurseEffectDisplay(id, pct)
-end
-
 -- Native banners are drawn before the public banner observer runs.
 -- Translate the matching raid-warning text without changing the raw event.
 if hooksecurefunc and RaidNotice_AddMessage then
 	hooksecurefunc("RaidNotice_AddMessage", function(frame, text)
 		if not (frame and frame == RaidWarningFrame and type(text) == "string"
 			and SurvivorUI_RebornActive()) then return end
-		local _, _, seconds = string.find(text,
-			"^Проклятие тяготеет над тобой: враги движутся на %d+%% быстрее %((%d+) с%)!$")
+		if SurvivorUIDB and SurvivorUIDB.rebornCurseWarnings == false then return end
+		local effect, seconds = string.match(text, "^Проклятие тяготеет над тобой: (.-) %((%d+) с%)!$")
 		if not seconds then return end
-		local localized = string.format(T("Curse: %s (%d sec)!"), CurseEffectText(text), tonumber(seconds))
+		local id, pct, _, verified = CurseEffectId(effect)
+		if not verified then return end
+		local label = string.gsub(CurseEffectDisplay(id, pct), "%s+$", "")
+		local localized = string.format(T("Curse: %s (%d sec)!"), label, tonumber(seconds))
 		local changed
 		for index = 1, 2 do
 			local slot = getglobal("RaidWarningFrameSlot" .. index) or frame["slot" .. index]
@@ -1478,7 +1508,7 @@ if hooksecurefunc and RaidNotice_AddMessage then
 			end
 		end
 		if SurvivorUI_RebornRecording and SurvivorUI_RebornRecording() then
-			SurvivorUI_RebornRecord("curse_warning", { effectId = "enemy_speed", displayed = changed == true, text = localized })
+			SurvivorUI_RebornRecord("curse_warning", { effectId = id, displayed = changed == true, text = localized })
 		end
 	end)
 end
@@ -1491,6 +1521,7 @@ local CURSE_ENDINGS = {
 	{ "涌动平息", "horde_surge" },
 	{ "脆弱消退", "damage_taken" },
 	{ "凋零消退", "healing_reduced" },
+	{ "狂乱消退了。", "enemy_speed" },
 }
 
 local function CurseEndingId(text)

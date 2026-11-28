@@ -1241,4 +1241,13 @@ SurvivorUI_OPTION_WORDS.zh = {
 
 	-- The rest of the window: what only shows as it is used.
 	["Coin"] = "硬币",
+	["Classic upgrade cards"] = "经典升级卡牌",
+	["nameplates"] = "姓名板",
+	["Choose the plate style here. The Nameplates tab and the plate key control visibility."] = "在此选择姓名板样式。是否显示由姓名板标签页或姓名板按键控制。",
+	["The game draws nameplates. To use Survivor Plates, select Nameplates in Modules and reload."] = "当前由游戏绘制姓名板。要使用 Survivor Plates，请在模块页选择姓名板并重载界面。",
+	["upgrade cards"] = "升级卡牌",
+	["Use SurvivorUI's compact spell and jewelry card layout. The game's controls stay in place."] = "使用 SurvivorUI 的紧凑法术与首饰卡牌布局，保留游戏原生操作。",
+	["Switch back to the game's own {1}."] = "切回游戏原生{1}。",
+	["Translate curse warnings"] = "翻译诅咒警告",
+	["Translate recognized curse warnings. Off uses the game's original warning text."] = "翻译已识别的诅咒警告。关闭后显示游戏原文。",
 }
